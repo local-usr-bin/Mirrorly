@@ -1,0 +1,43 @@
+# --- Python / Conda ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+*.conda
+.conda/
+
+# --- 测试与工具缓存 ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- IDE / 编辑器 ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- 操作系统 ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- 项目专属：Mirrorly 是备份工具，绝不能把备份数据/同步产物提交进仓库 ---
+backup/
+backups/
+sync_data/
+*.mirrorly/
+mirrorly_data/
+*.log
+
+# 临时文件
+*.tmp
+*.bak

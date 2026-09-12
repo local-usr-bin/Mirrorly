@@ -1,0 +1,23 @@
+# Mirrorly Conda 环境定义
+# 用途：创建/复现本项目的独立开发环境。
+# 注意：环境创建在本机 Conda 默认环境目录（conda env create 自动处理），
+#       不在项目仓库内；仓库只保存定义文件。
+#
+# 创建：conda env create -f environment.yml
+# 更新：conda env update -f environment.yml --prune
+# 导出精确版本（锁定）：conda env export --no-builds > environment.lock.yml
+
+name: mirrorly
+channels:
+  # 注意：本机网络无法直连 repo.anaconda.com（官方 defaults 源）。
+  # 实际可用创建方式（已验证）：
+  #   conda create -n mirrorly --override-channels \
+  #     -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/ python=3.12
+  - defaults
+dependencies:
+  - python=3.12
+  # 开发工具（pip 段为空可保持与 pyproject.toml 的 dev 依赖区分；
+  # 运行时依赖确定后在此或 pyproject.toml 中统一维护）
+  - pip
+  - pip:
+      - -e ".[dev]"
