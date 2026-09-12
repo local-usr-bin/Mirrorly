@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-09-13（六）MVP T-06 完整性校验
+
+### 做了什么
+
+1. **新增 `src/mirrorly/verify.py`**
+   - `verify_snapshot(repo, snapshot_id, *, quick=False)`：manifest 必须 complete；
+     全量模式做存在性/类型/大小 + 逐文件哈希比对；quick 模式不调用 hash_file。
+   - `VerifyIssue`（missing / type_mismatch / size_mismatch / corrupt）与
+     `VerifyReport`（含 hashed_files / unhashed_entries / extras / ok）。
+   - extras（快照中多出清单未记录的文件）只报告不影响 ok——避免旧流程残留误报。
+2. **snapshot.py 追加写入即校验**（写入模型不变）
+   - `write_snapshot(..., verify_writes=False)`：默认 False，T-03/T-05 行为零变化。
+   - 开启后每个 copied 文件在原子改名后重算目标端哈希与源端比对；不一致仅重试
+     该文件一次（完整重走临时文件+原子改名流程），仍失败抛 SnapshotError。
+   - `SnapshotResult.hashes`：copied 文件哈希，供 create_manifest 持久化。
+3. **新增 `tests/test_verify.py`**（15 用例）：9 项 verify（篡改/删除文件/删除目录/
+   大小不符/quick 零哈希调用/sha=None 跳过/extras/Unicode+长路径）+ 5 项写入校验
+   （哈希正确返回、仅重试一次、重试成功、hashes 入 manifest 后 verify 通过、默认关闭
+   回归）+ 1 项 T-09 预演（linked 文件 sha 从旧 manifest 结转，merged 后全量 verify 通过）。
+
+### 关键决定
+
+- **职责边界**：VerifyReport/manifest 解析只在 verify.py；snapshot.py 只做单文件
+  哈希校验 hook，不感知 previous manifest；linked 文件 sha 由调用方结转合并。
+- **quick 语义边界明确**：同大小内容篡改在 quick 模式不检出（测试固化该语义）。
+- **sha=None 条目**（T-06 前的旧快照）跳过哈希、计入 unhashed_entries、不影响 ok。
+
+### 遇到的问题
+
+- 测试断言 tuple/list 类型笔误（result.linked 为 tuple），已修正。
+
+### 下一步
+
+T-07 保留策略（keep_last/keep_monthly、dry-run、incomplete 不删）——等待确认后启动。
+
+---
+
 ## 2026-09-13（五）MVP T-05 中断恢复
 
 ### 做了什么
