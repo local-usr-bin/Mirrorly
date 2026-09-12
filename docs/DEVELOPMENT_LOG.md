@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-09-13（二）MVP T-02 源扫描与变更检测
+
+### 执行内容
+
+1. **新增 `src/mirrorly/scan.py`**（只读模块，不做任何写入）：
+   - `scan_source`：os.scandir 迭代遍历，产出文件/目录元数据（相对 POSIX 路径、size、mtime_ns）；stat 失败记入 skipped 不中断（TR-4）；符号链接等特殊条目跳过并记录。
+   - 长路径：Windows 下文件系统调用统一 `\\?\` 前缀（to_long_path）；Unicode 文件名原生支持。
+   - `Excluder`：尾斜杠模式只匹配目录并整树剪枝，其余模式只匹配文件；含 `/` 匹配相对路径，否则匹配任意层级名称。
+   - `detect_changes`：ADR-006 判定——新增 / 大小变→modified（不哈希）/ mtime 一致→信任未变 / mtime 变+大小同→BLAKE3 流式复核（hash 同→suspected_modified，异→modified，上清单无哈希→保守 modified）；产出 ChangeSet（含 added_dirs/deleted_dirs/hashed_files）。
+   - `PreviousEntry` 定义为 T-02 消费上一清单的最小接口，不预设 T-04 的 manifest 落盘格式。
+2. **新增 `tests/test_scan.py`**：18 个用例，覆盖空基线、新增、删除、大小变化、内容变+mtime 变（复核判修改）、仅 mtime 变（复核排除）、Unicode 文件名、>260 字符长路径、文件/目录排除区分、路径模式排除、哈希复核仅对疑似项触发（hashed_files 断言）。
+
+### 遇到的问题
+
+- ChangeSet 误用 frozen dataclass 直接属性赋值（FrozenInstanceError），改为局部列表构建后一次性构造。
+- pytest 默认 basetemp 在系统 Temp 触发沙箱删除拦截，改用 `--basetemp=P:\DevProjects\Mirrorly\.pytest_tmp`（已加入 .gitignore）。
+
+### 后续计划
+
+T-03 快照写入引擎（硬链接复用、临时文件+原子改名、历史快照不可变性回归）——等待产品负责人确认后启动。
+
+---
+
 ## 2026-09-13 开发前整理 + MVP T-01
 
 ### 执行内容
