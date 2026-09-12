@@ -25,6 +25,9 @@ htmlcov/
 *.swp
 *.swo
 
+# --- WorkBuddy 工作区内部数据（记忆等，不入库） ---
+.workbuddy/
+
 # --- 操作系统 ---
 Thumbs.db
 Desktop.ini
