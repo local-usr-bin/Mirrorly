@@ -3,7 +3,7 @@
 Mirrorly 是一款个人数据备份与同步工具（Personal Backup & Sync Tool）。
 
 > 当前状态：**项目初始化阶段**——开发环境与工程骨架已就绪，尚未实现产品功能。
-> 详细进度见 [docs/STATUS.md](docs/STATUS.md)，过程记录见 [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md)。
+> 详细进度见 [docs/STATUS.md](docs/STATUS.md)，过程记录见 [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md)，产品需求见 [docs/PRD.md](docs/PRD.md)。
 
 ## 项目简介
 
