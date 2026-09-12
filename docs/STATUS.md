@@ -1,11 +1,11 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-12（架构细化完成：ADR-010~013 + CLI 规范 + MVP 任务拆分）
+> 最后更新：2026-09-13（MVP 开发启动：T-01 完成）
 
 ## 当前阶段
 
-**MVP 设计全部完成，待启动开发** —— PRD v0.2、技术风险分析、全部架构决策（ADR-001~013）、CLI 规范与 MVP 任务拆分（T-01~T-10）已就绪。下一步：按 MVP_TASKS.md 顺序进入开发。
+**MVP 开发进行中（1/10）** —— T-01（仓库初始化与配置加载）已完成并通过 31 项测试。下一任务：T-02 源扫描与变更检测。
 
 ## 关键文档
 
@@ -15,6 +15,7 @@
 - [docs/DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)：manifest/配置/哈希三项选型分析 v1.0
 - [docs/CLI_SPEC.md](CLI_SPEC.md)：CLI 契约 v1.0（五命令 + 退出码规范）
 - [docs/MVP_TASKS.md](MVP_TASKS.md)：MVP 开发任务拆分 v1.0（T-01~T-10，含验收标准与测试要求）
+- [docs/UI_DIRECTION.md](UI_DIRECTION.md)：未来 GUI 设计约束 v1.0（clean/lightweight/trustworthy，mint green）
 
 ## 开发环境快照（2026-09-12）
 
@@ -42,15 +43,17 @@
 - [x] 产品架构 ADR：ADR-005 存储模型 / ADR-006 变更检测 / ADR-007 任务模型 / ADR-008 保留策略 / ADR-009 完整性机制
 - [x] 架构细化（2026-09-12）：manifest 选型（每快照独立 JSON，ADR-010）、配置格式（TOML + config.d/，ADR-011）、CLI 规范（五命令+退出码，ADR-012/CLI_SPEC）、哈希算法（BLAKE3 主用 SHA-256 兜底，ADR-013）
 - [x] MVP 任务拆分：docs/MVP_TASKS.md（T-01~T-10，依赖关系、输入输出、验收标准、测试要求）
+- [x] 开发前整理（2026-09-13）：TECH_RISKS 哈希描述与 ADR-013 对齐（b2a9a3b）；Git 仓库级身份设为 GitHub 用户 local-usr-bin + noreply 邮箱；docs/UI_DIRECTION.md 未来 GUI 设计约束
+- [x] **T-01 仓库初始化与配置加载**：blake3 依赖安装；mirrorly.repo（MirrorlyRepo 目录结构、repo.json 原子写入、卷标识、strict/warn 文件系统策略）、mirrorly.config（TOML 严格模式加载/生成）、mirrorly.hashing（BLAKE3/SHA-256 抽象）；31 项测试全过，ruff 通过
 
 ## 待办（建议优先级从高到低）
 
-1. **MVP 开发**：按 MVP_TASKS.md 顺序执行 T-01 → T-10（仓库基建 → 扫描检测 → 快照引擎 → manifest → 中断恢复 → 校验 → 保留策略 → 恢复 → CLI 集成 → 端到端验收）
-2. **开发基建先行**：`pip install -e ".[dev]"` 安装到 mirrorly 环境，补充 blake3 依赖，pytest/ruff 跑通空骨架
+1. **T-02 源扫描与变更检测**：目录遍历、元数据采集、排除规则、元数据初筛+哈希复核（MVP_TASKS.md）
+2. **T-03 快照写入引擎**：硬链接复用、临时文件+原子改名、历史快照不可变性回归
 3. **远程仓库**：尽早配置并定期推送（工作区在外置盘）
 
 ## 风险与注意事项
 
 - 工作区位于外置盘（`P:\`），注意断盘风险；建议尽早配置远程仓库并定期推送
-- Git 身份当前为仓库级占位配置，正式使用前应替换为真实姓名/邮箱（见 DEVELOPMENT_LOG 2026-09-12 条目）
+- Git 仓库级身份已设为 GitHub 用户 `local-usr-bin` + noreply 邮箱（2026-09-13）；历史 commit 的占位身份保留不重写
 - Mirrorly 是备份工具，务必坚持「备份产物永不入库」的 .gitignore 约定

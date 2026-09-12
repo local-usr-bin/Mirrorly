@@ -19,5 +19,7 @@ dependencies:
   # 开发工具（pip 段为空可保持与 pyproject.toml 的 dev 依赖区分；
   # 运行时依赖确定后在此或 pyproject.toml 中统一维护）
   - pip
+  # 运行时依赖 blake3 在 pyproject.toml 的 dependencies 中声明，
+  # 由下方 editable 安装自动带入，两者保持一致。
   - pip:
       - -e ".[dev]"

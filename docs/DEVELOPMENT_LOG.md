@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-09-13 开发前整理 + MVP T-01
+
+### 执行内容
+
+1. **Task 0 文档一致性（commit b2a9a3b）**：TECH_RISKS.md TR-3 中哈希算法旧描述（"xxHash64/BLAKE3 可选、基准测试后定"）修正为与 ADR-013 冻结决策一致（BLAKE3 主 / SHA-256 兜底 / xxHash 不用于校验）。其余文档（DESIGN_DECISIONS、ARCHITECTURE、CLI_SPEC、MVP_TASKS）核对一致，无需修改。
+2. **Task 1 Git 身份**：仓库级 user.name=local-usr-bin、user.email=242546610+local-usr-bin@users.noreply.github.com（GitHub noreply）；历史占位身份 commit 不重写。
+3. **Task 2 UI 方向（commit 9b8a91e）**：docs/UI_DIRECTION.md——clean/lightweight/trustworthy、mint green、首屏五要素（最近备份状态/源目录/目标盘/快照数/完整性）、默认不展示底层技术细节；仅设计约束，不开发不引依赖。
+4. **Task 3 = MVP T-01 仓库初始化与配置加载**：
+   - 依赖：pyproject.toml 增加 `blake3>=0.3`，mirrorly 环境 `pip install -e ".[dev]"`（清华 PyPI 镜像）成功，pytest 9.1.1 / ruff 0.16.7 / blake3 1.0.9。
+   - `mirrorly/hashing.py`：BLAKE3/SHA-256 抽象（new_hasher/hash_file 流式分块），blake3 不可用自动降级。
+   - `mirrorly/repo.py`：init_repo（MirrorlyRepo 目录结构、repo.json 原子写入、GetVolumeInformationW 卷标识、strict 拒绝非 NTFS / warn 确认后降级 hardlinks=False）、load_repo（格式版本校验）。
+   - `mirrorly/config.py`：TOML 严格模式加载（未知节/键报错、必填校验、类型校验、保留策略正整数校验）、配置生成（config.d/<task>.toml）。
+   - 测试 31 项全过（含 mock 卷信息的三策略分支、严格模式矩阵、原子写入无残留）；ruff check/format 通过；真实 NTFS 卷冒烟通过。
+
+### 遇到的问题
+
+- 测试 glob("*.tmp") 误匹配 `manifests.tmp` 目录导致一次断言失败，修正为只统计文件——布局中目录名带 .tmp 后缀是刻意设计（表明临时区），测试需按 is_file() 过滤。
+
+### 后续计划
+
+T-02 源扫描与变更检测（目录遍历、元数据初筛+哈希复核、排除规则、长路径/Unicode）。
+
+---
+
 ## 2026-09-12（深夜·二）架构细化：MVP 前最终设计
 
 ### 执行内容

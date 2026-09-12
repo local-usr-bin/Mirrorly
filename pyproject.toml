@@ -19,8 +19,12 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 
-# 依赖项：当前为初始化阶段，产品功能尚未实现，暂无运行时依赖。
-# 后续添加依赖时必须同时更新 environment.yml，保持两者一致。
+# 运行时依赖。添加依赖时必须同时更新 environment.yml，保持两者一致。
+# blake3：完整性哈希主算法（ADR-013），有官方 Windows wheel；
+#         不可用时代码自动降级 hashlib.sha256 并在报告中明示。
+dependencies = [
+    "blake3>=0.3",
+]
 
 [project.optional-dependencies]
 dev = [
