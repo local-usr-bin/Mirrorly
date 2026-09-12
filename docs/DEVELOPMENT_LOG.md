@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-09-13（三）MVP T-03 快照写入引擎
+
+### 执行内容
+
+1. **计划先行**：输出实现计划（接口、三条安全纪律、测试矩阵、边界声明）经产品负责人确认后编码。
+2. **新增 `src/mirrorly/snapshot.py`**：
+   - `write_snapshot(source, repo, current, changes, snapshot_id, previous_snapshot)` → SnapshotResult（linked/copied/skipped/bytes_written/dirs_created）。
+   - 目录重建含空目录；deleted 文件自然缺席，旧快照零写入（结构性保证）。
+   - 未变文件（含 suspected_modified）`os.link` 硬链接复用；link 失败显式 `SnapshotError`（TR-2 不静默降级）；`repo.hardlinks=False` 显式降级整文件复制。
+   - 变更文件：`.mrtmp` 临时文件 → flush+fsync → 关闭 → 复测源 size/mtime（TR-4 变动中删临时文件记 skipped）→ os.replace 原子改名 → mtime 回写保真。
+   - 快照 id 冲突拒绝（防覆盖半成品）；所有文件操作走 `to_long_path`。
+3. **新增 `tests/test_snapshot.py`**：13 个用例，含核心回归（改写源文件后旧快照字节不变）、inode/nlink 断言、变动注入跳过、link 失败显式报错、崩溃不污染旧快照（整树哈希比对）。
+
+### 遇到的问题
+
+- Windows FILETIME 粒度 100ns，os.utime 截断纳秒尾数 → mtime 保真断言改 100ns 容差并在代码注释说明（平台限制，不影响检测逻辑：manifest 记录的是扫描时的源 mtime）。
+- frozen dataclass / 中文标识符等编码规范问题在提交前清理。
+
+### 边界确认（未扩大范围）
+
+manifest 落盘（T-04）、中断续传（T-05）、写入即哈希校验（T-06）均未实现；目录级 fsync 省略记为已知简化（极端断电由 T-05 续传兜底）。
+
+### 后续计划
+
+T-04 Manifest 管理（每快照独立 JSON、tmp 原子提交、incomplete→complete）——等待确认后启动。
+
+---
+
 ## 2026-09-13（二）MVP T-02 源扫描与变更检测
 
 ### 执行内容

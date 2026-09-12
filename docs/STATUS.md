@@ -1,11 +1,11 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-13（T-02 完成）
+> 最后更新：2026-09-13（T-03 完成）
 
 ## 当前阶段
 
-**MVP 开发进行中（2/10）** —— T-01（仓库初始化与配置加载）、T-02（源扫描与变更检测）已完成，49 项测试全过。下一任务：T-03 快照写入引擎（等待确认后启动）。
+**MVP 开发进行中（3/10）** —— T-01（仓库初始化与配置加载）、T-02（源扫描与变更检测）、T-03（快照写入引擎）已完成，62 项测试全过。下一任务：T-04 Manifest 管理（等待确认后启动）。
 
 ## 关键文档
 
@@ -46,11 +46,12 @@
 - [x] 开发前整理（2026-09-13）：TECH_RISKS 哈希描述与 ADR-013 对齐（b2a9a3b）；Git 仓库级身份设为 GitHub 用户 local-usr-bin + noreply 邮箱；docs/UI_DIRECTION.md 未来 GUI 设计约束
 - [x] **T-01 仓库初始化与配置加载**：blake3 依赖安装；mirrorly.repo（MirrorlyRepo 目录结构、repo.json 原子写入、卷标识、strict/warn 文件系统策略）、mirrorly.config（TOML 严格模式加载/生成）、mirrorly.hashing（BLAKE3/SHA-256 抽象）；31 项测试全过，ruff 通过
 - [x] **T-02 源扫描与变更检测**：mirrorly.scan（scan_source 目录遍历 + Excluder glob 排除[文件/目录区分] + detect_changes 元数据初筛与 BLAKE3 哈希复核）；长路径（\\?\ 前缀）与 Unicode 支持；49 项测试全过，ruff 通过
+- [x] **T-03 快照写入引擎**：mirrorly.snapshot（write_snapshot：目录重建[空目录保留]、未变文件硬链接复用、变更文件 .mrtmp 临时文件+fsync+复测+原子改名、TR-4 变动中文件跳过、os.link 失败显式报错、hardlinks=False 显式降级复制）；62 项测试全过，ruff 通过
 
 ## 待办（建议优先级从高到低）
 
-1. **T-03 快照写入引擎**：硬链接复用、临时文件+原子改名、历史快照不可变性回归（等待确认启动）
-2. **T-04 Manifest 管理**：每快照独立 JSON、tmp 原子提交、incomplete→complete 流转
+1. **T-04 Manifest 管理**：每快照独立 JSON、tmp 原子提交、incomplete→complete 流转（等待确认启动）
+2. **T-05 中断恢复**：incomplete 基线续传、tmp 清理
 3. **远程仓库**：尽早配置并定期推送（工作区在外置盘）
 
 ## 风险与注意事项
