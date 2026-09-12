@@ -1,17 +1,20 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-12（PRD v0.2 确认 + 技术风险分析 + 架构 ADR 完成）
+> 最后更新：2026-09-12（架构细化完成：ADR-010~013 + CLI 规范 + MVP 任务拆分）
 
 ## 当前阶段
 
-**设计阶段收尾** —— PRD v0.2 已确认，技术风险分析（TECH_RISKS v1.0）与产品架构决策（ADR-005~009）已完成。下一步：架构细化（清单格式、CLI 命令集等）→ MVP 开发。
+**MVP 设计全部完成，待启动开发** —— PRD v0.2、技术风险分析、全部架构决策（ADR-001~013）、CLI 规范与 MVP 任务拆分（T-01~T-10）已就绪。下一步：按 MVP_TASKS.md 顺序进入开发。
 
 ## 关键文档
 
 - [docs/PRD.md](PRD.md)：产品需求文档 v0.2（已确认，决策 D1–D7 定案）
 - [docs/TECH_RISKS.md](TECH_RISKS.md)：技术风险分析 v1.0（TR-1~TR-7，高风险集中于中断恢复与外置盘）
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md)：架构决策记录（ADR-001~009）
+- [docs/ARCHITECTURE.md](ARCHITECTURE.md)：架构决策记录（ADR-001~013）
+- [docs/DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)：manifest/配置/哈希三项选型分析 v1.0
+- [docs/CLI_SPEC.md](CLI_SPEC.md)：CLI 契约 v1.0（五命令 + 退出码规范）
+- [docs/MVP_TASKS.md](MVP_TASKS.md)：MVP 开发任务拆分 v1.0（T-01~T-10，含验收标准与测试要求）
 
 ## 开发环境快照（2026-09-12）
 
@@ -37,13 +40,14 @@
 - [x] PRD 决策确认（2026-09-12）：D1 备份优先通过；D2 NTFS 正式支持 + exFAT 明示不降级；加密压缩延后；多任务架构预留 MVP 单任务；保留策略默认+配置化 → PRD v0.2
 - [x] 技术风险分析：docs/TECH_RISKS.md（TR-1~TR-7）
 - [x] 产品架构 ADR：ADR-005 存储模型 / ADR-006 变更检测 / ADR-007 任务模型 / ADR-008 保留策略 / ADR-009 完整性机制
+- [x] 架构细化（2026-09-12）：manifest 选型（每快照独立 JSON，ADR-010）、配置格式（TOML + config.d/，ADR-011）、CLI 规范（五命令+退出码，ADR-012/CLI_SPEC）、哈希算法（BLAKE3 主用 SHA-256 兜底，ADR-013）
+- [x] MVP 任务拆分：docs/MVP_TASKS.md（T-01~T-10，依赖关系、输入输出、验收标准、测试要求）
 
 ## 待办（建议优先级从高到低）
 
-1. **架构细化**：清单（manifest）格式、配置存储、CLI 命令集与退出码、哈希算法基准测试（见 ARCHITECTURE.md 待决策）
-2. **MVP 任务拆分**：将 M1–M10 拆为可验收的开发任务清单
-3. **开发启动**：搭建核心模块骨架（扫描/清单/快照/校验），仍按"不写过度复杂架构"原则小步迭代
-4. **测试基建**：pytest 用例随模块并行建立；外置盘端到端测试方案
+1. **MVP 开发**：按 MVP_TASKS.md 顺序执行 T-01 → T-10（仓库基建 → 扫描检测 → 快照引擎 → manifest → 中断恢复 → 校验 → 保留策略 → 恢复 → CLI 集成 → 端到端验收）
+2. **开发基建先行**：`pip install -e ".[dev]"` 安装到 mirrorly 环境，补充 blake3 依赖，pytest/ruff 跑通空骨架
+3. **远程仓库**：尽早配置并定期推送（工作区在外置盘）
 
 ## 风险与注意事项
 
