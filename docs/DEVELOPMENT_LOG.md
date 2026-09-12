@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-09-13（七）MVP T-07 保留策略
+
+### 做了什么
+
+1. **新增 `src/mirrorly/retention.py`**
+   - `build_retention_plan(repo, *, keep_last, keep_monthly)`：基于 list_manifests()
+     的 complete 集合计算计划（只读）；排序用 manifest created_at 而非目录 mtime；
+     keep_last=0 语义明确（该规则不保留任何快照）；两规则都不给则报错；
+     keep_monthly 从当前月回溯 N 个月、每月取该月最新 complete，缺月跳过；
+     组合策略取 union。
+   - `apply_retention_plan(repo, plan, *, dry_run=False)`：dry-run 零删除；
+     执行前校验快照 id 路径安全（../、盘符绝对路径拒绝）与 manifest 存在性；
+     删除失败显式 RetentionError（含已删除/失败明细），不静默跳过。
+   - 删除单元 = 快照目录 + manifest 文件；不做文件级引用分析，硬链接数据由
+     NTFS link count 自然管理（测试断言：删除旧快照后被链接文件数据存活）。
+2. **新增 `tests/test_retention.py`**（18 用例）：keep_last 删除/keep_last=0/
+   created_at 排序（对抗目录 mtime 干扰）/月度代表选择/缺月跳过/union/dry-run/
+   incomplete 保护/孤儿目录保护/manifest 缺失拒绝/非法 id 拒绝/删除失败显式报错/
+   目录与 manifest 同步删除/空仓库/Unicode id/长路径内容删除/硬链接数据存活。
+
+### 关键决定
+
+- **不扫描 snapshots/ 做决策**：计划完全来自 manifest 列表，孤儿目录永远进不了
+  delete 集合（结构性防误删）。
+- **apply 前二次确认 manifest 存在**：防计划生成与执行之间被外部改动。
+
+### 遇到的问题
+
+- 宿主沙箱 safe-delete 钩子不支持 `\\?\` 前缀路径的递归删除（trash 操作失败）：
+  属环境限制，非代码问题；含长路径删除的测试在沙箱外运行全套件 133 项全绿。
+
+### 下一步
+
+T-08 恢复（快照浏览、恢复到目标位置、防覆盖）——等待确认后启动。
+
+---
+
 ## 2026-09-13（六）MVP T-06 完整性校验
 
 ### 做了什么
