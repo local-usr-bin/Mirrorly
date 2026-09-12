@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-09-13（四）MVP T-04 Manifest 管理
+
+### 执行内容
+
+1. **新增 `src/mirrorly/manifest.py`**：
+   - `create_manifest`：从 T-02 扫描结果构建 incomplete 清单（条目含 path/size/mtime_ns/sha/type；sha 由调用方提供，缺失记 None；统计 files/dirs/total_bytes）；
+   - `mark_complete`：不可变对象状态流转 incomplete → complete；
+   - `write_manifest`：原子提交（manifests.tmp/ 临时文件 → flush+fsync → 关闭 → os.replace）；失败清理临时文件且无"半个 complete manifest"；
+   - `load_manifest`：格式版本校验；`require_complete=True` 拒绝把 incomplete 误读为完整备份；
+   - `list_manifests`：轻量摘要（list 命令的数据源）；
+   - 稳定序列化：同一对象多次序列化逐字节一致（可 diff 可校验）；目录条目只记 path+type。
+2. **新增 `tests/test_manifest.py`**：13 个用例，覆盖创建字段、原子提交无残留、写失败无完整清单残留、incomplete 防误读、状态流转、Unicode、JSON 稳定性、格式版本校验、2 万条目读写冒烟。
+
+### 遇到的问题
+
+- 宿主沙箱 safe-delete 守卫按"轮次"累计删除计数（阈值 50）：本轮多次运行 pytest，测试内临时文件删除累计触发 SystemExit 拦截，导致删除密集型测试（test_snapshot 的 5 个用例）在本轮后段无法复跑。**T-04 全部 13 个测试通过、ruff 通过**；全套件最后一轮绿跑为 62 项（T-03 提交时）+ T-04 13 项单独通过。下轮会话（计数重置）应做一次全套件复跑确认。
+
+### 后续计划
+
+T-05 中断恢复（incomplete 基线续传、tmp 清理）——等待确认后启动；启动前先全套件复跑 pytest。
+
+---
+
 ## 2026-09-13（三）MVP T-03 快照写入引擎
 
 ### 执行内容
