@@ -1,11 +1,11 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-13（T-04 完成）
+> 最后更新：2026-09-13（T-05 完成）
 
 ## 当前阶段
 
-**MVP 开发进行中（4/10）** —— T-01~T-04（仓库初始化、扫描检测、快照引擎、Manifest 管理）已完成。下一任务：T-05 中断恢复（等待确认后启动）。
+**MVP 开发进行中（5/10）** —— T-01~T-05（仓库初始化、扫描检测、快照引擎、Manifest 管理、中断恢复）已完成，100 项测试全过。下一任务：T-06 完整性校验（等待确认后启动）。
 
 ## 关键文档
 
@@ -48,11 +48,12 @@
 - [x] **T-02 源扫描与变更检测**：mirrorly.scan（scan_source 目录遍历 + Excluder glob 排除[文件/目录区分] + detect_changes 元数据初筛与 BLAKE3 哈希复核）；长路径（\\?\ 前缀）与 Unicode 支持；49 项测试全过，ruff 通过
 - [x] **T-03 快照写入引擎**：mirrorly.snapshot（write_snapshot：目录重建[空目录保留]、未变文件硬链接复用、变更文件 .mrtmp 临时文件+fsync+复测+原子改名、TR-4 变动中文件跳过、os.link 失败显式报错、hardlinks=False 显式降级复制）；62 项测试全过，ruff 通过
 - [x] **T-04 Manifest 管理**：mirrorly.manifest（create_manifest/mark_complete/write_manifest[manifests.tmp+fsync+os.replace 原子提交]/load_manifest[require_complete 防误读]/list_manifests）；13 项新测试全过，ruff 通过
+- [x] **T-05 中断恢复**：mirrorly.recovery（scan_recovery 发现 incomplete/孤儿目录/tmp 残留、build_resume_baseline[基线一致性校验：目录存在+大小/类型矛盾即 RecoveryError，缺失条目显式收入 missing]、clean_tmp_residue、discard_incomplete[拒绝 complete]）；续传产出新 snapshot id，incomplete 目录只读基线；修复 snapshot.py 三处 mkdir 未走长路径前缀的缺口（T-03 规范一致性修复，无行为变更）；100 项测试全过（含 4 个中断点注入、双重中断收敛、inode 复用断言），ruff 通过
 
 ## 待办（建议优先级从高到低）
 
-1. **T-05 中断恢复**：incomplete 基线续传、tmp 清理（等待确认启动）
-2. **T-06 完整性校验**：写入即校验 + verify 命令
+1. **T-06 完整性校验**：写入即校验 + verify 命令（等待确认启动）
+2. **T-07 保留策略**：keep_last/keep_monthly 清理 + dry-run
 3. **远程仓库**：尽早配置并定期推送（工作区在外置盘）
 
 ## 风险与注意事项

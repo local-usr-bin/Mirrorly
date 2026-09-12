@@ -76,7 +76,7 @@ def write_snapshot(
     snap_dir = repo.path / "snapshots" / snapshot_id
     if snap_dir.exists():
         raise SnapshotError(f"快照 id 已存在: {snapshot_id}（拒绝覆盖半成品或历史快照）")
-    snap_dir.mkdir(parents=True)
+    Path(to_long_path(snap_dir)).mkdir(parents=True)
 
     prev_dir = Path(previous_snapshot) if previous_snapshot else None
     changed = set(changes.added) | set(changes.modified)
@@ -90,7 +90,7 @@ def write_snapshot(
     # 1) 目录重建（空目录保留）
     for rel in sorted(current):
         if current[rel].is_dir:
-            (snap_dir / Path(rel)).mkdir(parents=True, exist_ok=True)
+            Path(to_long_path(snap_dir / Path(rel))).mkdir(parents=True, exist_ok=True)
             dirs_created += 1
 
     # 2) 文件物化
@@ -99,7 +99,7 @@ def write_snapshot(
         if entry.is_dir:
             continue
         dst = snap_dir / Path(rel)
-        dst.parent.mkdir(parents=True, exist_ok=True)
+        Path(to_long_path(dst.parent)).mkdir(parents=True, exist_ok=True)
         src_file = source / Path(rel)
 
         prev_file = prev_dir / Path(rel) if prev_dir else None

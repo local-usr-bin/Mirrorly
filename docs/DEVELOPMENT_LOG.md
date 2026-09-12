@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-09-13（五）MVP T-05 中断恢复
+
+### 做了什么
+
+1. **新增 `src/mirrorly/recovery.py`**
+   - `scan_recovery`：发现 incomplete 清单、孤儿快照目录（有目录无 manifest）、`.mrtmp` 与 `manifests.tmp/` 残留；只报告不修改。
+   - `build_resume_baseline`：以 incomplete 快照构建续传基线。校验：manifest 存在且 status=incomplete、快照目录存在、目录中已存在条目与清单大小/类型一致——任一矛盾显式 `RecoveryError`，不静默继续；清单中尚未复制的条目（正常中断态）显式收入 `missing` 报告，不纳入信任基线。
+   - `clean_tmp_residue`：只删 `.mrtmp` 与 `manifests.tmp/` 残留，支持按快照 scoped 清理。
+   - `discard_incomplete`：显式删除 incomplete 目录+manifest，complete 快照拒绝；快照 id 防路径穿越校验。
+2. **新增 `tests/test_recovery.py`**（25 用例）：按文件计数注入中断（monkeypatch `_copy_file_atomic`），覆盖 4 个中断点、双重中断收敛、inode 复用（未从头复制）、中断期间源变更、Unicode+长路径、基线校验各矛盾分支、discard 边界。
+3. **T-03 规范一致性修复**：`snapshot.py` 三处 `mkdir`（快照根/目录重建/文件父目录）未走 `to_long_path`，导致 >260 字符目标路径写入失败。按 T-03 自身规范（"所有文件操作走 to_long_path"）做最小修复，无行为变更；全套件 100 项复跑无回归。
+
+### 关键决定
+
+- **续传产出新 snapshot id**（用户确认）：incomplete 目录作为只读硬链接基线，不引入第二套写入逻辑，完成后显式 discard。
+- **检测基线用 incomplete manifest**：已完整复制的文件 mtime 一致被信任为未变 → 直接硬链接复用，满足 TR-5"不从头复制"；sha 为 None 的条目复核时保守判 modified（安全方向）。
+- **"清单-目录一致性"的解释**：missing（未复制）= 正常中断态，显式报告+重传；矛盾（目录缺失/大小或类型不符）= RecoveryError。此解释已记录，因字面"条目必须全部存在"会使正常中断永远无法续传，与 TR-5 冲突。
+
+### 遇到的问题
+
+- `os.walk` 用 `\\?\` 前缀遍历后 `relative_to` 普通路径报 ValueError：recovery.py 增加 `_unprefix` 辅助。
+- 上轮 T-04 期间 5 个 T-03 用例因宿主沙箱删除守卫无法复跑，本轮计数器重置后全套件 100 项全绿，确认非代码回归。
+
+### 下一步
+
+T-06 完整性校验（写入即校验 + verify 报告，退出码 0/4）——等待确认后启动。
+
+---
+
 ## 2026-09-13（四）MVP T-04 Manifest 管理
 
 ### 执行内容
