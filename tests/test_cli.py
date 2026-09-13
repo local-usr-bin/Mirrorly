@@ -1013,6 +1013,65 @@ class TestInitPreflight:
         assert _init(ws) == 0
         assert (ws["target"] / "MirrorlyRepo" / "repo.json").exists()
 
+    def test_source_is_drive_root_rejected_zero_writes(self, tmp_path, ws) -> None:
+        # source = 当前盘符根、target = 同盘普通目录：prospective repo 位于
+        # source 内，必须 preflight 拒绝且零仓库写入（init 本身不扫描盘根）
+        drive = os.path.splitdrive(str(tmp_path))[0]
+        assert drive, "测试环境应位于带盘符的路径"
+        code = main(
+            [
+                "--config",
+                str(ws["config"]),
+                "init",
+                "--source",
+                drive + os.sep,
+                "--target",
+                str(tmp_path),
+                "--yes",
+            ]
+        )
+        assert code == 1
+        assert not (tmp_path / "MirrorlyRepo").exists()
+        assert list(tmp_path.rglob("repo.json")) == []
+        # 未创建 task config（config.d 不存在）
+        assert not (ws["config"] / "config.d").exists()
+
+
+class TestPathWithin:
+    """_path_within 纯单元（commonpath 语义，覆盖 Windows 卷根）。"""
+
+    def test_drive_root_contains_subdir(self, tmp_path) -> None:
+        # 旧 startswith(p + os.sep) 实现的 bug：realpath(卷根) 已以
+        # 反斜杠结尾，拼接后前缀失配 → 卷根 containment 被绕过
+        root = Path(os.path.splitdrive(str(tmp_path))[0] + os.sep)
+        assert cli._path_within(tmp_path, root) is True
+        # 反向不成立：卷根不位于其子目录内
+        assert cli._path_within(root, tmp_path) is False
+
+    def test_equal_paths(self, tmp_path) -> None:
+        assert cli._path_within(tmp_path, tmp_path) is True
+
+    def test_nested_paths(self, tmp_path) -> None:
+        inner = tmp_path / "a" / "b"
+        assert cli._path_within(inner, tmp_path) is True
+        assert cli._path_within(inner, tmp_path / "a") is True
+        assert cli._path_within(tmp_path / "a", inner) is False
+
+    def test_sibling_paths_false(self, tmp_path) -> None:
+        a, b = tmp_path / "a", tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        assert cli._path_within(a, b) is False
+        assert cli._path_within(b, a) is False
+
+    def test_different_drives_false(self) -> None:
+        # 不存在的路径 realpath 原样返回；跨盘 commonpath ValueError → False
+        assert cli._path_within(Path("C:/data"), Path("D:/backup")) is False
+
+    def test_unc_root_contains_subdir(self) -> None:
+        assert cli._path_within(Path("//server/share/data"), Path("//server/share")) is True
+        assert cli._path_within(Path("//server/share"), Path("//other/share")) is False
+
 
 class TestTaskNameValidation:
     @pytest.mark.parametrize(

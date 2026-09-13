@@ -290,10 +290,19 @@ def _write_report(repo: RepoInfo, name: str, data: dict) -> Path:
 
 
 def _path_within(child: Path, parent: Path) -> bool:
-    """child 是否与 parent 相同或位于其内部（realpath + normcase，防简单前缀误判）。"""
+    """child 是否与 parent 相同或位于其内部（realpath + normcase，防简单前缀误判）。
+
+    用 os.path.commonpath 判断包含关系：字符串 startswith 在 Windows 卷根
+    上会出错（realpath("C:\\") 以反斜杠结尾，再拼 os.sep 后前缀失配，
+    卷根 source/target 的 containment 检查被绕过）。commonpath 在
+    不同 drive（或混合类型）时抛 ValueError，按「不包含」处理。
+    """
     c = os.path.normcase(os.path.realpath(child))
     p = os.path.normcase(os.path.realpath(parent))
-    return c == p or c.startswith(p + os.sep)
+    try:
+        return os.path.commonpath([c, p]) == p
+    except ValueError:
+        return False
 
 
 def cmd_init(args: argparse.Namespace) -> int:

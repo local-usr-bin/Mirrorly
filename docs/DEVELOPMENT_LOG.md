@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-09-13（十五）T-09 源码验收：Windows 卷根 containment blocker 修复
+
+### 做了什么
+
+源码验收发现 `_path_within`（init preflight 的 source/仓库互相包含检查）对
+Windows 卷根判断错误，为真实 blocker，已修复（独立 commit，不 amend 2487dd7）：
+
+- **bug**：旧实现用字符串 `startswith(p + os.sep)` 判断包含。当
+  `parent = C:\`（realpath 已以反斜杠结尾）时，`p + os.sep` 逻辑上变成
+  `C:\\`，任何子路径前缀失配 → `mirrorly init --source C:\ --target C:\backup`
+  会漏过「prospective repo 位于 source 内」保护，允许仓库创建进备份源
+  （备份自身仓库 / 递归吞入 backup artifacts 的风险）。
+- **修复**：`_path_within` 改为 realpath + normcase 后
+  `os.path.commonpath([child, parent]) == parent` 判断（相等或包含均覆盖）；
+  不同 drive（或混合类型）时 commonpath 抛 ValueError → 按「不包含」处理。
+  保留 realpath 别名/junction 解析与 normcase Windows 大小写语义，
+  双向 containment 检查不变。
+- **新增测试 7 项**：`_path_within` 纯单元 6 项（当前盘符根含子目录 True
+  + 反向 False、等路径、嵌套、sibling False、跨盘 C:/D: False、UNC root
+  含子目录）；init 盘根 source 端到端（source=当前盘根、target=同盘测试目录
+  → exit 1、无 MirrorlyRepo、无 repo.json、无 task config——preflight
+  拒绝零写入，不触发全盘扫描）。
+
+### 结果
+
+- CLI 专项（PathWithin+InitPreflight）10 passed；完整回归
+  **390 passed / 8 skipped / 0 failed**；ruff check / format --check 全绿。
+- 本项完成后 T-09 正式最终验收。
+
+---
+
 ## 2026-09-13（十四）T-09 最终收尾与验收
 
 ### 做了什么
