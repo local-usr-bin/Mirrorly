@@ -1,11 +1,13 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-13（T-10 M10 blocker 修复完成：卷锚自动重定位，全套 452 passed / 4 skipped / 0 failed）
+> 最后更新：2026-09-13（MVP 最终验收盖章：PASS WITH ENVIRONMENTAL SKIPS，final accepted HEAD = 60ed124）
 
 ## 当前阶段
 
-**MVP 开发与验收实施全部完成（10/10），待产品负责人最终盖章** —— T-01~T-09 已最终验收；T-10 端到端验收完成且 **M10「盘符漂移」blocker 已修复**（卷锚自动重定位：`[target]` 三键 all-or-none 锚 + `cli._resolve_repo` 七态 fail-closed 状态机 + `volume.py` Windows 官方 GUID API；真实 GUID 链路 E2E 验证「配置 path 失联不改配置自动定位原卷原仓库」）。完整 pytest 全套 **452 passed / 4 skipped / 0 failed**（4 skip 均为文件级 symlink 权限限制，已裁定允许为 MVP environmental skip）；ruff 全绿。验收报告 `docs/MVP_ACCEPTANCE.md` 结论 **PASS WITH ENVIRONMENTAL SKIPS（M10 blocker 已修复并验证）**。
+**MVP 开发与验收全部完成（10/10），已最终验收通过** —— T-01~T-09 已最终验收；T-10 端到端验收完成且 M10「盘符漂移」blocker 已修复（卷锚自动重定位：`[target]` 三键 all-or-none 锚 + `cli._resolve_repo` 七态 fail-closed 状态机 + `volume.py` Windows 官方 GUID API；真实 GUID 链路 E2E 验证「配置 path 失联不改配置自动定位原卷原仓库」）。完整 pytest 全套 **452 passed / 4 skipped / 0 failed**（4 skip 均为文件级 symlink 权限限制——当前 Windows 环境无 SeCreateSymbolicLinkPrivilege / Developer Mode，目录级 junction 对应防护已真实 Windows 通过，已被产品负责人裁定允许为 MVP environmental skip）；E2E **13 passed / 0 failed**；ruff 全绿。验收报告 `docs/MVP_ACCEPTANCE.md`。
+
+**最终结论（产品负责人，2026-09-13）：MVP ACCEPTED — PASS WITH ENVIRONMENTAL SKIPS**（final accepted HEAD = `60ed124` feat(repo): add volume-anchored target relocation；T-10 initial baseline = `a31126b`，性能基线亦在 a31126b 测得）。**MVP 开发阶段结束，生产代码冻结。**
 
 ## 关键文档
 
@@ -57,8 +59,9 @@
 
 ## 待办（建议优先级从高到低）
 
-1. **MVP 最终盖章**：产品负责人依据 docs/MVP_ACCEPTANCE.md 证据裁定（4 个文件级 symlink 环境 skip 已被接受为 MVP environmental skip）
-2. **远程仓库**：尽早配置并定期推送（工作区在外置盘）
+1. **配置远程 Git 仓库并 push**：工作区在外置盘，尽早推送降低断盘风险
+2. **创建 MVP release / tag**：基于 final accepted HEAD `60ed124` 打 MVP 版本标记
+3. **MVP 后 hardening / GUI 等另起阶段**：不与 MVP 混在一起（含 MVP_ACCEPTANCE §11 第 10/11 项 post-MVP compatibility/diagnostic hardening）
 
 ## 风险与注意事项
 

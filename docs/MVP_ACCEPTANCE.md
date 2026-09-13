@@ -1,6 +1,8 @@
 # Mirrorly MVP 验收报告（T-10 端到端验收）
 
-> 日期：2026-09-13 · 基线：`a31126b`（fix(cli): handle Windows root containment safely，工作区 clean）
+> 日期：2026-09-13 · **最终裁定：MVP ACCEPTED — PASS WITH ENVIRONMENTAL SKIPS**
+> T-10 initial baseline：`a31126b`（fix(cli): handle Windows root containment safely，工作区 clean）
+> Final accepted MVP HEAD：`60ed124`（feat(repo): add volume-anchored target relocation）
 > 验收依据（冻结文档）：MVP_TASKS.md T-10、PRD.md M1–M10、CLI_SPEC.md v1.0、TECH_RISKS.md TR-5/TR-7、ARCHITECTURE.md（ADR-005~013）、DESIGN_DECISIONS.md
 > 状态标记：PASS（真实执行通过）/ SKIP（环境限制，如实跳过）/ SIMULATED（真实组件 + 仿真构造的场景）/ NOT REQUIRED（冻结 MVP 未要求）
 
@@ -22,7 +24,7 @@
 - 文件系统：真实 NTFS（C: 卷标 OS、serial 4440B938；另有真实外置卷 P: NTFS serial 012D1774）
 - 隔离：所有数据集/仓库在 OS 临时目录专用 scratch（`%TEMP%\mirrorly_t10_*` / pytest basetemp），不触碰用户数据、不改真实盘符/挂载、不动开发仓库无关数据
 - 环境限制（如实声明）：
-  - 宿主 safe-delete 批量护栏（阈值 50/turn）在验收后期拦截 `\\?\` 前缀删除——影响最终确认运行的两个用例（见 §6/§7），非产品缺陷
+  - 早期验收运行曾受宿主 safe-delete 批量护栏（阈值 50/turn）拦截 `\\?\` 前缀删除，两个用例当时受阻（环境限制，非产品缺陷）；最终配额刷新后已重新执行并全部通过（§6/§7/§12），不影响本报告最终结论
   - 文件符号链接创建被拒绝（`CreateSymbolicLinkW` → ERROR_PRIVILEGE_NOT_HELD，无 SeCreateSymbolicLinkPrivilege）——影响 4 个文件级 reparse 用例（见 §9）
   - 沙箱内 reparse point 不可见 → reparse 专项在沙箱外（真实 Windows）执行
 
@@ -61,7 +63,7 @@
 - 续传产出**新 snapshot id**，resumed_from == 中断 id；旧 incomplete 目录+manifest 善后删除；无 .mrtmp 残留；`verify` exit 0；
 - **复用证据**：bytes_written < 数据集总量（仅补缺失文件），linked 非空。
 
-注：该用例在第 1–5 次运行均通过（同代码）；第 6/7 次（最终确认运行）被宿主 safe-delete 护栏拦截（count 53–61 > 50，环境限制，非断言失败）——按 T-09 既有原则精确报告，建议下轮配额刷新后复跑确认。
+注：早期运行中该用例曾两次被宿主 safe-delete 护栏拦截（count 53–61 > 50，环境限制，非断言失败）；最终配额刷新后已重新执行并**全部通过**（E2E 最终 13 passed / 0 failed，见 §12），无遗留待复跑项。
 
 ## 8. M10 卷身份 / 盘符漂移 — 卷锚自动重定位（M10 blocker 修复后 PASS）
 
@@ -135,6 +137,11 @@
 8. exFAT 整文件复制模式（D2 降级）未做外置盘真机验收（沙箱无真实 exFAT 卷；strict/warn 逻辑有单元覆盖）——NOT REQUIRED BY FROZEN MVP（可用本地 NTFS 仿真口径）。
 9. **旧 anchored 配置被更旧版本代码读取**：新 `[target]` 三键对旧版本严格模式是「未知配置键」→ 报错拒绝（向前不兼容，如实接受；MVP 未发布）。
 
+Post-MVP hardening 项（非阻塞，非当前数据安全缺陷；本轮不修改代码）：
+
+10. **`repo.get_volume_info()` 的卷根获取方式**：当前按 `Path.anchor` 推导 `GetVolumeInformationW` 查询根。普通 drive-letter 外置盘场景正确；若未来正式支持 mounted-folder-only volume，应改用 `GetVolumePathNameW` 获取实际卷挂载根。冻结 MVP 非 blocker——post-MVP compatibility hardening。
+11. **`volume.list_mounted_volumes()` 枚举终止语义**：当前 `FindNextVolumeW` 失败即结束枚举，未区分 `ERROR_NO_MORE_FILES` 与真实枚举错误。该函数目前仅诊断用途，不参与 resolver 身份接受路径——post-MVP diagnostic hardening。
+
 ## 12. 测试与工具链结果
 
 - 新增 `tests/test_e2e.py`（13 用例，真实 CLI 子进程 E2E，含 M10 重定位/GUID 未挂载/仓库缺失三用例）
@@ -153,4 +160,4 @@
 - 冻结 T-10 四项验收标准均有真实证据（§1）；主流程 / 不可变性 / 硬链接 / 字节级恢复 / 损坏检测 / TR-5 中断续传 / M10 身份安全（含卷锚自动重定位）/ retention / 性能基线全部通过
 - 环境性 skip：仅 4 个文件级 symlink 用例（权限限制，§9）；完整 pytest 全套 452 passed / 4 skipped / 0 failed 已复跑确认（§12）
 - M10 blocker（盘符漂移无自动重定位）已按产品负责人裁定修复并验证（§8）；无其他生产代码缺陷；无冻结规范冲突
-- 是否允许 MVP 在上述环境性 skip 下盖章，交由产品负责人依据本报告证据最终裁定
+- **最终裁定（产品负责人，2026-09-13）：MVP ACCEPTED — PASS WITH ENVIRONMENTAL SKIPS**；允许的环境性 skip 仅限 4 个文件级 symlink 用例（§9）；MVP 开发阶段就此结束

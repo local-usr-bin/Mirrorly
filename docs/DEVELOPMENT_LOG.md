@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-13（十八）MVP 最终验收盖章
+
+- 产品负责人最终裁定：**MVP ACCEPTED — PASS WITH ENVIRONMENTAL SKIPS**。
+- Final accepted HEAD = `60ed124`（feat(repo): add volume-anchored target relocation）；T-10 initial baseline = `a31126b`（性能基线在该基线测得）。
+- 完整 pytest：**452 passed / 4 skipped / 0 failed**；T-10 E2E：**13 passed / 0 failed**。
+- M10「盘符漂移」blocker 已修复并验收通过（卷锚自动重定位）。
+- 4 个 skip 原因：文件级 symlink/reparse 用例在当前 Windows 环境无 SeCreateSymbolicLinkPrivilege / Developer Mode；目录级 junction 对应防护已真实 Windows 通过。
+- 两个非阻塞 post-MVP hardening 项已记入 MVP_ACCEPTANCE §11（repo.get_volume_info 的卷根获取方式 / list_mounted_volumes 枚举终止语义），本轮不修改代码。
+- **MVP 开发阶段结束，生产代码冻结**；远程仓库 push、release/tag 与后续 hardening / GUI 另起阶段。
+
+---
+
 ## 2026-09-13（十七）T-10 M10 blocker 修复：卷锚自动重定位
 
 ### 做了什么
