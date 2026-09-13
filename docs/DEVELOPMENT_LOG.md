@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-09-13（十）T-08 hardening 第二轮：Windows 路径与临时文件残余缺口
+
+### 背景
+
+上一轮 hardening（09ece82）review 确认 A–G 落地，再指出两个确定缺口 +
+一个低成本补强，直接修复提交（不 amend、不开 T-09）。
+
+### 修复内容
+
+1. **canonical validator 拒绝反斜杠**：`validate_canonical_rel_path` 显式
+   拒绝 `\`（此前 `..\evil.txt`、`\\server\share` 等可漏过——按 `/` 分段
+   后单段不含 `..` 字面量）。manifest entry fail closed；用户 `--path`
+   selector 仍由 `normalize_selector` 先行归一 `\` → `/`，便利性不变。
+2. **`_restore_one_file` fd 泄漏窗口**：原 `with open(src), os.fdopen(fd)`
+   单行结构中 source open 失败时 mkstemp 原始 fd 永不关闭。改为嵌套
+   with + `fd_owned` 所有权标记：未转移所有权（fdopen 未执行）时异常
+   路径显式 `os.close(fd)`，再做 temp cleanup。Windows 上 fd 未关会导致
+   temp 删除失败 → leftover，测试以「leftovers 为空」反证 fd 已关闭。
+3. **Windows 大小写冲突防护**：`_validate_manifest_paths` 在 exact
+   duplicate 之外增加 casefold collision key——`A.txt`/`a.txt`、
+   `Dir/File.txt`/`dir/file.txt` 均拒绝；不做 NTFS 内核级名字模拟，
+   保守可解释。
+4. **snapshot id 加固**：确认生成格式 `%Y-%m-%d_%H%M%S` 不含冒号，且
+   Windows 上 `:` 是 NTFS ADS 分隔符——`_validate_snapshot_id` 改为复用
+   单组件 canonical 规则（任何冒号、保留设备名、尾随点/空格、控制字符
+   等一律拒绝；`/` 仍显式拒绝保证单段）。
+
+### 测试
+
+新增 17 用例：反斜杠 validator/篡改 manifest 参数化（4 种形式）/selector
+归一回归、source open 失败注入（error 记录+temp 清理+无残留+partial
+restore 继续）、大小写冲突参数化（2 组拒绝+1 组合法）、snapshot id 非法
+形式参数化（6 种）+现行生成格式合法性回归。专项 119 passed / 7 skipped；
+全套 258 passed / 7 skipped，ruff clean。
+
+---
+
 ## 2026-09-13（九）T-08 safety hardening follow-up：apply 期安全边界加固
 
 ### 背景

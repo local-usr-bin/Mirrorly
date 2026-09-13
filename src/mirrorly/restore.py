@@ -17,11 +17,15 @@ manifest、校验 manifest 指纹（digest）、重新验证安全边界、重�
    ``../`` 写进恢复目标——哪怕该条目未被选中），并拒绝重复条目路径（防
    字典折叠/同路径重复执行）；selector 为字面 snapshot-relative 路径，
    **不做 glob/fnmatch 扩展语义**；
-2. **canonical Windows 路径校验**：空段、``.``/``..`` 段、绝对路径、
-   控制字符、``<>:"|?*``、尾随点/空格、保留设备名（CON PRN AUX NUL
-   COM1-9 LPT1-9 COM¹ COM² COM³ LPT¹ LPT² LPT³，含带扩展名形式）一律非法；
-   component 长度按 **UTF-16 code unit** 计（上限 255），不把 Python
-   ``len()`` 当作 Windows 底层长度语义（非 BMP 字符占 2 个 code unit）；
+2. **canonical Windows 路径校验**：POSIX 风格相对路径（**反斜杠一律
+   非法**——manifest 中出现 ``\\`` 属异常，fail closed；用户 ``--path``
+   输入的 Windows 反斜杠由 ``normalize_selector`` 先行归一）；空段、
+   ``.``/``..`` 段、绝对路径、控制字符、``<>:"|?*``、尾随点/空格、
+   保留设备名（CON PRN AUX NUL COM1-9 LPT1-9 COM¹ COM² COM³ LPT¹ LPT²
+   LPT³，含带扩展名形式）一律非法；component 长度按 **UTF-16 code
+   unit** 计（上限 255），不把 Python ``len()`` 当作 Windows 底层长度
+   语义（非 BMP 字符占 2 个 code unit）；同一份 manifest 内拒绝
+   casefold 后冲突的路径（Windows case-insensitive collision 防护）；
 3. **reparse 双侧防护**：snapshot 读侧与 destination 写侧遇到 reparse
    point（junction/symlink 等）保守拒绝——这是**有意的兼容性限制**，不做
    跨链接恢复；check-then-open 的残余 TOCTOU 风险在 MVP 中**明确接受**
@@ -193,6 +197,11 @@ def validate_canonical_rel_path(rel: str, *, what: str = "路径") -> PurePosixP
     """
     if not rel:
         raise RestoreError(f"{what}不能为空")
+    if "\\" in rel:
+        # canonical snapshot-relative POSIX path：反斜杠属异常，fail closed
+        # （用户 --path 输入的 Windows 反斜杠由 normalize_selector 先行归一，
+        #  不经过本拒绝路径）
+        raise RestoreError(f"{what}不允许反斜杠（须为 POSIX 风格相对路径）: {rel!r}")
     if rel.startswith("/"):
         raise RestoreError(f"{what}必须是相对路径: {rel!r}")
     if len(rel) > 1 and rel[1] == ":":
@@ -225,15 +234,19 @@ def normalize_selector(raw: str) -> str:
 
 
 def _validate_snapshot_id(snapshot_id: str) -> None:
-    """路径安全：快照 id 必须是单段相对名称（第三份 validator，Q1 裁定暂接受）。"""
-    if (
-        not snapshot_id
-        or "/" in snapshot_id
-        or "\\" in snapshot_id
-        or snapshot_id in (".", "..")
-        or (len(snapshot_id) > 1 and snapshot_id[1] == ":")
-    ):
-        raise RestoreError(f"非法快照 id: {snapshot_id!r}")
+    """路径安全：快照 id 必须是单段 canonical Windows 名称（第三份 validator，Q1 裁定暂接受）。
+
+    生成格式 ``%Y-%m-%d_%H%M%S`` 不含冒号；Windows 上 ``:`` 同时是 NTFS
+    alternate data stream 分隔符，任何冒号一律拒绝。复用单组件 canonical
+    规则（保留设备名、尾随点/空格、控制字符、禁止字符、长度上限）避免
+    落入 Windows 特殊名字语义。
+    """
+    if "/" in snapshot_id:
+        raise RestoreError(f"非法快照 id（必须单段）: {snapshot_id!r}")
+    try:
+        validate_canonical_rel_path(snapshot_id, what="快照 id")
+    except RestoreError as e:
+        raise RestoreError(f"非法快照 id: {snapshot_id!r}（{e}）") from e
 
 
 def _validate_manifest_paths(manifest: Manifest) -> None:
@@ -242,12 +255,21 @@ def _validate_manifest_paths(manifest: Manifest) -> None:
     任一非法路径（含未被 selector 选中的条目）→ RestoreError 整体拒绝；
     重复路径同样拒绝（manifest 层不检测重复，防字典折叠/同路径重复执行）。
     """
-    seen: set[str] = set()
+    seen_exact: set[str] = set()
+    seen_folded: set[str] = set()
     for e in manifest.entries:
         validate_canonical_rel_path(e.path, what="manifest 条目路径")
-        if e.path in seen:
+        if e.path in seen_exact:
             raise RestoreError(f"manifest 含重复条目路径（拒绝重复执行/字典折叠）: {e.path!r}")
-        seen.add(e.path)
+        # Windows case-insensitive collision 防护（fail closed）：casefold 后
+        # 冲突即拒绝——不模拟 NTFS 内核级名字规则，保守而可解释
+        folded = e.path.casefold()
+        if folded in seen_folded:
+            raise RestoreError(
+                f"manifest 含 Windows 大小写冲突条目路径（fail closed，拒绝执行）: {e.path!r}"
+            )
+        seen_exact.add(e.path)
+        seen_folded.add(folded)
 
 
 # ---------------------------------------------------------------------------
@@ -708,17 +730,27 @@ def _restore_one_file(src_lp: str, dest: Path, mtime_ns: int, leftovers: list[st
     fd, tmp_name = tempfile.mkstemp(
         prefix=_TMP_PREFIX, suffix=_TMP_SUFFIX, dir=to_long_path(parent)
     )
+    fd_owned = True  # mkstemp 返回的原始 fd；所有权转移给 fout 后置 False
     try:
-        with open(src_lp, "rb") as fin, os.fdopen(fd, "wb") as fout:
-            while chunk := fin.read(1024 * 1024):
-                fout.write(chunk)
-            fout.flush()
-            os.fsync(fout.fileno())
+        with open(src_lp, "rb") as fin:
+            with os.fdopen(fd, "wb") as fout:
+                fd_owned = False  # 此后 fd 由 with 负责关闭
+                while chunk := fin.read(1024 * 1024):
+                    fout.write(chunk)
+                fout.flush()
+                os.fsync(fout.fileno())
         # mtime 保真落在 temp 上（replace 之前）；Windows FILETIME 100ns
         # 粒度截断属平台限制（同 T-03）
         os.utime(tmp_name, ns=(os.stat(tmp_name).st_atime_ns, mtime_ns))
         os.replace(tmp_name, to_long_path(dest))
     except OSError:
+        if fd_owned:
+            # source open 失败等未转移所有权的路径：原始 fd 必须显式关闭，
+            # 否则 Windows 上 temp 文件被占用无法清理（且无主 fd 泄漏）
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             if os.path.exists(tmp_name):
                 os.remove(tmp_name)

@@ -914,3 +914,116 @@ class TestApplyRevalidatesPlanParams:
         forged = replace(plan, paths=("../evil",))
         with pytest.raises(RestoreError):
             apply_restore(repo, forged)
+
+
+# ---------------------------------------------------------------------------
+# hardening 2nd round：反斜杠拒绝 / fd 泄漏窗口 / 大小写冲突 / snapshot id
+# ---------------------------------------------------------------------------
+
+
+class TestBackslashRejection:
+    def test_validator_rejects_backslash(self) -> None:
+        with pytest.raises(RestoreError):
+            validate_canonical_rel_path("a\\b")
+
+    @pytest.mark.parametrize(
+        "evil",
+        [
+            "foo\\bar.txt",
+            "..\\evil.txt",
+            "dir\\..\\evil",
+            "\\\\server\\share",
+        ],
+    )
+    def test_tampered_manifest_backslash_rejected(self, tmp_path, evil: str) -> None:
+        # manifest 中出现反斜杠属异常：即使 selector 只选安全条目也整体拒绝、零写入
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"safe.txt": b"safe"})
+        m = load_manifest(repo, "s1", require_complete=True)
+        tampered = replace(m.entries[0], path=evil)
+        write_manifest(repo, replace(m, entries=(*m.entries, tampered)))
+        with pytest.raises(RestoreError, match="manifest 条目路径"):
+            plan_restore(repo, "s1", tmp_path / "out", paths=("safe.txt",))
+        assert not (tmp_path / "out").exists()
+
+    def test_selector_backslash_still_normalized(self) -> None:
+        # 用户 --path 输入的 Windows 反斜杠继续归一，不破坏使用便利性
+        assert normalize_selector("dir\\file.txt") == "dir/file.txt"
+
+
+class TestSourceOpenFailure:
+    def test_source_open_failure_cleans_temp_and_closes_fd(self, tmp_path, monkeypatch) -> None:
+        import builtins
+
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"snap-b"})
+        dest = tmp_path / "out"
+        real_open = builtins.open
+
+        def guard(file, mode="r", *args, **kwargs):
+            # mkstemp 成功后、source open 时注入失败（命中 fd 泄漏窗口）
+            if mode == "rb" and str(file).endswith("b.txt"):
+                raise PermissionError("injected source open failure")
+            return real_open(file, mode, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", guard)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest))
+        # partial restore：该文件记 error，其他文件照常恢复
+        assert result.restored == ("a.txt",)
+        assert [p for p, _ in result.errors] == ["b.txt"]
+        assert (dest / "a.txt").read_bytes() == b"a"
+        assert not (dest / "b.txt").exists()
+        # temp 正常清理：无残留、无 leftover
+        # （Windows 上若原始 fd 泄漏未关，os.remove 会失败 → leftover，此处为空即证明 fd 已关）
+        assert result.leftovers == ()
+        residue = [p for p in dest.rglob("*") if ".mirrorly-restore-" in p.name]
+        assert residue == []
+
+
+class TestCaseInsensitiveCollision:
+    @pytest.mark.parametrize(
+        "paths",
+        [
+            ["A.txt", "a.txt"],
+            ["Dir/File.txt", "dir/file.txt"],
+        ],
+    )
+    def test_case_collision_rejected(self, tmp_path, paths) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"x.txt": b"x"})
+        m = load_manifest(repo, "s1", require_complete=True)
+        forged = tuple(replace(m.entries[0], path=p) for p in paths)
+        write_manifest(repo, replace(m, entries=forged))
+        with pytest.raises(RestoreError, match="大小写冲突"):
+            plan_restore(repo, "s1", tmp_path / "out")
+
+    def test_distinct_paths_allowed(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"b"})
+        plan = plan_restore(repo, "s1", tmp_path / "out")
+        assert set(_actions(plan)) == {"a.txt", "b.txt"}
+
+
+class TestSnapshotIdHardening:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "snap:1",  # NTFS ADS 分隔符：任何冒号一律拒绝
+            "s1:stream",
+            "C:evil",
+            "CON",  # 保留设备名不得作为快照目录名
+            "id ",
+            "id.",
+        ],
+    )
+    def test_invalid_ids_rejected(self, tmp_path, bad: str) -> None:
+        repo = _init_repo(tmp_path / "target")
+        with pytest.raises(RestoreError, match="非法快照 id"):
+            plan_restore(repo, bad, tmp_path / "out")
+
+    def test_generated_format_accepted(self, tmp_path) -> None:
+        # 现行生成格式 %Y-%m-%d_%H%M%S 不含冒号，必须继续合法
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "2026-09-13_103000", {"a.txt": b"a"})
+        plan = plan_restore(repo, "2026-09-13_103000", tmp_path / "out")
+        assert plan.entries
