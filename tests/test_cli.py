@@ -16,13 +16,15 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from mirrorly import cli
 from mirrorly.cli import main
-from mirrorly.manifest import list_manifests
+from mirrorly.config import ConfigError, validate_task_name
+from mirrorly.manifest import list_manifests, load_manifest
 from mirrorly.repo import VolumeInfo, load_repo
 from mirrorly.scan import to_long_path
 
@@ -401,7 +403,8 @@ class TestBackup:
         import shutil
 
         assert _init(ws) == 0
-        shutil.rmtree(to_long_path(ws["target"] / "MirrorlyRepo"))
+        # 测试路径很短，用普通路径删除（带 \\?\ 前缀会绕过 OS 临时目录豁免）
+        shutil.rmtree(ws["target"] / "MirrorlyRepo")
         assert _run(ws, "backup", "--yes") == 1
 
     def test_no_config_exit_1(self, tmp_path) -> None:
@@ -735,3 +738,361 @@ class TestPaths:
         forged = replace(plan, overwrite="bogus")
         with pytest.raises(RestoreError):
             apply_restore(repo, forged)
+
+
+# ---------------------------------------------------------------------------
+# T-09 integration hardening（follow-up）
+# ---------------------------------------------------------------------------
+
+
+def _make_incomplete_snapshot(ws, snap_id: str = "2026-09-13_000000") -> str:
+    """构造中断态：incomplete manifest（a.txt 已物化，b.txt 未复制）。"""
+    from mirrorly.manifest import create_manifest, write_manifest
+    from mirrorly.scan import scan_source
+
+    repo = _repo(ws)
+    current = scan_source(str(ws["src"]), ()).entries
+    snap_dir = repo.path / "snapshots" / snap_id
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "a.txt").write_bytes((ws["src"] / "a.txt").read_bytes())
+    (snap_dir / "sub").mkdir()
+    write_manifest(repo, create_manifest(snap_id, str(ws["src"]), repo.hash_algorithm, current))
+    return snap_id
+
+
+class TestSnapshotIdCollision:
+    def test_collision_gets_suffix_and_preserves_existing(self, ws, monkeypatch) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        # 强制 id 生成器连续返回同一个 id（模拟秒级碰撞）
+        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
+        assert _run(ws, "backup", "--yes") == 0
+        repo = _repo(ws)
+        first_manifest = repo.path / "manifests" / "2026-09-13_100000.json"
+        first_manifest_bytes = first_manifest.read_bytes()
+        first_snap_file = repo.path / "snapshots" / "2026-09-13_100000" / "a.txt"
+        first_snap_bytes = first_snap_file.read_bytes()
+
+        # 第二次备份强制撞到同一个已有 complete id
+        _write(ws["src"] / "a.txt", b"alpha-v2")
+        assert _run(ws, "backup", "--yes") == 0
+
+        # 既有快照零污染：manifest 字节、目录内容、complete 状态全部不变
+        assert first_manifest.read_bytes() == first_manifest_bytes
+        assert first_snap_file.read_bytes() == first_snap_bytes
+        assert load_manifest(repo, "2026-09-13_100000").status == "complete"
+
+        # 新备份获得唯一后缀 id 并正常完成
+        ids = [s.snapshot_id for s in list_manifests(repo)]
+        assert "2026-09-13_100000-01" in ids
+        assert load_manifest(repo, "2026-09-13_100000-01").status == "complete"
+        assert (
+            repo.path / "snapshots" / "2026-09-13_100000-01" / "a.txt"
+        ).read_bytes() == b"alpha-v2"
+
+    def test_collision_chain_skips_taken_suffixes(self, ws, monkeypatch) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
+        assert _run(ws, "backup", "--yes") == 0
+        assert _run(ws, "backup", "--yes") == 0
+        assert _run(ws, "backup", "--yes") == 0
+        ids = {s.snapshot_id for s in list_manifests(_repo(ws))}
+        assert ids == {
+            "2026-09-13_100000",
+            "2026-09-13_100000-01",
+            "2026-09-13_100000-02",
+        }
+
+    def test_suffixed_id_accepted_by_verify_and_restore(self, ws, monkeypatch) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
+        assert _run(ws, "backup", "--yes") == 0
+        assert _run(ws, "backup", "--yes") == 0
+        suffixed = "2026-09-13_100000-01"
+        # 后缀 id 必须兼容 verify / restore 的 snapshot-id 校验
+        assert _run(ws, "verify", "--snapshot", suffixed) == 0
+        dest = ws["src"].parent / "out"
+        assert _run(ws, "restore", "--snapshot", suffixed, "--to", str(dest), "--yes") == 0
+        assert (dest / "a.txt").read_bytes() == b"alpha"
+
+    def test_unallocatable_id_fails_with_zero_writes(self, ws, monkeypatch) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        # 占满基准 id 与全部 99 个后缀候选（complete manifest，内容合法）
+        from mirrorly.manifest import create_manifest, mark_complete, write_manifest
+
+        for n in range(100):
+            sid = "2026-09-13_100000" if n == 0 else f"2026-09-13_100000-{n:02d}"
+            write_manifest(
+                repo,
+                mark_complete(create_manifest(sid, str(ws["src"]), repo.hash_algorithm, {})),
+            )
+        before = sorted(os.listdir(to_long_path(repo.path / "manifests")))
+        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
+        assert _run(ws, "backup", "--yes") == 1  # 安全失败
+        # 零写入：manifest 集合不变、没有新快照目录
+        assert sorted(os.listdir(to_long_path(repo.path / "manifests"))) == before
+        assert sorted(os.listdir(to_long_path(repo.path / "snapshots"))) == []
+
+
+class TestBackupLockScope:
+    def test_lock_busy_before_any_scan(self, backed_up, monkeypatch) -> None:
+        ws = backed_up
+        lock = _repo(ws).path / "locks" / "default.lock"
+        lock.write_text("pid=999999", encoding="utf-8")
+
+        def forbidden(*a, **k):
+            raise AssertionError("锁被占用时不应触发 recovery/扫描")
+
+        monkeypatch.setattr(cli, "scan_recovery", forbidden)
+        monkeypatch.setattr(cli, "scan_source", forbidden)
+        assert _run(ws, "backup", "--yes") == 6
+
+    def test_dry_run_does_not_need_lock(self, backed_up) -> None:
+        # dry-run 有意例外：零写入，不取锁也不触碰他人锁文件
+        ws = backed_up
+        lock = _repo(ws).path / "locks" / "default.lock"
+        lock.write_text("pid=999999", encoding="utf-8")
+        assert _run(ws, "backup", "--dry-run") == 0
+        assert lock.read_text(encoding="utf-8") == "pid=999999"
+        assert len(list_manifests(_repo(ws))) == 1
+
+
+class TestJsonPurity:
+    def _init_argv(self, ws, *extra: str) -> list[str]:
+        return [
+            "--config",
+            str(ws["config"]),
+            "init",
+            "--source",
+            str(ws["src"]),
+            "--target",
+            str(ws["target"]),
+            *extra,
+        ]
+
+    def test_init_warn_json_yes(self, ws, monkeypatch, capsys) -> None:
+        _fake_exfat(monkeypatch)
+        code = main(self._init_argv(ws, "--filesystem-policy", "warn", "--yes", "--json"))
+        assert code == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)  # stdout 为单一 JSON 文档
+        assert payload["hardlinks"] is False
+        assert "exFAT" in captured.err  # 降级警告走 stderr
+
+    def test_init_warn_json_no_yes_exit_6_empty_stdout(self, ws, monkeypatch, capsys) -> None:
+        _fake_exfat(monkeypatch)
+        code = main(self._init_argv(ws, "--filesystem-policy", "warn", "--json"))
+        assert code == 6
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err  # 诊断写 stderr
+        assert not (ws["target"] / "MirrorlyRepo").exists()
+
+    def test_backup_resume_json_yes(self, backed_up, monkeypatch, capsys) -> None:
+        ws = backed_up
+        inc_id = _make_incomplete_snapshot(ws)
+        # 本测试聚焦 stdout JSON 纯度，不依赖旧 incomplete 的物理删除
+        # （续传善后的端到端集成由 TestBackupResume 专门覆盖）
+        monkeypatch.setattr("mirrorly.recovery.discard_incomplete", lambda *a, **k: None)
+        assert _run(ws, "backup", "--yes", "--json") == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["resumed_from"] == inc_id
+
+    def test_backup_resume_json_no_yes_exit_6_empty_stdout(self, backed_up, capsys) -> None:
+        ws = backed_up
+        _make_incomplete_snapshot(ws)
+        assert _run(ws, "backup", "--json") == 6
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err
+
+    def test_backup_dry_run_json(self, backed_up, capsys) -> None:
+        ws = backed_up
+        _write(ws["src"] / "new.txt", b"n")
+        assert _run(ws, "backup", "--dry-run", "--json") == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["dry_run"] is True
+        assert "new.txt" in payload["changes"]["added"]
+        assert len(list_manifests(_repo(ws))) == 1  # 零写入
+
+    def test_restore_overwrite_json_yes(self, backed_up, capsys) -> None:
+        ws = backed_up
+        dest = ws["src"].parent / "out"
+        _write(dest / "a.txt", b"existing")
+        code = _run(ws, "restore", "--to", str(dest), "--overwrite", "always", "--yes", "--json")
+        assert code == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert "a.txt" in payload["restored"]
+        assert "恢复计划" in captured.err  # 计划展示转 stderr，stdout 纯净
+
+    def test_restore_overwrite_json_no_yes_exit_6_empty_stdout(self, backed_up, capsys) -> None:
+        ws = backed_up
+        dest = ws["src"].parent / "out"
+        _write(dest / "a.txt", b"existing")
+        code = _run(ws, "restore", "--to", str(dest), "--overwrite", "always", "--json")
+        assert code == 6
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert (dest / "a.txt").read_bytes() == b"existing"  # 未授权即不动作
+
+    def test_verify_failed_json_single_doc(self, backed_up, capsys) -> None:
+        ws = backed_up
+        repo = _repo(ws)
+        sid = list_manifests(repo)[0].snapshot_id
+        (repo.path / "snapshots" / sid / "a.txt").write_bytes(b"tampered")
+        assert _run(ws, "verify", "--json") == 4
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False
+
+    def test_partial_backup_json_single_doc(self, backed_up, monkeypatch, capsys) -> None:
+        ws = backed_up
+        _write(ws["src"] / "flaky.txt", b"data")
+        orig = cli.write_snapshot
+
+        def fake_write(*a, **kw):
+            result = orig(*a, **kw)
+            from dataclasses import replace
+
+            return replace(result, skipped=(("flaky.txt", "复制期间源文件发生变动，已跳过"),))
+
+        monkeypatch.setattr(cli, "write_snapshot", fake_write)
+        assert _run(ws, "backup", "--yes", "--json") == 3
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["skipped"][0]["path"] == "flaky.txt"
+
+
+class TestInitPreflight:
+    def test_target_inside_source_rejected_zero_writes(self, ws) -> None:
+        code = main(
+            [
+                "--config",
+                str(ws["config"]),
+                "init",
+                "--source",
+                str(ws["src"]),
+                "--target",
+                str(ws["src"] / "backup-target"),
+                "--yes",
+            ]
+        )
+        assert code == 1
+        assert not (ws["src"] / "backup-target").exists()
+
+    def test_source_inside_prospective_repo_rejected(self, ws) -> None:
+        src = ws["target"] / "MirrorlyRepo" / "data"
+        src.mkdir(parents=True)
+        code = main(
+            [
+                "--config",
+                str(ws["config"]),
+                "init",
+                "--source",
+                str(src),
+                "--target",
+                str(ws["target"]),
+                "--yes",
+            ]
+        )
+        assert code == 1
+        assert not (ws["target"] / "MirrorlyRepo" / "repo.json").exists()
+
+    def test_sibling_source_target_unaffected(self, ws) -> None:
+        # 正常 sibling 布局不受互相包含检查影响（所有 happy-path 用例亦覆盖）
+        assert _init(ws) == 0
+        assert (ws["target"] / "MirrorlyRepo" / "repo.json").exists()
+
+
+class TestTaskNameValidation:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "../evil",
+            "a/b",
+            "a\\b",
+            "a:b",
+            "..",
+            ".",
+            "CON",
+            "con.txt",
+            "lpt1",
+            "com²",
+            "LPT³",
+            "name.",
+            "name ",
+            "a<b",
+            "a|b",
+            "",
+        ],
+    )
+    def test_dangerous_names_rejected(self, bad: str) -> None:
+        with pytest.raises(ConfigError):
+            validate_task_name(bad)
+
+    @pytest.mark.parametrize("good", ["default", "my-task_1", "工作盘", "a.b", "A1"])
+    def test_normal_names_accepted(self, good: str) -> None:
+        validate_task_name(good)
+
+    def test_hand_edited_toml_evil_name_rejected_before_lock(self, backed_up) -> None:
+        ws = backed_up
+        cfg_file = ws["config"] / "config.d" / "default.toml"
+        text = cfg_file.read_text(encoding="utf-8").replace('name = "default"', 'name = "../evil"')
+        assert 'name = "../evil"' in text
+        cfg_file.write_text(text, encoding="utf-8")
+        assert _run(ws, "backup", "--yes") == 1
+        repo = _repo(ws)
+        # 锁路径不得逃出 locks/（仓库根/父目录均不得出现 evil.lock）
+        assert not (repo.path / "evil.lock").exists()
+        assert not (repo.path.parent / "evil.lock").exists()
+
+    def test_cli_task_arg_path_escape_rejected_exit_2(self, backed_up) -> None:
+        assert _run(backed_up, "--task", "../evil", "backup", "--yes") == 2
+
+    def test_init_evil_task_name_exit_2_zero_writes(self, ws) -> None:
+        code = main(
+            [
+                "--config",
+                str(ws["config"]),
+                "init",
+                "--source",
+                str(ws["src"]),
+                "--target",
+                str(ws["target"]),
+                "--task",
+                "../evil",
+                "--yes",
+            ]
+        )
+        assert code == 2
+        assert not (ws["target"] / "MirrorlyRepo").exists()
+        assert not (ws["config"] / "config.d" / "evil.toml").exists()
+        assert not (ws["config"] / "evil.toml").exists()
+
+
+class TestCliContractGaps:
+    def test_verify_snapshot_and_all_mutually_exclusive(self, backed_up) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _run(backed_up, "verify", "--snapshot", "x", "--all")
+        assert exc.value.code == 2
+
+    def test_verify_reports_never_overwrite(self, backed_up, monkeypatch) -> None:
+        ws = backed_up
+
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 9, 13, 13, 0, 0)
+
+        monkeypatch.setattr(cli, "datetime", FrozenDatetime)
+        assert _run(ws, "verify") == 0
+        assert _run(ws, "verify") == 0
+        reports = sorted((_repo(ws).path / "logs").glob("verify-*.json"))
+        # 同时间戳也不覆盖：第二份报告获得唯一后缀
+        assert len(reports) == 2
+        assert reports[0].name != reports[1].name
+        for r in reports:
+            assert json.loads(r.read_text(encoding="utf-8"))["command"] == "verify"

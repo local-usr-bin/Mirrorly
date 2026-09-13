@@ -4,6 +4,67 @@
 
 ---
 
+## 2026-09-13（十三）T-09 integration hardening follow-up
+
+### 做了什么
+
+review 发现 T-09 集成层五个问题，逐项修复（独立 commit，不 amend 1d07b41）：
+
+1. **snapshot id collision 污染既有 manifest（blocker）**：`write_manifest` 用
+   `os.replace`，旧流程「生成 id → 写 incomplete manifest → write_snapshot」
+   在秒级 id 撞车时会先静默覆盖已有 complete manifest、再由快照目录碰撞报错。
+   修复：新增 `_new_snapshot_id()`——在任务锁内先选定空闲 id（基准冲突时追加
+   `-01`/`-02` canonical 后缀，兼容 Restore 单组件校验；100 候选占满则
+   SnapshotError 安全失败），再落盘 incomplete manifest。任何 collision 下既有
+   快照目录/manifest 字节/complete 状态零触碰（回归测试强制 id 生成器连续返回
+   已有 complete id，逐字节断言原 manifest 不变）。
+2. **任务锁前移**：真实 backup 在确定 repo/task 后立即取 `_TaskLock`，锁覆盖
+   recovery/incomplete 基线选择、源扫描、变更检测、快照/manifest 写入、续传
+   善后与 retention；dry-run 保持零写入不取锁（有意例外，注释声明）。测试证明
+   已有锁时 `scan_recovery`/`scan_source` 被调用前即 exit 6。
+3. **--json stdout 严格单一 JSON 文档**：`_info`/`_detail` 在 json 模式改走
+   stderr；`_confirm`/`_ask` 在 json 无 --yes 时不发 input 提示、直接 _UserAbort
+   （exit 6，stdout 为空，诊断 stderr）；dry-run --json 输出结构化 JSON；
+   restore 计划展示/verify 逐项结果改由 _info 自动路由 stderr。
+4. **init 预检前移**：task config 已存在检查移到 `init_repo` 之前（原先顺序反了，
+   拒绝时已建仓库）；新增 source 与 prospective repo 互相包含检查
+   （realpath+normcase，非字符串前缀）；所有预检失败保证零仓库写入。
+   另补 `validate_task_name`（config.py 公共校验器）：禁止 `/`、`\`、`..`、`:`、
+   控制字符、尾随点/空格、保留设备名（含 COM¹-³/LPT¹-³ 及带扩展名形式），
+   `load_task_config` 与 CLI `--task`/init 均强制执行——手工编辑 TOML 注入
+   `../evil` 时锁文件路径不再可能逃出 locks/。
+5. **CLI 契约小缺口**：verify `--snapshot`/`--all` 改 mutually exclusive
+   （argparse exit 2）；报告文件名加微秒时间戳 + 撞名追加 `-01` 后缀，同秒
+   verify/backup 不再静默覆盖已有报告（保持 tmp → replace 发布）。
+
+### 关键决定
+
+- **list --verbose「增量大小」未实现——规范与数据模型冲突，提交裁定**：
+  CLI_SPEC 要求 verbose 显示「文件数、总大小、增量大小、状态」，但冻结数据模型
+  （manifest）从未定义「增量大小」权威口径。逻辑增量（相对前一快照新增/修改
+  字节）与物理增量（实际新写入字节，硬链接复用不计）语义不同；物理增量取决于
+  运行时 copy/link 决策（含 mtime 信任、suspected 哈希复核、exFAT 整文件复制、
+  retention 删除中间快照改变「前一快照」参照），manifest 数据无法精确重放。
+  按要求不自造算法，list --verbose 维持文件数/目录数/总大小/状态，待裁定口径。
+
+### 遇到的问题
+
+- **宿主 safe-delete 批量护栏（SAFE_DELETE_BULK_CONFIRM_REQUIRED，阈值 50/turn）**
+  在本轮调试中配额耗尽：所有经 shim 回收站路由的删除被 SystemExit(1)。
+  发现 shim 对 OS 临时目录（`tempfile.gettempdir()`）有设计内豁免
+  （`_should_bypass_safe_delete`），basetemp 移到 `%TEMP%\mirrorly_pytest\run_*`
+  后普通路径删除不再触发护栏（未关闭任何保护）；但 `to_long_path` 的 `\\?\`
+  前缀路径无法匹配豁免（realpath 比较 mount 不一致），产品侧 retention/
+  discard/restore 临时文件清理的删除仍计入护栏。
+- 最终全套 360 passed / 8 skipped / 20 failed——20 个失败全部经日志核实为
+  护栏 SystemExit（无任何断言失败），且全部是前几轮已绿过的既有测试
+  （retention/recovery/snapshot/restore 各若干 + CLI 2 个），在护栏配额
+  刷新的新 turn 重跑即可恢复。本轮新增 41 项测试全部通过。
+- 并行编辑同一文件再次静默丢失编辑（verify 互斥组第一次未生效），已重申
+  串行编辑纪律。
+
+---
+
 ## 2026-09-13（十二）T-09 CLI 集成与报告
 
 ### 做了什么

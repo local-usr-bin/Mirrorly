@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import __version__
-from .config import ConfigError, TaskConfig, load_task_config, write_task_config
+from .config import ConfigError, TaskConfig, load_task_config, validate_task_name, write_task_config
 from .manifest import (
     STATUS_COMPLETE,
     ManifestError,
@@ -43,6 +43,7 @@ from .manifest import (
 from .recovery import RecoveryError, build_resume_baseline, clean_tmp_residue, scan_recovery
 from .repo import (
     HARDLINK_FILESYSTEMS,
+    REPO_DIR_NAME,
     RepoError,
     RepoFormatError,
     RepoInfo,
@@ -100,13 +101,22 @@ def _flag(args: argparse.Namespace, name: str) -> bool:
 
 
 def _info(args: argparse.Namespace, message: str) -> None:
-    if not _flag(args, "quiet"):
+    """常规信息。--json 模式下转到 stderr（stdout 只保留单一 JSON 文档）。"""
+    if _flag(args, "quiet"):
+        return
+    if _flag(args, "json"):
+        print(message, file=sys.stderr)
+    else:
         print(message)
 
 
 def _detail(args: argparse.Namespace, message: str) -> None:
+    """--verbose 细节信息（--json 模式下同样只走 stderr）。"""
     if _flag(args, "verbose") and not _flag(args, "quiet"):
-        print(message)
+        if _flag(args, "json"):
+            print(message, file=sys.stderr)
+        else:
+            print(message)
 
 
 def _err(message: str) -> None:
@@ -114,9 +124,14 @@ def _err(message: str) -> None:
 
 
 def _confirm(args: argparse.Namespace, prompt: str) -> None:
-    """破坏性操作确认：--yes 跳过；拒绝/非交互 → _UserAbort（退出码 6）。"""
+    """破坏性操作确认：--yes 跳过；拒绝/非交互 → _UserAbort（退出码 6）。
+
+    --json 模式下绝不向 stdout 写交互提示：未显式 --yes 直接视为未授权。
+    """
     if _flag(args, "yes"):
         return
+    if _flag(args, "json"):
+        raise _UserAbort(f"{prompt}——--json 模式不进行交互，请显式提供 --yes")
     try:
         answer = input(f"{prompt} [y/N] ")
     except EOFError as e:
@@ -126,9 +141,11 @@ def _confirm(args: argparse.Namespace, prompt: str) -> None:
 
 
 def _ask(args: argparse.Namespace, prompt: str) -> bool:
-    """是非提问（--yes 视为肯定；非交互环境中止——不做静默假设）。"""
+    """是非提问（--yes 视为肯定；非交互/--json 无 --yes 中止——不做静默假设）。"""
     if _flag(args, "yes"):
         return True
+    if _flag(args, "json"):
+        raise _UserAbort(f"{prompt}——--json 模式不进行交互，请显式提供 --yes")
     try:
         answer = input(f"{prompt} [Y/n] ")
     except EOFError as e:
@@ -156,6 +173,11 @@ def _resolve_task_config(args: argparse.Namespace) -> TaskConfig:
     config_d = config_root / "config.d"
     task = getattr(args, "task", None)
     if task:
+        # --task 直接拼进文件路径，非法值属用法错误（防路径逃逸）
+        try:
+            validate_task_name(task)
+        except ConfigError as e:
+            raise _UsageError(f"--task 非法：{e}") from e
         return load_task_config(config_d / f"{task}.toml")
     if not config_d.is_dir():
         raise ConfigError(f"未找到任务配置目录: {config_d}（请先运行 mirrorly init）")
@@ -216,12 +238,46 @@ class _TaskLock:
             pass
 
 
+def _snapshot_id_free(repo: RepoInfo, snapshot_id: str) -> bool:
+    """快照 id 未被占用（数据目录与 manifest 均不存在）。"""
+    return (
+        not (repo.path / "snapshots" / snapshot_id).exists()
+        and not (repo.path / "manifests" / f"{snapshot_id}.json").exists()
+    )
+
+
+def _new_snapshot_id(repo: RepoInfo) -> str:
+    """分配唯一快照 id：秒级时间型 id 冲突时追加 ``-01``/``-02`` canonical 后缀。
+
+    保证任何 id collision 下既有快照目录/manifest 字节/complete 状态不被
+    触碰——先选定空闲 id，再落盘 incomplete manifest；后缀形式
+    ``2026-09-13_133000-01`` 满足 Restore 的单组件 canonical 校验。
+    在任务锁内调用，同任务并发已由锁排除。
+    """
+    base = generate_snapshot_id()
+    for n in range(100):
+        candidate = base if n == 0 else f"{base}-{n:02d}"
+        if _snapshot_id_free(repo, candidate):
+            return candidate
+    raise SnapshotError(f"无法分配唯一快照 id：基准 {base} 的 100 个候选均已被占用")
+
+
 def _write_report(repo: RepoInfo, name: str, data: dict) -> Path:
-    """报告落盘到仓库 logs/（M9）：临时文件 + 原子改名（不产生半个 JSON）。"""
+    """报告落盘到仓库 logs/（M9）：临时文件 + 原子改名（不产生半个 JSON）。
+
+    文件名带微秒时间戳；仍撞名（同微秒）时追加 ``-01`` 等后缀，
+    绝不静默覆盖已有报告。
+    """
     logs_dir = repo.path / "logs"
     logs_dir.mkdir(exist_ok=True)
-    ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    ts = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
     final = logs_dir / f"{name}-{ts}.json"
+    for n in range(1, 100):
+        if not final.exists():
+            break
+        final = logs_dir / f"{name}-{ts}-{n:02d}.json"
+    else:
+        raise RepoError(f"无法分配唯一报告文件名: {name}-{ts}")
     tmp = final.with_suffix(final.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, final)
@@ -233,15 +289,45 @@ def _write_report(repo: RepoInfo, name: str, data: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _path_within(child: Path, parent: Path) -> bool:
+    """child 是否与 parent 相同或位于其内部（realpath + normcase，防简单前缀误判）。"""
+    c = os.path.normcase(os.path.realpath(child))
+    p = os.path.normcase(os.path.realpath(parent))
+    return c == p or c.startswith(p + os.sep)
+
+
 def cmd_init(args: argparse.Namespace) -> int:
+    # ---- 预检（全部在 init_repo 之前，任何失败保证零仓库写入）----
+    task_name = getattr(args, "task", None) or DEFAULT_TASK_NAME
+    try:
+        validate_task_name(task_name)
+    except ConfigError as e:
+        _err(f"--task 非法：{e}")
+        return EXIT_USAGE
+
     source = Path(args.source)
     if not source.is_dir():
         _err(f"--source 不是已存在的目录: {source}")
         return EXIT_USAGE
     target = Path(args.target)
     policy = args.filesystem_policy
-    task_name = getattr(args, "task", None) or DEFAULT_TASK_NAME
 
+    config_root = Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT)
+    config_file = config_root / "config.d" / f"{task_name}.toml"
+    if config_file.exists():
+        _err(f"任务配置已存在: {config_file}（如需重建请先手工删除）")
+        return EXIT_ERROR
+
+    # source 与 prospective repo 不得互相包含（备份源含仓库会自我吞没/递归）
+    prospective_repo = target / REPO_DIR_NAME
+    if _path_within(prospective_repo, source):
+        _err(f"备份目标仓库 {prospective_repo} 位于源目录 {source} 内，拒绝初始化")
+        return EXIT_ERROR
+    if _path_within(source, prospective_repo):
+        _err(f"源目录 {source} 位于备份目标仓库 {prospective_repo} 内，拒绝初始化")
+        return EXIT_ERROR
+
+    # ---- 预检全部通过后才允许产生写入 ----
     # warn 策略的确认由 CLI 层完成（区分「用户取消 → 6」与一般错误 → 1）
     volume = get_volume_info(target)
     if volume.filesystem not in HARDLINK_FILESYSTEMS and policy == "warn":
@@ -257,10 +343,6 @@ def cmd_init(args: argparse.Namespace) -> int:
     # 确认已完成（或 strict 由底层直接拒绝），assume_yes 防止底层二次提问
     info = init_repo(target, filesystem_policy=policy, assume_yes=True)
 
-    config_root = Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT)
-    config_file = config_root / "config.d" / f"{task_name}.toml"
-    if config_file.exists():
-        raise ConfigError(f"任务配置已存在: {config_file}（如需重建请先手工删除）")
     cfg = TaskConfig(
         name=task_name,
         source=str(source.resolve()),
@@ -356,13 +438,9 @@ def _select_baseline(args: argparse.Namespace, repo: RepoInfo) -> _Baseline:
     )
 
 
-def cmd_backup(args: argparse.Namespace) -> int:
-    cfg = _resolve_task_config(args)
-    repo = _open_repo(cfg)
-    baseline = _select_baseline(args, repo)
-
+def _scan_and_detect(args: argparse.Namespace, cfg: TaskConfig, baseline: _Baseline):
+    """扫描源并做变更检测（dry-run 与真实执行共用同一逻辑）。"""
     excludes = tuple(cfg.exclude) + tuple(args.exclude or ())
-    started = time.monotonic()
     scan = scan_source(cfg.source, excludes)
     current = scan.entries
 
@@ -375,14 +453,31 @@ def cmd_backup(args: argparse.Namespace) -> int:
             for k, v in baseline.previous.items()
         }
     changes = detect_changes(cfg.source, current, prev_for_detect, baseline.previous_dirs)
+    return scan, current, changes
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    cfg = _resolve_task_config(args)
+    repo = _open_repo(cfg)
 
     if args.dry_run:
-        _print_dry_run(args, changes, scan.skipped)
-        return EXIT_PARTIAL if scan.skipped else EXIT_OK
+        # dry-run 有意例外：零写入，因此不取任务锁（只读预览不与其他实例互斥）
+        baseline = _select_baseline(args, repo)
+        scan, _current, changes = _scan_and_detect(args, cfg, baseline)
+        return _finish_dry_run(args, changes, scan.skipped)
 
+    # 真实执行：确定 repo/task 后立即取锁，锁覆盖 recovery/incomplete 基线选择、
+    # 源扫描、变更检测、快照/manifest 写入、续传善后与 retention——不能先扫描
+    # 数分钟、甚至先读到另一个活动任务的 incomplete 后才发现锁被占用
     with _TaskLock(repo, cfg.name):
+        started = time.monotonic()
+        baseline = _select_baseline(args, repo)
+        scan, current, changes = _scan_and_detect(args, cfg, baseline)
+
         clean_tmp_residue(repo)
-        snapshot_id = generate_snapshot_id()
+        # 先分配唯一空闲 id，再落盘 incomplete manifest——任何 id collision 下
+        # 既有快照目录 / manifest 字节 / complete 状态都不被触碰
+        snapshot_id = _new_snapshot_id(repo)
         source_root = str(Path(cfg.source).resolve())
 
         # manifest 状态机：incomplete 落盘 → 物化 → complete 原子提交
@@ -420,29 +515,29 @@ def cmd_backup(args: argparse.Namespace) -> int:
         plan = build_retention_plan(repo, keep_last=cfg.keep_last, keep_monthly=cfg.keep_monthly)
         retention_deleted = apply_retention_plan(repo, plan)
 
-    duration = time.monotonic() - started
-    all_skipped = list(scan.skipped) + list(result.skipped)
-    report = {
-        "command": "backup",
-        "snapshot_id": snapshot_id,
-        "status": "complete",
-        "source": source_root,
-        "duration_seconds": round(duration, 3),
-        "full_hash": bool(args.full_hash),
-        "resumed_from": baseline.resumed_from,
-        "changes": {
-            "added": changes.added,
-            "modified": changes.modified,
-            "deleted": changes.deleted,
-            "suspected_modified": changes.suspected_modified,
-        },
-        "linked": list(result.linked),
-        "copied": list(result.copied),
-        "skipped": [{"path": p, "reason": r} for p, r in all_skipped],
-        "bytes_written": result.bytes_written,
-        "retention_deleted": list(retention_deleted),
-    }
-    report_path = _write_report(repo, f"backup-{snapshot_id}", report)
+        duration = time.monotonic() - started
+        all_skipped = list(scan.skipped) + list(result.skipped)
+        report = {
+            "command": "backup",
+            "snapshot_id": snapshot_id,
+            "status": "complete",
+            "source": source_root,
+            "duration_seconds": round(duration, 3),
+            "full_hash": bool(args.full_hash),
+            "resumed_from": baseline.resumed_from,
+            "changes": {
+                "added": changes.added,
+                "modified": changes.modified,
+                "deleted": changes.deleted,
+                "suspected_modified": changes.suspected_modified,
+            },
+            "linked": list(result.linked),
+            "copied": list(result.copied),
+            "skipped": [{"path": p, "reason": r} for p, r in all_skipped],
+            "bytes_written": result.bytes_written,
+            "retention_deleted": list(retention_deleted),
+        }
+        report_path = _write_report(repo, f"backup-{snapshot_id}", report)
 
     if _flag(args, "json"):
         report["report_path"] = str(report_path)
@@ -468,10 +563,30 @@ def cmd_backup(args: argparse.Namespace) -> int:
     return EXIT_PARTIAL if all_skipped else EXIT_OK
 
 
-def _print_dry_run(
+def _finish_dry_run(
     args: argparse.Namespace, changes, scan_skipped: tuple[tuple[str, str], ...]
-) -> None:
-    """dry-run 变更预览（M8）：只输出，不写入任何内容。"""
+) -> int:
+    """dry-run 变更预览（M8）：只输出，不写入任何内容。
+
+    --json 模式输出单一结构化 JSON 文档（机器可读）；否则人类可读预览。
+    """
+    if _flag(args, "json"):
+        payload = {
+            "command": "backup",
+            "dry_run": True,
+            "changes": {
+                "added": list(changes.added),
+                "modified": list(changes.modified),
+                "deleted": list(changes.deleted),
+                "suspected_modified": list(changes.suspected_modified),
+                "added_dirs": list(changes.added_dirs),
+                "deleted_dirs": list(changes.deleted_dirs),
+            },
+            "skipped": [{"path": p, "reason": r} for p, r in scan_skipped],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return EXIT_PARTIAL if scan_skipped else EXIT_OK
+
     _info(args, "变更预览（dry-run，不写入任何内容）:")
     _info(
         args,
@@ -491,6 +606,7 @@ def _print_dry_run(
         _info(args, f"  扫描跳过 {len(scan_skipped)} 项:")
         for p, reason in scan_skipped[:20]:
             _info(args, f"    - {p}: {reason}")
+    return EXIT_PARTIAL if scan_skipped else EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -537,8 +653,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 "extras": list(rep.extras),
             }
         )
-        if _flag(args, "json"):
-            continue
+        # 逐项人类可读结果（--json 模式下 _info 自动走 stderr，stdout 保持纯净）
         mode = "quick" if rep.quick else "full"
         if rep.ok:
             _info(
@@ -610,20 +725,20 @@ def cmd_restore(args: argparse.Namespace) -> int:
         else:
             counts[e.action] += 1
 
-    if not _flag(args, "json"):
-        _info(args, f"恢复计划: 快照 {snapshot_id} → {plan.destination}")
-        _info(
-            args,
-            f"  新建 {counts['create']} / 覆盖 {counts['overwrite']}"
-            f" / 跳过 {counts['skip']} / 冲突 {counts['conflict']}（目录 {dirs} 个）",
-        )
-        for e in plan.entries:
-            if e.is_dir:
-                continue
-            if e.action in ("overwrite", "conflict"):
-                _info(args, f"    [{e.action}] {e.rel_path} {e.reason}")
-            else:
-                _detail(args, f"    [{e.action}] {e.rel_path} {e.reason}")
+    # 计划展示（_info/_detail 在 --json 模式下自动走 stderr，stdout 保持纯净）
+    _info(args, f"恢复计划: 快照 {snapshot_id} → {plan.destination}")
+    _info(
+        args,
+        f"  新建 {counts['create']} / 覆盖 {counts['overwrite']}"
+        f" / 跳过 {counts['skip']} / 冲突 {counts['conflict']}（目录 {dirs} 个）",
+    )
+    for e in plan.entries:
+        if e.is_dir:
+            continue
+        if e.action in ("overwrite", "conflict"):
+            _info(args, f"    [{e.action}] {e.rel_path} {e.reason}")
+        else:
+            _detail(args, f"    [{e.action}] {e.rel_path} {e.reason}")
 
     # 破坏性确认：存在覆盖项时必须显式确认或 --yes（CLI_SPEC §0）
     if counts["overwrite"]:
@@ -768,8 +883,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_backup)
 
     sp = sub.add_parser("verify", parents=[global_parser], help="校验备份完整性")
-    sp.add_argument("--snapshot", help="只校验指定快照（默认最近一个 complete）")
-    sp.add_argument("--all", action="store_true", help="校验所有 complete 快照")
+    verify_target = sp.add_mutually_exclusive_group()
+    verify_target.add_argument("--snapshot", help="只校验指定快照（默认最近一个 complete）")
+    verify_target.add_argument("--all", action="store_true", help="校验所有 complete 快照")
     sp.add_argument("--quick", action="store_true", help="只校验存在性/类型/大小，不重算哈希")
     sp.set_defaults(func=cmd_verify)
 

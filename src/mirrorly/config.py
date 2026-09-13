@@ -31,6 +31,41 @@ class ConfigError(Exception):
     """配置解析/校验错误。"""
 
 
+# Windows 保留设备名（含 Windows 官方补充的上标形式；带扩展名形式同样保留）
+_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+    | {"COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³"}
+)
+
+# 任务名禁止字符：路径分隔符（防 lock/config 路径逃逸）、ADS 冒号、
+# Windows 非法文件名字符
+_NAME_FORBIDDEN_CHARS = frozenset('/\\:*?"<>|')
+
+
+def validate_task_name(name: str) -> None:
+    """校验任务名是安全的单组件文件名（config.d/<name>.toml、locks/<name>.lock）。
+
+    手工编辑 TOML 后 name 可能含 ``/``、``\\``、``..``、``:``（盘符/ADS）等
+    危险值，若不过滤会让锁文件/配置文件路径逃出既定目录。规则（保守）：
+    非空、单组件（无 ``/`` ``\\``）、非 ``.``/``..``、无 Windows 非法字符与
+    控制字符、不以点/空格结尾、非保留设备名（含带扩展名形式）。
+    """
+    if not name:
+        raise ConfigError("任务名不能为空")
+    if name in (".", ".."):
+        raise ConfigError(f"任务名非法: {name!r}")
+    bad = [c for c in name if c in _NAME_FORBIDDEN_CHARS or ord(c) < 0x20 or ord(c) == 0x7F]
+    if bad:
+        raise ConfigError(f"任务名含非法字符 {bad[0]!r}: {name!r}")
+    if name[-1] in (".", " "):
+        raise ConfigError(f"任务名不能以点或空格结尾: {name!r}")
+    stem = name.split(".", 1)[0].upper()
+    if stem in _RESERVED_NAMES:
+        raise ConfigError(f"任务名为 Windows 保留设备名: {name!r}")
+
+
 @dataclass(frozen=True)
 class TaskConfig:
     """单个备份任务的配置（ADR-007：多任务实体，MVP 单任务实现）。"""
@@ -92,6 +127,12 @@ def load_task_config(path: str | Path) -> TaskConfig:
     ):
         if not isinstance(val, str) or not val:
             raise ConfigError(f"{path}: {key} 必须是非空字符串")
+
+    # 任务名直接拼进 locks/config.d 路径，必须防止手工编辑 TOML 注入危险值
+    try:
+        validate_task_name(task["name"])
+    except ConfigError as e:
+        raise ConfigError(f"{path}: task.name {e}") from e
 
     return TaskConfig(
         name=task["name"],
