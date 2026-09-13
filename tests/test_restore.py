@@ -588,3 +588,329 @@ class TestPartialRestore:
         assert result.restored == ("b.txt",)
         assert [p for p, _ in result.errors] == ["a.txt"]
         assert (dest / "b.txt").read_bytes() == b"b"
+
+
+# ---------------------------------------------------------------------------
+# hardening A：紧邻 I/O 逐条重验（batch 中途状态变化不得被旧决策覆盖）
+# ---------------------------------------------------------------------------
+
+
+def _inject_on_first_write(monkeypatch, hook):
+    """在第一个文件写入完成后执行 hook（故障注入，模拟 batch 中途状态变化）。"""
+    import mirrorly.restore as restore_mod
+
+    orig = restore_mod._restore_one_file
+    fired = {"done": False}
+
+    def wrapper(src_lp, dest, mtime_ns, leftovers):
+        result = orig(src_lp, dest, mtime_ns, leftovers)
+        if not fired["done"]:
+            fired["done"] = True
+            hook()
+        return result
+
+    monkeypatch.setattr(restore_mod, "_restore_one_file", wrapper)
+    return fired
+
+
+class TestPerEntryRevalidation:
+    def test_mid_batch_new_target_never_not_overwritten(self, tmp_path, monkeypatch) -> None:
+        # approved=create；第一项执行后用户新建同名文件 → never 下绝不覆盖
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"snap-b"})
+        dest = tmp_path / "out"
+
+        def hook() -> None:
+            (dest / "b.txt").write_bytes(b"user data")
+
+        _inject_on_first_write(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="never"))
+        assert (dest / "b.txt").read_bytes() == b"user data"
+        assert "b.txt" not in result.restored
+        assert any(p == "b.txt" for p, _ in result.skipped)
+
+    def test_mid_batch_new_target_always_is_upgrade_conflict(self, tmp_path, monkeypatch) -> None:
+        # approved=create；always 下出现目标属破坏性升级（create → overwrite）→ 拒绝
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"snap-b"})
+        dest = tmp_path / "out"
+
+        def hook() -> None:
+            (dest / "b.txt").write_bytes(b"user data")
+
+        _inject_on_first_write(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="always"))
+        assert (dest / "b.txt").read_bytes() == b"user data"
+        assert "b.txt" not in result.restored
+        assert any(p == "b.txt" and "破坏性升级" in r for p, r in result.conflicts)
+
+    def test_mid_batch_older_reevaluated_to_skip(self, tmp_path, monkeypatch) -> None:
+        # approved=overwrite（目标更旧）；执行前 mtime 变新 → 重新判断为 skip，不覆盖
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"snap-b"})
+        m = load_manifest(repo, "s1", require_complete=True)
+        snap_mtime = next(e for e in m.entries if e.path == "b.txt").mtime_ns
+        dest = tmp_path / "out"
+        dest.mkdir()
+        (dest / "b.txt").write_bytes(b"user data")
+        older = snap_mtime - 10_000_000_000
+        os.utime(to_long_path(dest / "b.txt"), ns=(older, older))
+        plan = plan_restore(repo, "s1", dest, overwrite="older")
+        assert _actions(plan)["b.txt"] == ACTION_OVERWRITE
+
+        def hook() -> None:
+            newer = snap_mtime + 10_000_000_000
+            os.utime(to_long_path(dest / "b.txt"), ns=(newer, newer))
+
+        _inject_on_first_write(monkeypatch, hook)
+        result = apply_restore(repo, plan)
+        assert (dest / "b.txt").read_bytes() == b"user data"
+        assert "b.txt" not in result.restored
+        assert any(p == "b.txt" for p, _ in result.skipped)
+
+    def test_mid_batch_new_older_target_is_upgrade_conflict(self, tmp_path, monkeypatch) -> None:
+        # approved=create；执行前出现更旧目标 → older 判定 overwrite 属升级 → 拒绝
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"snap-b"})
+        m = load_manifest(repo, "s1", require_complete=True)
+        snap_mtime = next(e for e in m.entries if e.path == "b.txt").mtime_ns
+        dest = tmp_path / "out"
+
+        def hook() -> None:
+            (dest / "b.txt").write_bytes(b"user data")
+            older = snap_mtime - 10_000_000_000
+            os.utime(to_long_path(dest / "b.txt"), ns=(older, older))
+
+        _inject_on_first_write(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="older"))
+        assert (dest / "b.txt").read_bytes() == b"user data"
+        assert "b.txt" not in result.restored
+        assert any(p == "b.txt" and "破坏性升级" in r for p, r in result.conflicts)
+
+    def test_mid_batch_dest_ancestor_becomes_reparse(self, tmp_path, monkeypatch) -> None:
+        # 执行前 destination 祖先变 reparse → 不穿越
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "sub/b.txt": b"snap-b"})
+        dest = tmp_path / "out"
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+
+        def hook() -> None:
+            # 恢复过程已创建真实目录 dest/sub；替换为链接模拟「执行前祖先变 reparse」
+            os.rmdir(dest / "sub")
+            _make_symlink(dest / "sub", elsewhere, target_is_directory=True)
+
+        _inject_on_first_write(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="always"))
+        assert not (elsewhere / "b.txt").exists()
+        assert "sub/b.txt" not in result.restored
+        assert any(p == "sub/b.txt" for p, _ in result.conflicts)
+
+    def test_mid_batch_snapshot_leaf_becomes_reparse(self, tmp_path, monkeypatch) -> None:
+        # 真正读取前 snapshot leaf 变 reparse → 不读取（记 error，不写目标）
+        repo = _init_repo(tmp_path / "target")
+        snap_dir = _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"snap-b"})
+        dest = tmp_path / "out"
+        secret = tmp_path / "secret.txt"
+        secret.write_bytes(b"secret")
+
+        def hook() -> None:
+            (snap_dir / "b.txt").unlink()
+            _make_symlink(snap_dir / "b.txt", secret)
+
+        _inject_on_first_write(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest))
+        assert "b.txt" not in result.restored
+        assert any(p == "b.txt" for p, _ in result.errors)
+        assert not (dest / "b.txt").exists()
+        assert secret.read_bytes() == b"secret"
+
+
+# ---------------------------------------------------------------------------
+# hardening B：plan 冻结 destination 绝对路径
+# ---------------------------------------------------------------------------
+
+
+class TestFrozenDestination:
+    def test_apply_uses_frozen_destination_not_cwd(self, tmp_path, monkeypatch) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a"})
+        dir_a = tmp_path / "A"
+        dir_b = tmp_path / "B"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        monkeypatch.chdir(dir_a)
+        plan = plan_restore(repo, "s1", "out")  # 相对路径，cwd=A
+        assert plan.destination.is_absolute()
+        monkeypatch.chdir(dir_b)  # plan 后切换 cwd
+        result = apply_restore(repo, plan)
+        assert not result.errors
+        assert (dir_a / "out" / "a.txt").read_bytes() == b"a"  # 恢复到 A/out
+        assert not (dir_b / "out").exists()  # 绝不能恢复到 B/out
+
+
+# ---------------------------------------------------------------------------
+# hardening C：mtime 在 replace 之前落在 temp 上
+# ---------------------------------------------------------------------------
+
+
+class TestMtimeBeforeReplace:
+    def test_mtime_failure_keeps_old_target_and_cleans_temp(self, tmp_path, monkeypatch) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"snapshot"})
+        dest = tmp_path / "out"
+        dest.mkdir()
+        (dest / "a.txt").write_bytes(b"user data")
+
+        def boom(*_args, **_kwargs):
+            raise OSError("injected utime failure")
+
+        monkeypatch.setattr(os, "utime", boom)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="always"))
+        # replace 前失败：旧目标字节必须保持不变
+        assert (dest / "a.txt").read_bytes() == b"user data"
+        assert result.restored == ()
+        assert [p for p, _ in result.errors] == ["a.txt"]
+        # temp 正确清理：无 leftover、无残留
+        assert result.leftovers == ()
+        residue = [p for p in dest.rglob("*") if ".mirrorly-restore-" in p.name]
+        assert residue == []
+
+
+# ---------------------------------------------------------------------------
+# hardening D：全量 manifest canonical 校验 + 重复路径拒绝
+# ---------------------------------------------------------------------------
+
+
+class TestManifestWideValidation:
+    def test_evil_unselected_entry_rejected(self, tmp_path) -> None:
+        # manifest 含未选中的 ../evil：即使只恢复 safe selector 也必须整体拒绝
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"safe.txt": b"safe", "other.txt": b"o"})
+        m = load_manifest(repo, "s1", require_complete=True)
+        evil = replace(m.entries[0], path="../evil.txt")
+        write_manifest(repo, replace(m, entries=(*m.entries, evil)))
+        with pytest.raises(RestoreError, match="manifest 条目路径"):
+            plan_restore(repo, "s1", tmp_path / "out", paths=("safe.txt",))
+        assert not (tmp_path / "evil.txt").exists()
+        assert not (tmp_path / "out").exists()  # 零写入
+
+    def test_duplicate_manifest_paths_rejected(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"b"})
+        m = load_manifest(repo, "s1", require_complete=True)
+        dup = replace(m.entries[0], size=999)  # 同路径不同内容
+        write_manifest(repo, replace(m, entries=(*m.entries, dup)))
+        with pytest.raises(RestoreError, match="重复"):
+            plan_restore(repo, "s1", tmp_path / "out")
+
+
+# ---------------------------------------------------------------------------
+# hardening E：同一实际位置按文件系统身份判定（别名不能绕过边界）
+# ---------------------------------------------------------------------------
+
+
+class TestActualLocationIdentity:
+    def test_dotdot_alias_of_source_requires_in_place(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        source = tmp_path / "src"
+        (source / "sub").mkdir(parents=True)
+        _make_snapshot(repo, "s1", {"a.txt": b"a"}, source_root=str(source))
+        with pytest.raises(RestoreError, match="in_place"):
+            plan_restore(repo, "s1", source / "sub" / "..")
+
+    def test_repo_alias_via_junction_rejected(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"a"})
+        alias = tmp_path / "repo-alias"
+        _make_symlink(alias, repo.path, target_is_directory=True)
+        # 经别名到达仓库内部：不能绕过「禁止恢复到 repo 内」边界
+        with pytest.raises(RestoreError, match="仓库目录内"):
+            plan_restore(repo, "s1", alias / "out")
+
+    def test_source_alias_via_junction_requires_in_place(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        source = tmp_path / "src"
+        source.mkdir()
+        _make_snapshot(repo, "s1", {"a.txt": b"a"}, source_root=str(source))
+        alias = tmp_path / "src-alias"
+        _make_symlink(alias, source, target_is_directory=True)
+        # 别名路径与 source_root 实际为同一目录：仍要求 in_place
+        with pytest.raises(RestoreError, match="in_place"):
+            plan_restore(repo, "s1", alias)
+
+
+# ---------------------------------------------------------------------------
+# hardening F：属性查询 fail closed
+# ---------------------------------------------------------------------------
+
+
+class TestFailClosedAttributes:
+    def test_permission_error_is_not_treated_as_missing(self, tmp_path, monkeypatch) -> None:
+        import mirrorly.restore as restore_mod
+
+        f = tmp_path / "x.txt"
+        f.write_bytes(b"x")
+
+        def boom(*_args, **_kwargs):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(os, "lstat", boom)
+        with pytest.raises(RestoreError, match="fail closed"):
+            restore_mod._file_attributes(to_long_path(f))
+
+    def test_missing_path_returns_none(self, tmp_path) -> None:
+        import mirrorly.restore as restore_mod
+
+        assert restore_mod._file_attributes(to_long_path(tmp_path / "nope.txt")) is None
+        # 父路径不存在（NotADirectoryError 场景）同样视为不存在
+        assert restore_mod._file_attributes(to_long_path(tmp_path / "x.txt" / "child")) is None
+
+
+# ---------------------------------------------------------------------------
+# hardening G：apply 重新验证 plan 参数
+# ---------------------------------------------------------------------------
+
+
+class TestApplyRevalidatesPlanParams:
+    def _setup(self, tmp_path):
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"a.txt": b"snapshot"})
+        dest = tmp_path / "out"
+        dest.mkdir()
+        (dest / "a.txt").write_bytes(b"user data")
+        return repo, dest
+
+    def test_forged_overwrite_rejected(self, tmp_path) -> None:
+        repo, dest = self._setup(tmp_path)
+        plan = plan_restore(repo, "s1", dest, overwrite="never")
+        forged = replace(plan, overwrite="sometimes")
+        with pytest.raises(RestoreError, match="覆盖策略"):
+            apply_restore(repo, forged)
+        assert (dest / "a.txt").read_bytes() == b"user data"
+
+    def test_forged_action_rejected(self, tmp_path) -> None:
+        repo, dest = self._setup(tmp_path)
+        plan = plan_restore(repo, "s1", dest, overwrite="never")
+        forged = replace(
+            plan,
+            entries=tuple(
+                RestoreEntry(e.rel_path, e.dest_path, e.is_dir, "purge") for e in plan.entries
+            ),
+        )
+        with pytest.raises(RestoreError, match="非法动作"):
+            apply_restore(repo, forged)
+
+    def test_relative_destination_rejected(self, tmp_path) -> None:
+        repo, dest = self._setup(tmp_path)
+        plan = plan_restore(repo, "s1", dest, overwrite="never")
+        forged = replace(plan, destination=Path("relative-out"))
+        with pytest.raises(RestoreError, match="绝对路径"):
+            apply_restore(repo, forged)
+
+    def test_uncanonical_plan_paths_rejected(self, tmp_path) -> None:
+        repo, dest = self._setup(tmp_path)
+        plan = plan_restore(repo, "s1", dest, overwrite="never")
+        forged = replace(plan, paths=("../evil",))
+        with pytest.raises(RestoreError):
+            apply_restore(repo, forged)

@@ -4,6 +4,53 @@
 
 ---
 
+## 2026-09-13（九）T-08 safety hardening follow-up：apply 期安全边界加固
+
+### 背景
+
+T-08 代码 review 通过但指出 apply 期七个安全缺口，要求独立 follow-up 修复
+（不 amend f46b1cf，不开始 T-09）。
+
+### 修复内容（A–G）
+
+- **A 紧邻 I/O 逐条重验（blocker）**：抽取单条目分类器 `_classify_entry`，
+  plan 与 apply 执行共享同一逻辑；apply 在 batch 重跑规划后，对每个即将写入
+  的条目在真正 I/O 前再跑一次分类器（目标存在性/类型、当前覆盖决策、双侧
+  root/祖先/leaf reparse、单条 no-upgrade 比较），升级即拒绝该条记 conflict。
+  残余 TOCTOU 仅限「紧邻检查 → open/create/replace」小窗口。
+- **B 冻结 destination**：plan 时 `os.path.abspath` 固化为稳定绝对路径，
+  apply 拒绝相对 destination（不受 cwd 影响）。
+- **C mtime 前置**：write/fsync/close → temp 上 `os.utime` → `os.replace`
+  为单文件唯一 commit point；mtime 失败旧目标字节不变。
+- **D 全量 manifest 校验**：load 后、selector 过滤前校验**所有**条目路径
+  （含未选中条目）；manifest 层不检测重复 path，Restore 侧拒绝重复（防字典
+  折叠/重复执行）。
+- **E 实际位置身份**：`_same_actual_location`（samefile 优先，realpath 兜底），
+  目标边界比较同时覆盖 normpath 与 realpath 变体——junction/别名到达 repo
+  不能绕过「仓库内拒绝」，source_root 别名仍要求 in_place。
+- **F 属性查询 fail closed**：仅 FileNotFoundError/NotADirectoryError（及
+  Win32 ERROR_FILE/PATH_NOT_FOUND，经 `use_last_error` 读真实错误码）视为
+  不存在；PermissionError 等一律 RestoreError。
+- **G apply 重验 plan 参数**：overwrite 合法集、paths canonical、entry
+  action 合法集、destination 绝对路径，伪造参数走不进任何分支。
+
+### 测试
+
+新增 15 用例（mid-batch 故障注入 6、cwd 冻结 1、mtime 失败注入 1、manifest
+全量/重复 2、别名身份 3、fail closed 2、伪造 plan 4——合计类内去重后 15 项；
+其中 4 项 reparse/junction 用例在沙箱环境按探测跳过）。全套 241 passed /
+7 skipped，ruff clean。
+
+### 关键实现注意
+
+- `ctypes.GetLastError()` 不可靠，需 `WinDLL(..., use_last_error=True)` +
+  `ctypes.get_last_error()`；
+- 故障注入用 monkeypatch 包装 `_restore_one_file`，在原调用**完成后**触发
+  hook（保证 destination 已建）；dest 祖先变 reparse 用例需先 rmdir 恢复出的
+  真实目录再建链接。
+
+---
+
 ## 2026-09-13（八）MVP T-08 恢复（restore）
 
 ### 做了什么
