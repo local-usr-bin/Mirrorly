@@ -4,6 +4,74 @@
 
 ---
 
+## 2026-09-13（十二）T-09 CLI 集成与报告
+
+### 做了什么
+
+- 新增 `src/mirrorly/cli.py`：argparse 五命令（init/backup/verify/restore/list），
+  只做编排——全部业务语义委托 T-01~T-08 library API；
+  `__main__.py` 委托 `cli.main`（pyproject entry point 原本即指向
+  `mirrorly.__main__:main`，无需修改，editable 安装下 `mirrorly.exe`
+  与 `python -m mirrorly` 均真实验证通过）。
+- 退出码严格按 CLI_SPEC §6：0 成功 / 1 一般错误 / 2 用法错误（argparse
+  自动 + `_UsageError`：多任务未指定 --task、--in-place 未配 --yes）/
+  3 部分完成（备份跳过、恢复 skip/conflict/error/leftover）/
+  4 校验失败 / 5 目标身份不符（卷序列号不匹配 `_IdentityMismatch`、
+  仓库格式版本不兼容 `RepoFormatError`）/ 6 用户中止（确认拒绝、
+  非交互无 --yes、任务锁占用）/ 130 Ctrl+C。
+- 确认语义：破坏性操作（restore 覆盖、init warn 策略降级）交互确认或
+  --yes；init warn 的确认由 CLI 层完成（区分取消→6 与错误→1），再以
+  assume_yes=True 调底层防二次提问；--in-place 必须显式 --yes（否则 2）；
+  backup 发现 incomplete 时提问续传（--yes 视为肯定；拒绝则从头新备份，
+  incomplete 保留不动；非交互中止→6）。
+- 任务锁：locks/<task>.lock，O_EXCL 独占创建，占用→6；MVP 不做 stale
+  自动清理（避免误判活人锁，残留由用户手工删除）；dry-run 不取锁、
+  零写入（快照/manifest/logs/locks 全部不变）。
+- 报告落盘（M9）：backup/verify 报告 JSON 写入仓库 logs/（tmp+原子改名），
+  终端另给摘要；--json 时 stdout 输出机器可读 JSON（list/backup/verify/
+  restore/init 均支持）。
+- backup 编排：配置解析 → load_repo+卷校验 → scan_recovery（incomplete
+  提示续传，build_resume_baseline 基线）→ scan_source（配置+CLI 排除合并）
+  → detect_changes（--full-hash 通过把基线 mtime 置 -1 强制全量哈希复核，
+  复用冻结逻辑零改动）→（dry-run 返回）→ 任务锁 → 清 tmp 残留 →
+  incomplete manifest 落盘 → write_snapshot → 最终 manifest（排除 skipped、
+  linked sha 从基线 manifest 结转 + copied 写入校验哈希合并）→
+  mark_complete 原子提交 → 续传善后 discard_incomplete → retention
+  （build+apply，复核在底层）→ 报告。
+- OQ-1 澄清：CLI_SPEC restore `--path <pattern>` → `--path <path>`，
+  注明字面 snapshot-relative 路径、非 glob（仅措辞对齐 T-08 冻结语义）。
+- 测试 `tests/test_cli.py` 75 用例：解析/help/entry point（subprocess
+  真实运行）、五命令 happy path 与错误分支、退出码全映射、确认
+  yes/no/--yes、续传与拒绝续传、锁占用/释放/Ctrl+C 清理、卷/格式不符、
+  Unicode 往返、长路径备份+verify、quiet/json、dry-run 零写入、
+  底层安全语义不被 CLI 削弱（伪造 plan 仍被底层拒绝）。
+
+### 集成测试暴露并已修复的现有模块问题（极小修复）
+
+1. **config.py dump_task_config 未转义 Windows 反斜杠**：TOML 基础字符串
+   中的 `P:\...` 路径导致生成配置无法被 tomllib 解析（T-01 潜伏 bug，
+   此前测试均用 POSIX 风格路径未触发）。新增 `_toml_basic_str` 统一转义。
+2. **repo.py 增加 RepoFormatError(RepoError) 子类**：格式版本不兼容从
+   一般错误中区分出来，供 CLI 精确映射退出码 5；不影响既有捕获
+   RepoError 的代码（子类兼容）。
+
+### 遇到的问题
+
+- 全局选项写在子命令后（`mirrorly backup --config X`）的解析：用
+  parents 公共解析器 + SUPPRESS 默认值，避免子解析器默认值覆盖已解析值。
+- exFAT 测试 mock 需同时打 CLI 层与 repo 模块内部的 get_volume_info
+  引用点（init_repo 内部独立引用）。
+- in-place 恢复对既有文件按 never 跳过属正常 partial（3），初版测试
+  误期 0，修正断言（CLI 行为符合规范）。
+
+### 结果
+
+- 专项 75 passed；完整套件 336 passed, 8 skipped（8 项仍为沙箱
+  reparse/junction 限制用例）；ruff check / format --check 全过。
+- 下一步：T-10 端到端验收。
+
+---
+
 ## 2026-09-13（十一）T-08 hardening 第三轮：commit point 前最终复核
 
 ### 背景

@@ -68,7 +68,7 @@
 | `--snapshot <id>` | 指定快照（默认最近一个 complete 快照） |
 | `--to <dir>` | 恢复目标目录（必填；不允许直接覆盖源目录，除非 `--in-place`） |
 | `--in-place` | 恢复回原始源路径（危险操作，需 `--yes` 且逐项提示覆盖） |
-| `--path <pattern>` | 只恢复匹配的文件/子树（可重复） |
+| `--path <path>` | 只恢复指定的文件/子树（可重复；**字面 snapshot-relative 路径，非 glob**——T-08 冻结语义，`dir/file.txt` 命中文件自身、`dir` 命中整棵子树） |
 | `--overwrite <never\|older\|always>` | 目标已存在时的策略，默认 `never`（TR-4：防覆盖用户新数据） |
 
 行为：列出将恢复的文件与覆盖情况 → 确认 → 复制恢复 → 报告。恢复产物为普通文件，不需要 verify。

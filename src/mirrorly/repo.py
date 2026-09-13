@@ -42,6 +42,10 @@ class RepoError(Exception):
     """仓库初始化/加载相关错误。"""
 
 
+class RepoFormatError(RepoError):
+    """仓库格式版本不兼容（CLI 退出码 5：目标身份不符）。"""
+
+
 @dataclass(frozen=True)
 class VolumeInfo:
     """目标卷标识信息（M10：防盘符漂移写错盘）。"""
@@ -168,7 +172,7 @@ def load_repo(target_root: str | Path) -> RepoInfo:
         raise RepoError(f"未找到仓库（repo.json 不存在）: {info_file}")
     data = json.loads(info_file.read_text(encoding="utf-8"))
     if data["format_version"] != FORMAT_VERSION:
-        raise RepoError(
+        raise RepoFormatError(
             f"仓库格式版本不兼容: {data['format_version']}（本工具支持 {FORMAT_VERSION}）"
         )
     vol = data["volume"]

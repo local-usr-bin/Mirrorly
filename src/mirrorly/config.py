@@ -116,16 +116,16 @@ def write_task_config(cfg: TaskConfig, config_root: str | Path) -> Path:
 
 def dump_task_config(cfg: TaskConfig) -> str:
     """序列化为 TOML 文本（供 init 生成默认配置）。"""
-    excludes = ", ".join(f'"{p}"' for p in cfg.exclude)
+    excludes = ", ".join(_toml_basic_str(p) for p in cfg.exclude)
     return (
         "# Mirrorly 备份任务配置（ADR-011：严格模式，未知键会被拒绝）\n"
         "[task]\n"
-        f'name = "{cfg.name}"\n'
-        f'source = "{cfg.source}"\n'
+        f"name = {_toml_basic_str(cfg.name)}\n"
+        f"source = {_toml_basic_str(cfg.source)}\n"
         "\n"
         "[target]\n"
-        f'path = "{cfg.target_path}"\n'
-        f'filesystem_policy = "{cfg.filesystem_policy}"'
+        f"path = {_toml_basic_str(cfg.target_path)}\n"
+        f"filesystem_policy = {_toml_basic_str(cfg.filesystem_policy)}"
         "  # strict: 非 NTFS 拒绝；warn: 提示后由用户确认继续\n"
         "\n"
         "[filter]\n"
@@ -138,6 +138,18 @@ def dump_task_config(cfg: TaskConfig) -> str:
         "[verify]\n"
         f"on_write = {str(cfg.verify_on_write).lower()}  # 写入即哈希校验（ADR-009）\n"
     )
+
+
+def _toml_basic_str(value: str) -> str:
+    """TOML 基础字符串字面量（转义反斜杠/引号/控制字符——Windows 路径含 ``\\``）。"""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
 
 
 def _check_unknown_keys(data: dict, path: Path) -> None:
