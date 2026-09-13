@@ -50,7 +50,8 @@ class TestScanSource:
     @pytest.mark.skipif(not sys.platform.startswith("win"), reason="Windows 长路径场景")
     def test_long_path_over_260_chars(self, tmp_path) -> None:
         deep = tmp_path
-        while len(str(deep)) < 240:
+        # basetemp 深度不固定：以最终目标长度为准，确保稳定超过 260
+        while len(str(deep / "long_file.txt")) <= 260:
             deep = deep / ("d" * 40)
         target = deep / "long_file.txt"
         prefixed = "\\\\?\\" + str(target)

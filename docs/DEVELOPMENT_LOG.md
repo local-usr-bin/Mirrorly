@@ -4,6 +4,81 @@
 
 ---
 
+## 2026-09-13（八）MVP T-08 恢复（restore）
+
+### 做了什么
+
+1. **新增 `src/mirrorly/restore.py`**（plan/apply 两阶段）
+   - `plan_restore(repo, snapshot_id, destination, *, paths, overwrite, in_place)`：
+     只读产出 RestorePlan（**批准的意图，不是可信事实源**），含 manifest 指纹
+     （仓库算法对 manifest 文件内容求哈希）。
+   - `apply_restore(repo, plan)`：**不信任 plan**——重新
+     `load_manifest(require_complete=True)`、重算 manifest digest 比对（不一致
+     即 stale 整体拒绝）、重验全部安全边界、以相同参数重跑规划，并做
+     **no-upgrade 对账**（skip/conflict < create < overwrite；任一破坏性升级
+     → stale 整体拒绝零写入；持平或降级按重算结果执行，伪造 plan 无法提权）。
+   - `--path` 为**字面 snapshot-relative 路径**（文件命中自身、目录命中整棵
+     子树），无 glob/fnmatch 语义；`\` 归一为 `/`；未命中任何条目显式报错。
+   - canonical Windows 路径校验（selector 与 manifest 条目共用）：空段、
+     `.`/`..` 段、绝对/盘符路径、控制字符、`<>:"|?*`、尾随点/空格、保留设备名
+     （CON PRN AUX NUL COM1-9 LPT1-9 **COM¹ COM² COM³ LPT¹ LPT² LPT³**，大小写
+     不敏感且含带扩展名形式）一律非法；component 长度按 **UTF-16 code unit**
+     计（上限 255，非 BMP 字符占 2 个 unit，不把 Python len() 当底层语义）。
+   - 目标边界：destination 在仓库目录内一律拒绝；解析后等于 manifest
+     source_root（同一实际位置）必须显式 in_place；source_root 普通子目录允许。
+   - 覆盖策略：never 跳过 / older 仅当目标 mtime **严格更旧**才覆盖 /
+     always 覆盖；file↔dir 类型冲突即使 always 也不删除用户目录/文件，记
+     conflict 跳过；父链被同名文件阻挡同样记 conflict。
+   - reparse 双侧防护：snapshot 读侧遇 reparse 整体拒绝（完整性异常）；
+     destination 写侧逐条记 conflict（不拖垮整体）；目标根为 reparse 整体拒绝。
+     属性读取优先 os.lstat，失败回退 GetFileAttributesW（扩展前缀失败再退普通
+     路径）。**check-then-open 残余 TOCTOU 风险明确接受**（OQ-2）。
+   - 写入：目标 parent 下 `tempfile.mkstemp(prefix=".mirrorly-restore-",
+     suffix=".mrtmp")` 独占创建（短固定前缀，不含 final filename——合法 final
+     名可能接近 255 unit 上限，追加随机串会溢出）；flush+fsync+close 后
+     os.replace 原子改名 + mtime 保真；cleanup 只删本次记录的精确临时路径，
+     绝不扫描后缀批量删除；cleanup 失败进 leftovers。
+   - partial restore：单文件失败记 errors 继续，不做整体回滚；不自动 full
+     verify（Q2）；恢复产物为普通文件。
+
+2. **新增 `tests/test_restore.py`**：90 用例（87 passed + 3 skipped），覆盖
+   canonical validator 参数化（含上位数字设备名、带扩展名形式、非 BMP 长度
+   边界 😀×127/×128/×200）、字面 selector、目标边界矩阵、三种覆盖策略
+   （older 严格小于：相等/更新均跳过）、类型冲突、stale（digest 变更/降级
+   incomplete）、no-upgrade（升级拒绝/降级执行/伪造 plan 无法提权）、reparse
+   三用例（本沙箱对 reparse 属性屏蔽，按环境探测跳过，真实 Windows 上执行）、
+   长文件名（244 UTF-16 units）临时文件不溢出、用户 .mrtmp 文件不受清理影响、
+   mtime 保真（FILETIME 100ns 容差）、partial restore。
+
+3. **小修 `tests/test_scan.py`**（T-02 既有脆弱测试）：长路径用例的循环条件
+   以中间目录长度 240 为准，basetemp 稍长时最终路径可能 ≤260 导致断言失败；
+   改为以最终目标长度 >260 为准。非行为变更，仅消除 basetemp 长度敏感性。
+
+### 关键决定
+
+| 决定 | 理由 |
+| --- | --- |
+| apply 重跑规划 + no-upgrade 对账 | RestorePlan 只是批准意图；世界在 plan 后可能已变，破坏性升级必须重新确认 |
+| destination 侧 reparse 逐条 conflict | 用户目录里一个链接不应拖垮整体恢复；snapshot 侧 reparse 是完整性异常，整体拒绝 |
+| 临时文件短固定前缀 | final filename 可能接近 component 上限，拼接随机串会溢出 |
+| UTF-16 code unit 计长 | Windows 底层长度语义；非 BMP 字符按 2 计，避免错误放行/拒绝 |
+
+### 遇到的问题
+
+- 并行 Edit 同一文件相互覆盖（最后一次写入赢），导致两处修改静默丢失——
+  教训：对同一文件的多个编辑必须串行。
+- 本沙箱环境创建的符号链接对 listdir 不可见或 reparse 属性被屏蔽，reparse
+  三用例在本环境跳过（代码路径经审查，真实 Windows 执行）。
+- GetFileAttributesW 经 ctypes 默认 restype=c_int，INVALID(0xFFFFFFFF) 被读成
+  -1 导致比较失效（全部误判 reparse）；修正为 wintypes.DWORD。
+
+### 下一步
+
+T-09 CLI 集成（五命令接入、退出码、报告落盘）；OQ-1（CLI_SPEC `--path`
+`<pattern>` 措辞澄清）随 T-09 处理。
+
+---
+
 ## 2026-09-13（七）T-07 safety hardening：删除安全边界修复
 
 ### 背景
