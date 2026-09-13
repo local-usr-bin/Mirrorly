@@ -602,8 +602,8 @@ def _inject_on_first_write(monkeypatch, hook):
     orig = restore_mod._restore_one_file
     fired = {"done": False}
 
-    def wrapper(src_lp, dest, mtime_ns, leftovers):
-        result = orig(src_lp, dest, mtime_ns, leftovers)
+    def wrapper(src_lp, dest, mtime_ns, leftovers, pre_commit=None):
+        result = orig(src_lp, dest, mtime_ns, leftovers, pre_commit)
         if not fired["done"]:
             fired["done"] = True
             hook()
@@ -1027,3 +1027,116 @@ class TestSnapshotIdHardening:
         _make_snapshot(repo, "2026-09-13_103000", {"a.txt": b"a"})
         plan = plan_restore(repo, "2026-09-13_103000", tmp_path / "out")
         assert plan.entries
+
+
+# ---------------------------------------------------------------------------
+# hardening 3rd round：commit point 前最终复核（staging → replace 窗口收敛）
+# ---------------------------------------------------------------------------
+
+
+def _inject_after_staging(monkeypatch, hook):
+    """在 temp staging 完成（mtime 落到 temp 上）后、final recheck/replace 前执行 hook。
+
+    注入点为 restore 写入路径上对 temp 的 os.utime 调用——此刻 copy/fsync/close
+    已全部完成而 final recheck 与 os.replace 尚未执行，正好模拟「大文件复制期间
+    目标状态变化」，无需真实巨大文件。
+    """
+    fired = {"done": False}
+    real_utime = os.utime
+
+    def wrapped(path, *args, **kwargs):
+        if ".mirrorly-restore-" in str(path) and not fired["done"]:
+            fired["done"] = True
+            hook()
+        return real_utime(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "utime", wrapped)
+    return fired
+
+
+class TestCommitPointRecheck:
+    def test_create_never_dest_appears_during_copy_not_overwritten(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # fresh=create，overwrite=never；staging 完成后出现目标 → 不 commit、不覆盖
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"f.txt": b"snapshot"})
+        dest = tmp_path / "out"
+
+        def hook() -> None:
+            (dest / "f.txt").write_bytes(b"user data")
+
+        _inject_after_staging(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="never"))
+        assert (dest / "f.txt").read_bytes() == b"user data"
+        assert result.restored == ()
+        assert any(p == "f.txt" for p, _ in result.skipped)
+        assert result.leftovers == ()
+        residue = [p for p in dest.rglob("*") if ".mirrorly-restore-" in p.name]
+        assert residue == []
+
+    def test_create_always_dest_appears_during_copy_is_upgrade_conflict(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # fresh=create，overwrite=always；staging 后出现目标 → create→overwrite
+        # 属破坏性升级 → conflict，不 replace，新文件保持不变
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"f.txt": b"snapshot"})
+        dest = tmp_path / "out"
+
+        def hook() -> None:
+            (dest / "f.txt").write_bytes(b"user data")
+
+        _inject_after_staging(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="always"))
+        assert (dest / "f.txt").read_bytes() == b"user data"
+        assert result.restored == ()
+        assert any(p == "f.txt" and "破坏性升级" in r for p, r in result.conflicts)
+        assert result.leftovers == ()
+
+    def test_older_mtime_changes_during_copy_becomes_skip(self, tmp_path, monkeypatch) -> None:
+        # fresh=overwrite（目标更旧）；staging 期间 mtime 变新 → final=skip，不 replace
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"f.txt": b"snapshot"})
+        m = load_manifest(repo, "s1", require_complete=True)
+        snap_mtime = next(e for e in m.entries if e.path == "f.txt").mtime_ns
+        dest = tmp_path / "out"
+        dest.mkdir()
+        (dest / "f.txt").write_bytes(b"user data")
+        older = snap_mtime - 10_000_000_000
+        os.utime(to_long_path(dest / "f.txt"), ns=(older, older))
+        plan = plan_restore(repo, "s1", dest, overwrite="older")
+        assert _actions(plan)["f.txt"] == ACTION_OVERWRITE
+        real_utime = os.utime
+
+        def hook() -> None:
+            newer = snap_mtime + 10_000_000_000
+            real_utime(to_long_path(dest / "f.txt"), ns=(newer, newer))
+
+        _inject_after_staging(monkeypatch, hook)
+        result = apply_restore(repo, plan)
+        assert (dest / "f.txt").read_bytes() == b"user data"
+        assert result.restored == ()
+        assert any(p == "f.txt" for p, _ in result.skipped)
+        assert result.leftovers == ()
+
+    def test_leaf_becomes_reparse_during_copy_not_traversed(self, tmp_path, monkeypatch) -> None:
+        # staging 期间 destination leaf 变 reparse → final recheck 拒绝穿越。
+        # 注：ancestor 变体无法忠实模拟——staging temp 就位于 ancestor 内部，
+        # rmdir 非空目录必失败；leaf 变体走过的是同一条链式 reparse 检查代码路径。
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"f.txt": b"snapshot"})
+        dest = tmp_path / "out"
+        dest.mkdir()
+        secret = tmp_path / "secret.txt"
+        secret.write_bytes(b"secret")
+
+        def hook() -> None:
+            _make_symlink(dest / "f.txt", secret)
+
+        _inject_after_staging(monkeypatch, hook)
+        result = apply_restore(repo, plan_restore(repo, "s1", dest, overwrite="always"))
+        assert secret.read_bytes() == b"secret"  # 链接目标未被写入
+        assert result.restored == ()
+        assert any(p == "f.txt" for p, _ in result.conflicts)
+        assert result.leftovers == ()

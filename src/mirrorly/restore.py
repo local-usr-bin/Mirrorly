@@ -39,22 +39,25 @@ manifest、校验 manifest 指纹（digest）、重新验证安全边界、重�
 5. **防覆盖**：never 跳过 / older 仅当目标 mtime **严格更旧**才覆盖 /
    always 覆盖普通文件；file/dir 类型冲突即使 always 也**不得自动删除
    用户目录**（或文件），记 conflict 跳过；
-6. **紧邻 I/O 逐条重验**：plan 阶段与 apply 执行阶段共享同一条目分类器
-   （``_classify_entry``）。apply 在整个 batch 重跑规划后，对**每个即将
-   产生写操作的条目**，在真正 I/O 前再跑一次分类器：重查 destination
-   存在性/类型、当前覆盖决策、destination root/祖先/leaf 与 snapshot
-   root/祖先/leaf 的 reparse 状态，并与批准动作做单条 no-upgrade 比较——
-   升级即拒绝该条（不覆盖），降级/持平按当前实况执行。允许的残余
-   TOCTOU 只有「紧邻检查 → open/create/replace」之间的小窗口，不允许
-   「batch 规划结束 → 数分钟后才写入」的窗口；
+6. **紧邻 I/O 逐条重验 + commit 前最终复核**：plan 阶段与 apply 执行阶段
+   共享同一条目分类器（``_classify_entry``）。apply 在整个 batch 重跑规划
+   后，对**每个即将产生写操作的条目**，在真正 I/O 前再跑一次分类器：重查
+   destination 存在性/类型、当前覆盖决策、destination root/祖先/leaf 与
+   snapshot root/祖先/leaf 的 reparse 状态，并与批准动作做单条 no-upgrade
+   比较——升级即拒绝该条（不覆盖），降级/持平按当前实况执行。大文件复制
+   可能耗时很长，因此 temp staging 完成后、``os.replace`` 之前还会做
+   **commit 前最终复核**（以本条 fresh action 为基线再跑一次分类器）：
+   升级/变 skip/变 conflict 一律不 commit（temp 精确清理），真正接受的
+   TOCTOU 收敛为「final check → os.replace」的小窗口，而不是「fresh
+   check → 数分钟复制 → replace」的大窗口；
 7. **写入方式**：目标 parent 下 ``tempfile.mkstemp`` 独占创建临时文件
    （短固定前缀，不借用 final filename 作 prefix——合法 final 名可能已
    接近 component 长度上限，追加随机串会溢出）；flush + fsync + close 后
-   **先在临时文件上设置目标 mtime**，再 ``os.replace`` 原子改名——replace
-   是单文件唯一 commit point：replace 前任何失败旧目标不动，replace 后
-   不存在「必需步骤失败导致已覆盖却报失败」的窗口。cleanup 只按本次运行
-   明确记录的精确临时路径，绝不扫描后缀批量删除；cleanup 失败记入
-   leftovers；
+   **先在临时文件上设置目标 mtime**，经 commit 前复核后再 ``os.replace``
+   原子改名——replace 是单文件唯一 commit point：replace 前任何失败旧
+   目标不动，replace 后不存在「必需步骤失败导致已覆盖却报失败」的窗口。
+   cleanup 只按本次运行明确记录的精确临时路径，绝不扫描后缀批量删除；
+   cleanup 失败记入 leftovers；
 8. **属性查询 fail closed**：只有 FileNotFoundError / NotADirectoryError
    （及 Windows ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND）才视为
    「不存在」；权限或其他无法判断属性的错误一律 RestoreError，不带着
@@ -75,6 +78,7 @@ import os
 import stat
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -675,9 +679,22 @@ def apply_restore(repo: RepoInfo, plan: RestorePlan) -> RestoreResult:
                 # 读侧最终防线：写入前复查源非 reparse
                 if _is_reparse(src_lp):
                     raise RestoreError("快照内条目为 reparse point，保守拒绝")
-                _restore_one_file(src_lp, fresh.dest_path, m_entry.mtime_ns, leftovers)
-                restored.append(fresh.rel_path)
-                bytes_written += m_entry.size
+                veto = _restore_one_file(
+                    src_lp,
+                    fresh.dest_path,
+                    m_entry.mtime_ns,
+                    leftovers,
+                    pre_commit=lambda fresh=fresh, m_entry=m_entry: _final_recheck(
+                        m_entry, snap_dir, destination, plan.overwrite, fresh.action
+                    ),
+                )
+                if veto is None:
+                    restored.append(fresh.rel_path)
+                    bytes_written += m_entry.size
+                elif veto[0] == ACTION_SKIP:
+                    skipped.append((fresh.rel_path, veto[1]))
+                else:
+                    conflicts.append((fresh.rel_path, veto[1]))
         except (OSError, RestoreError) as e:
             errors.append((fresh.rel_path, str(e)))
 
@@ -692,6 +709,34 @@ def apply_restore(repo: RepoInfo, plan: RestorePlan) -> RestoreResult:
         leftovers=tuple(leftovers),
         bytes_written=bytes_written,
     )
+
+
+def _final_recheck(
+    m_entry: ManifestEntry,
+    snap_dir: Path,
+    destination: Path,
+    overwrite: str,
+    baseline_action: str,
+) -> tuple[str, str] | None:
+    """commit 前最终复核（temp staging 完成后、os.replace 前调用）。
+
+    以本条开始真正执行时的 fresh action 为基线重新分类 destination 当前
+    状态（存在性/类型/覆盖决策/双侧 reparse）：
+
+    - final 为 skip/conflict → 不 commit，按 final 报告；
+    - final 比基线更具破坏性（如 create → overwrite）→ 不 commit，
+      记 conflict（破坏性升级，绝不覆盖新出现的文件）；
+    - final 持平或降级（更安全）→ 允许 commit。
+    """
+    final = _classify_entry(m_entry, snap_dir, destination, overwrite)
+    if final.action in (ACTION_SKIP, ACTION_CONFLICT):
+        return final.action, f"commit 前状态变化: {final.reason}"
+    if _ACTION_RANK[final.action] > _ACTION_RANK[baseline_action]:
+        return (
+            ACTION_CONFLICT,
+            f"commit 前状态变化导致破坏性升级（{baseline_action} → {final.action}），拒绝覆盖",
+        )
+    return None
 
 
 def _reconcile_no_upgrade(
@@ -715,15 +760,32 @@ def _reconcile_no_upgrade(
             )
 
 
-def _restore_one_file(src_lp: str, dest: Path, mtime_ns: int, leftovers: list[str]) -> None:
-    """单文件恢复：独占临时文件 → fsync → temp 上设置 mtime → 原子改名。
+def _restore_one_file(
+    src_lp: str,
+    dest: Path,
+    mtime_ns: int,
+    leftovers: list[str],
+    pre_commit: Callable[[], tuple[str, str] | None] | None = None,
+) -> tuple[str, str] | None:
+    """单文件恢复：独占临时文件 → fsync → temp 上设置 mtime → commit 前复核 → 原子改名。
 
     ``os.replace`` 是单文件唯一 commit point：replace 前任何失败（含 mtime
-    设置失败）旧目标保持不动；replace 后不再有必需步骤，不存在「已覆盖却
-    报失败」的窗口。临时文件由 tempfile.mkstemp 在目标 parent 下以短固定
-    前缀独占创建（不含 final filename，避免长文件名溢出 component 上限）；
-    cleanup 只针对本次记录的精确临时路径，绝不扫描后缀批量删除；cleanup
-    失败时残留路径记入 leftovers 后再抛错（不静默）。
+    设置失败、pre-commit 复核否决）旧目标保持不动。
+
+    pre_commit：可选回调，在 temp 完整准备好（写入 + flush + fsync + close
+    + mtime 设置完成）之后、``os.replace`` 之前调用，对 destination 状态做
+    最终复核。返回 None 允许 commit；返回 ``(action, reason)`` 则**不
+    commit**——temp 按本次 ownership 精确清理（失败进 leftovers）后，本函数
+    把 ``(action, reason)`` 返回给调用方报告。回调抛异常视为失败（cleanup
+    后上抛）。这样真正接受的 TOCTOU 收敛为「final check → os.replace」的
+    小窗口，而不是「fresh check → 数分钟复制 → replace」的大窗口（大文件
+    复制期间出现的同名文件绝不被静默覆盖）。
+
+    临时文件由 tempfile.mkstemp 在目标 parent 下以短固定前缀独占创建
+    （不含 final filename，避免长文件名溢出 component 上限）；cleanup 只
+    针对本次记录的精确临时路径，绝不扫描后缀批量删除。
+
+    返回 None 表示已提交；返回 ``(action, reason)`` 表示 pre-commit 复核否决。
     """
     parent = dest.parent
     Path(to_long_path(parent)).mkdir(parents=True, exist_ok=True)
@@ -742,8 +804,18 @@ def _restore_one_file(src_lp: str, dest: Path, mtime_ns: int, leftovers: list[st
         # mtime 保真落在 temp 上（replace 之前）；Windows FILETIME 100ns
         # 粒度截断属平台限制（同 T-03）
         os.utime(tmp_name, ns=(os.stat(tmp_name).st_atime_ns, mtime_ns))
+        # commit 前最终复核：否决则不 replace（temp 清理后由调用方报告）
+        if pre_commit is not None:
+            veto = pre_commit()
+            if veto is not None:
+                try:
+                    os.remove(tmp_name)
+                except OSError:
+                    leftovers.append(tmp_name)
+                return veto
         os.replace(tmp_name, to_long_path(dest))
-    except OSError:
+        return None
+    except (OSError, RestoreError):
         if fd_owned:
             # source open 失败等未转移所有权的路径：原始 fd 必须显式关闭，
             # 否则 Windows 上 temp 文件被占用无法清理（且无主 fd 泄漏）

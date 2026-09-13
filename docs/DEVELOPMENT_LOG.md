@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-09-13（十一）T-08 hardening 第三轮：commit point 前最终复核
+
+### 背景
+
+review 确认前两轮落地，发现最后一个 Restore blocker：fresh check 与
+`os.replace` 之间隔着大文件完整复制（可能数分钟），期间出现的同名文件
+会被 `os.replace` 静默覆盖，违反「create 不得升级 overwrite」与「残余
+TOCTOU 仅限紧邻检查→replace 小窗口」的冻结语义。
+
+### 修复内容
+
+- `_restore_one_file` 增加 `pre_commit` 回调：temp 完整准备好（写入 +
+  flush + fsync + close + mtime 设置）之后、`os.replace` 之前调用；返回
+  `(action, reason)` 即否决——temp 按本次 ownership 精确清理（失败进
+  leftovers）后返回给调用方报告；返回 None 才 replace。
+- 新增 `_final_recheck`：以本条开始执行时的 fresh action 为基线再跑一次
+  共享分类器——final 变 skip/conflict 不 commit 按 final 报告；final 比
+  基线更具破坏性（create→overwrite）记 conflict 拒绝；持平/降级允许
+  commit。TOCTOU 收敛为「final check → replace」小窗口。
+- 异常路径 cleanup 兼容 RestoreError（pre_commit 内分类器抛错同样清理）。
+
+### 测试与一处测试修正
+
+- 注入点选择：monkeypatch `os.utime`，命中「temp 已完整 staging、final
+  recheck 与 replace 未执行」的精确窗口，无需真实大文件。
+- 4 用例：create+never 复制期间出现目标不覆盖（字节不变）、create+always
+  升级 conflict、older 复制期间 mtime 变新改判 skip、leaf 变 reparse 拒绝
+  穿越（沙箱跳过）。
+- **测试设计教训**：最初 ancestor 变 reparse 用例 `rmdir(dest/sub)` 必失败
+  ——staging temp 就位于该 ancestor 内部（非空目录）。改为 leaf 变体
+  （走过同一条 `_check_no_reparse_chain` 代码路径），偏差已向用户报告。
+- 专项 122 passed / 8 skipped；全套 261 passed / 8 skipped，ruff clean。
+
+---
+
 ## 2026-09-13（十）T-08 hardening 第二轮：Windows 路径与临时文件残余缺口
 
 ### 背景
