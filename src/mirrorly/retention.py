@@ -9,6 +9,14 @@
   的目录一律不触碰；
 - 计划完全基于 list_manifests()（不扫描 snapshots/ 目录做决策）；
 - 排序依据 manifest created_at 字段，不依赖目录 mtime；
+- 执行阶段不假设 RetentionPlan 来自 build_retention_plan：先统一对每个
+  待删快照重新加载 manifest 并校验 status=complete（复用
+  load_manifest(require_complete=True)），任一非法即整体拒绝，零删除；
+- 删除顺序为「先移除 manifest，再删除快照目录」：
+  - manifest 删除失败 → 数据与 manifest 均未动（完全一致状态）；
+  - 快照目录删除失败 → manifest 已移除，残留（可能残缺的）目录成为
+    孤儿目录，可被 recovery.scan_recovery 发现——宁可残留孤儿数据，
+    也不留下「complete manifest 指向已删/残缺数据」的虚假可信记录；
 - 删除失败显式抛 RetentionError，不静默跳过；
 - 快照 id 做路径安全校验（防 ../ 与绝对路径）。
 """
@@ -19,7 +27,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from .manifest import STATUS_COMPLETE, list_manifests
+from .manifest import STATUS_COMPLETE, ManifestError, list_manifests, load_manifest
 from .repo import RepoInfo
 from .scan import to_long_path
 
@@ -110,29 +118,50 @@ def apply_retention_plan(
     """执行保留计划：删除 delete 集合的快照目录与对应 manifest。
 
     dry_run=True 时只返回空结果，不删除任何内容。
-    删除前再次确认 manifest 存在（防计划与执行间隔内被外部改动）；
-    任一失败显式抛 RetentionError（含已成功删除的列表），不静默跳过。
+
+    两阶段执行：
+    1. 校验阶段（零删除）：不假设 plan 来自 build_retention_plan——对每个
+       待删快照重新 load_manifest(require_complete=True)，incomplete /
+       非法状态 / manifest 缺失或损坏均整体拒绝，任何删除都不会发生；
+    2. 执行阶段：对每个快照先移除 manifest 再删除目录（失败安全顺序，
+       见模块文档），任一失败显式抛 RetentionError（含已成功删除的列表），
+       不静默跳过。
     """
     if dry_run:
         return ()
 
+    # 阶段 1：执行前状态复核（零删除）
+    for snapshot_id in plan.delete:
+        _validate_snapshot_id(snapshot_id)
+        try:
+            load_manifest(repo, snapshot_id, require_complete=True)
+        except ManifestError as e:
+            raise RetentionError(
+                f"拒绝删除快照 {snapshot_id!r}：manifest 校验失败（{e}）。"
+                "仅允许删除 status=complete 的快照。"
+            ) from e
+
+    # 阶段 2：先 manifest 后目录的失败安全删除
     deleted: list[str] = []
     errors: list[str] = []
     for snapshot_id in plan.delete:
-        _validate_snapshot_id(snapshot_id)
         manifest_file = repo.path / "manifests" / f"{snapshot_id}.json"
-        if not manifest_file.is_file():
-            raise RetentionError(
-                f"manifest 缺失，拒绝删除快照 {snapshot_id!r}（已删除: {deleted or '无'}）"
-            )
+        snap_dir = repo.path / "snapshots" / snapshot_id
         try:
-            snap_dir = repo.path / "snapshots" / snapshot_id
+            manifest_file.unlink()
+        except OSError as e:
+            errors.append(f"{snapshot_id}: manifest 删除失败（数据未触碰）: {e}")
+            continue
+        try:
             if snap_dir.exists():
                 shutil.rmtree(to_long_path(snap_dir))
-            manifest_file.unlink()
-            deleted.append(snapshot_id)
         except OSError as e:
-            errors.append(f"{snapshot_id}: {e}")
+            errors.append(
+                f"{snapshot_id}: 快照目录删除失败（manifest 已移除，"
+                f"残留目录为孤儿，可被 scan_recovery 发现）: {e}"
+            )
+            continue
+        deleted.append(snapshot_id)
 
     if errors:
         raise RetentionError(

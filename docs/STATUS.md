@@ -1,11 +1,11 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-13（T-07 完成）
+> 最后更新：2026-09-13（T-07 safety hardening 完成）
 
 ## 当前阶段
 
-**MVP 开发进行中（7/10）** —— T-01~T-07（仓库初始化、扫描检测、快照引擎、Manifest、中断恢复、完整性校验、保留策略）已完成，133 项测试全过。下一任务：T-08 恢复（等待确认后启动）。
+**MVP 开发进行中（7/10）** —— T-01~T-07（仓库初始化、扫描检测、快照引擎、Manifest、中断恢复、完整性校验、保留策略+删除安全加固）已完成，139 项测试全过。下一任务：T-08 恢复（等待确认后启动）。
 
 ## 关键文档
 
@@ -50,7 +50,7 @@
 - [x] **T-04 Manifest 管理**：mirrorly.manifest（create_manifest/mark_complete/write_manifest[manifests.tmp+fsync+os.replace 原子提交]/load_manifest[require_complete 防误读]/list_manifests）；13 项新测试全过，ruff 通过
 - [x] **T-05 中断恢复**：mirrorly.recovery（scan_recovery 发现 incomplete/孤儿目录/tmp 残留、build_resume_baseline[基线一致性校验：目录存在+大小/类型矛盾即 RecoveryError，缺失条目显式收入 missing]、clean_tmp_residue、discard_incomplete[拒绝 complete]）；续传产出新 snapshot id，incomplete 目录只读基线；修复 snapshot.py 三处 mkdir 未走长路径前缀的缺口（T-03 规范一致性修复，无行为变更）；100 项测试全过（含 4 个中断点注入、双重中断收敛、inode 复用断言），ruff 通过
 - [x] **T-06 完整性校验**：mirrorly.verify（verify_snapshot 全量/quick 模式、VerifyReport[issues/extras/unhashed_entries]、四种 issue 类型）；snapshot.py 追加 verify_writes 写入即校验（改名后重算目标端哈希比对、仅重试该文件一次、hashes 供 manifest 持久化，默认关闭保持 T-03/T-05 行为不变）；linked 文件 sha 由调用方从旧 manifest 结转（T-09 组合流程已预演）；115 项测试全过，ruff 通过
-- [x] **T-07 保留策略**：mirrorly.retention（build_retention_plan[keep_last/keep_monthly/union、按 manifest created_at 排序、只读]、apply_retention_plan[dry-run、只删 complete、manifest 缺失拒绝、删除失败显式 RetentionError、快照 id 路径安全校验]）；整体删除目录+manifest，数据生命周期靠 NTFS link count 自然管理；133 项测试全过（含硬链接数据存活断言、长路径删除、孤儿/incomplete 保护），ruff 通过
+- [x] **T-07 保留策略 + safety hardening**：mirrorly.retention（build_retention_plan[keep_last/keep_monthly/union、按 manifest created_at 排序、只读]、apply_retention_plan[dry-run、快照 id 路径安全校验、失败显式 RetentionError]）；**安全加固**：两阶段执行——阶段 1 对每个待删快照重新 load_manifest(require_complete=True) 复核状态（不信任传入 plan，非法即整体拒绝零删除），阶段 2 按「先 manifest 后目录」失败安全顺序删除（manifest 删失败→数据零触碰；目录删失败→残留为孤儿可由 scan_recovery 发现，不留虚假 complete 记录）；整体删除目录+manifest，数据生命周期靠 NTFS link count 自然管理；139 项测试全过（含 6 项加固专项、硬链接数据存活断言、长路径删除、孤儿/incomplete 保护），ruff 通过
 
 ## 待办（建议优先级从高到低）
 

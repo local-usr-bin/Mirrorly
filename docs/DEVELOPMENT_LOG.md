@@ -4,6 +4,53 @@
 
 ---
 
+## 2026-09-13（七）T-07 safety hardening：删除安全边界修复
+
+### 背景
+
+T-07 review 发现 apply_retention_plan 两个删除安全边界问题，本条目记录修复策略与删除顺序/失败语义（不修改 manifest schema、不引入垃圾回收架构）。
+
+### 问题 1：执行阶段未复核 manifest 状态
+
+- 原实现只检查 manifest 文件存在，信任"plan 一定来自 build_retention_plan"。
+- 修复：两阶段执行。**阶段 1（零删除）**：对每个待删快照重新
+  `load_manifest(require_complete=True)`（复用既有状态解析，不重复实现），
+  incomplete / 非法 status / manifest 缺失或损坏 → 整体 RetentionError，
+  任何删除都不发生（含计划中的合法项）。
+
+### 问题 2：删除顺序的失败安全语义
+
+- 原顺序 `rmtree(snapshot) → manifest.unlink()`：若 manifest 删除失败，留下
+  "complete manifest 指向已删除数据"的虚假可信记录——备份软件的最危险失败态。
+- 修复后顺序：**先 manifest.unlink()，再 rmtree(snapshot)**。失败语义：
+  1. manifest 删除失败 → 快照数据与 manifest 均未触碰（完全一致状态），报错；
+  2. 快照目录删除失败（manifest 已移除）→ 不存在可被 list/load 视为 complete
+     的记录；残留（可能残缺的）目录成为孤儿目录，由 recovery.scan_recovery
+     发现并报告——**宁可残留孤儿数据，不留虚假 complete 记录**；
+  3. 正常路径 snapshot + manifest 同步消失，语义不变。
+
+### 测试与验证
+
+- 新增 6 个专项测试：手工 plan 指向 incomplete 拒绝且零改动、非法 status 拒绝、
+  混合计划整体拒绝（合法项也不删）、manifest 删除失败数据完好且 manifest 仍可
+  按 complete 加载、rmtree 失败不留虚假 complete（孤儿可被 scan_recovery 发现）、
+  正常删除同步消失。
+- 全套件 139 passed，ruff 通过；原有 incomplete / orphan / hardlink / dry-run
+  用例全部继续通过。
+
+### 环境记录
+
+- pytest 会话开始时会清理"已存在的" --basetemp 目录，触发宿主 safe-delete
+  批量确认钩子（turn 阈值 50，非交互 shell 无法确认 → SystemExit，后续用例
+  级联 ERROR）。对策：每次运行使用全新不存在的 basetemp 子目录
+  （P:\DevProjects\Mirrorly\.pytest_tmp\run_* 下，目录已 gitignore）。
+
+### 下一步
+
+T-08 恢复（快照浏览、恢复到目标位置、防覆盖）——等待确认后启动。
+
+---
+
 ## 2026-09-13（七）MVP T-07 保留策略
 
 ### 做了什么

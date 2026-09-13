@@ -15,8 +15,10 @@ import pytest
 from mirrorly.manifest import (
     STATUS_COMPLETE,
     STATUS_INCOMPLETE,
+    ManifestError,
     create_manifest,
     list_manifests,
+    load_manifest,
     mark_complete,
     write_manifest,
 )
@@ -285,3 +287,126 @@ class TestApplyAndSync:
         apply_retention_plan(repo, plan)
 
         assert link_in_snap2.read_bytes() == b"x"  # link count 自然管理
+
+
+class TestDeletionSafetyHardening:
+    """T-07 safety hardening：执行阶段状态复核 + 删除失败安全方向。"""
+
+    def test_apply_rejects_incomplete_in_handmade_plan(self, tmp_path) -> None:
+        """手工构造指向 incomplete 的计划必须被拒绝，目录与 manifest 均不变。"""
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "wip", _iso("2026-09-01"), status=STATUS_INCOMPLETE)
+        manifest_file = repo.path / "manifests" / "wip.json"
+        before = manifest_file.read_bytes()
+
+        plan = RetentionPlan(keep=(), delete=("wip",))
+        with pytest.raises(RetentionError, match="wip"):
+            apply_retention_plan(repo, plan)
+
+        assert (repo.path / "snapshots" / "wip").is_dir()  # 数据未动
+        assert manifest_file.read_bytes() == before  # manifest 未动
+
+    def test_apply_rejects_unknown_status_manifest(self, tmp_path) -> None:
+        """非法 status（非 complete）同样拒绝，不静默继续。"""
+        import json
+
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "snap1", _iso("2026-09-01"))
+        manifest_file = repo.path / "manifests" / "snap1.json"
+        data = json.loads(manifest_file.read_text(encoding="utf-8"))
+        data["status"] = "corrupted-state"
+        manifest_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        before = manifest_file.read_bytes()
+
+        plan = RetentionPlan(keep=(), delete=("snap1",))
+        with pytest.raises(RetentionError):
+            apply_retention_plan(repo, plan)
+
+        assert (repo.path / "snapshots" / "snap1").is_dir()
+        assert manifest_file.read_bytes() == before
+
+    def test_validation_failure_aborts_before_any_deletion(self, tmp_path) -> None:
+        """计划中混有非法项时：整体拒绝，合法项也不被删除（先验证后执行）。"""
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "good", _iso("2026-09-01"))
+        _make_snapshot(repo, "wip", _iso("2026-09-02"), status=STATUS_INCOMPLETE)
+
+        plan = RetentionPlan(keep=(), delete=("good", "wip"))
+        with pytest.raises(RetentionError):
+            apply_retention_plan(repo, plan)
+
+        assert (repo.path / "snapshots" / "good").is_dir()  # 合法项也未被删
+        assert (repo.path / "manifests" / "good.json").is_file()
+
+    def test_manifest_unlink_failure_preserves_snapshot_data(self, tmp_path, monkeypatch) -> None:
+        """manifest 删除失败：快照数据必须完好，manifest 仍可被视为 complete（一致状态）。"""
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "snap1", _iso("2026-09-01"))
+        manifest_file = repo.path / "manifests" / "snap1.json"
+        snap_file = repo.path / "snapshots" / "snap1" / "a.txt"
+        snap_file.write_bytes(b"important")
+
+        real_unlink = Path.unlink
+
+        def boom(self, *args, **kwargs):
+            if self == manifest_file:
+                raise OSError("manifest locked")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", boom)
+        plan = RetentionPlan(keep=(), delete=("snap1",))
+        with pytest.raises(RetentionError, match="snap1"):
+            apply_retention_plan(repo, plan)
+        monkeypatch.undo()
+
+        # 数据未被破坏，manifest 仍可正常按 complete 加载（无虚假/无残缺）
+        assert snap_file.read_bytes() == b"important"
+        m = load_manifest(repo, "snap1", require_complete=True)
+        assert m.snapshot_id == "snap1"
+
+    def test_rmtree_failure_leaves_no_fake_complete_manifest(self, tmp_path, monkeypatch) -> None:
+        """snapshot 删除失败：不得留下"complete manifest + 已损数据"的可信假象。
+
+        安全方向：manifest 先移除，残留目录成为孤儿（可被 scan_recovery 发现），
+        而不是一条指向缺失数据的 complete 记录。
+        """
+        import shutil as shutil_mod
+
+        from mirrorly.recovery import scan_recovery
+
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "snap1", _iso("2026-09-01"))
+        snap_dir = repo.path / "snapshots" / "snap1"
+
+        def boom(_path):
+            raise OSError("disk error")
+
+        monkeypatch.setattr(shutil_mod, "rmtree", boom)
+        plan = RetentionPlan(keep=(), delete=("snap1",))
+        with pytest.raises(RetentionError, match="snap1"):
+            apply_retention_plan(repo, plan)
+        monkeypatch.undo()
+
+        # 不存在可被当作 complete 的 manifest
+        assert not (repo.path / "manifests" / "snap1.json").exists()
+        with pytest.raises(ManifestError):
+            load_manifest(repo, "snap1", require_complete=True)
+        # 数据残留为孤儿目录（安全方向：保留数据而非虚假记录）
+        assert snap_dir.is_dir()
+        report = scan_recovery(repo)
+        assert "snap1" in report.orphan_dirs
+
+    def test_normal_deletion_still_in_sync_after_hardening(self, tmp_path) -> None:
+        """正常路径：snapshot + manifest 同步消失（加固不改变成功语义）。"""
+        repo = _init_repo(tmp_path / "target")
+        for i in range(1, 4):
+            _make_snapshot(repo, f"snap{i}", _iso(f"2026-09-0{i}"))
+        plan = build_retention_plan(repo, keep_last=1)
+
+        deleted = apply_retention_plan(repo, plan)
+
+        assert set(deleted) == {"snap1", "snap2"}
+        assert not (repo.path / "snapshots" / "snap1").exists()
+        assert not (repo.path / "manifests" / "snap1.json").exists()
+        assert (repo.path / "snapshots" / "snap3").is_dir()
+        assert (repo.path / "manifests" / "snap3.json").is_file()
