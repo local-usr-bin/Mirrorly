@@ -94,18 +94,38 @@ def _actions(plan) -> dict[str, str]:
 
 
 def _make_symlink(link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    """创建 reparse point 供产品侧防护测试。
+
+    优先 os.symlink；本环境 os.symlink 可能静默失败（不抛异常但未创建
+    任何东西），因此以 lexists 验证实际创建结果。目录场景回退
+    _winapi.CreateJunction——junction 同样是真实的
+    FILE_ATTRIBUTE_REPARSE_POINT，产品侧 _check_no_reparse_chain /
+    _file_attributes 走完全相同的防护路径（T-10 真机补验用）。
+    文件级符号链接无 junction 等价物，无法创建时如实 skip。
+    """
+    created = False
     try:
         os.symlink(target, link, target_is_directory=target_is_directory)
-    except OSError as e:
-        pytest.skip(f"当前环境无法创建符号链接: {e}")
-    if not os.path.lexists(str(link)):
-        pytest.skip("当前环境创建符号链接后不可见（沙箱虚拟化 reparse point），跳过")
+        created = os.path.lexists(str(link))
+    except OSError:
+        created = False
+    if not created:
+        if not target_is_directory:
+            pytest.skip("当前环境无法创建文件符号链接（虚拟化/无管理员或开发者模式）")
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(str(target), str(link))
+        except OSError as e:
+            pytest.skip(f"当前环境无法创建符号链接/junction: {e}")
+        if not os.path.lexists(str(link)):
+            pytest.skip("当前环境创建 reparse point 后不可见（沙箱虚拟化），跳过")
     st = os.lstat(str(link))
     masked = not (
         stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400  # REPARSE_POINT
     )
     if masked:
-        pytest.skip("当前环境对符号链接屏蔽 reparse 属性（沙箱限制），跳过")
+        pytest.skip("当前环境对 reparse point 屏蔽属性（沙箱限制），跳过")
 
 
 # ---------------------------------------------------------------------------

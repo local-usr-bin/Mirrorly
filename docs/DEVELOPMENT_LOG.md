@@ -4,6 +4,63 @@
 
 ---
 
+## 2026-09-13（十六）T-10 端到端验收
+
+### 做了什么
+
+- 新增 `tests/test_e2e.py`（11 用例）：全部经真实入口（mirrorly.exe / python -m
+  mirrorly）+ 真实 NTFS 执行——主流程（init→backup#1→verify→变更→dry-run
+  零写入→backup#2→list）、restore（整快照字节级/--path 文件与子树/never/always）、
+  损坏检测（exit 4 + 报告定位 + quick 冻结语义）、TR-5 真实 kill 续传、
+  M10 身份（错误 serial exit 5 零写入 / 同卷新地址 SIMULATED 盘符漂移）、
+  retention（keep_last=2 多快照清理后 verify 全过）。
+- 新增 `scripts/t10_perf_baseline.py` + 运行两个 workload 归档性能基线（见下）。
+- `tests/test_restore.py` `_make_symlink`：目录场景 junction 回退（真实
+  reparse point、产品同一防护路径），4 个目录级用例真机通过。
+- 产出 `docs/MVP_ACCEPTANCE.md`（完整验收报告 + 已知限制清单）。
+
+### 关键决定 / 裁定
+
+- **M10 盘符漂移语义**：CLI_SPEC §6（冻结契约）把「盘符漂移」定义为 exit 5
+  目标身份不符 → 判定为 **fail closed（B）**：绝不向错误卷写入；用户改配置
+  指向同卷新地址后，卷标识匹配继续同一仓库（E2E SIMULATED 验证）。PRD US-3
+  字面的「零干预自动重定位」未实现（与 CLI_SPEC 冲突，规范内在张力），
+  列入已知限制，不判 blocker。
+- 推荐结论：**PASS WITH ENVIRONMENTAL SKIPS**（4 个文件级 symlink 用例
+  因无 SeCreateSymbolicLinkPrivilege 跳过；目录级 junction 已真机通过）。
+
+### 性能基线（T-10 冻结标准 #4，归档）
+
+环境：Windows 11 / Python 3.12.14 / C: NTFS（卷标 OS）/ Mirrorly 0.0.1 @ a31126b。
+介质类型未能可靠探测（不猜）。
+
+| 指标 | A 混合（10,006 文件 / 9.6 GB） | B 少而大（16×256 MiB） |
+| --- | --- | --- |
+| 首次 backup | 51.7 s（写 9.6 GB） | 15.9 s（写 4.3 GB） |
+| unchanged backup | 6.5 s（0 B、复用 10,006） | 2.5 s（0 B、复用 16） |
+| 小变更 backup | 12.0 s（563 MB） | 1.0 s（268 MB） |
+| verify full ×3 快照 | 33.4 s | 5.9 s |
+| verify quick | 3.0 s | 0.6 s |
+| restore 整快照 | 59.7 s | 4.3 s |
+| 空间（unchanged #2） | 仅 +0.01 GB（硬链接生效） | 0 |
+
+数据集 A：4.5 GB 大文件 + 10,000×256 KiB + 4×512 MiB + 文本/空目录。
+
+### 遇到的问题
+
+- 宿主 safe-delete 护栏（50/turn）在 E2E 多次迭代后于最终确认运行拦截
+  「中断续传」与「retention」两用例（count 53–61，\\?\ 前缀删除计数）——
+  两者在 runs 1–5 全绿（同代码），非产品缺陷；全套 pytest 确认运行留待
+  配额刷新后执行（与 T-09 相同处理）。
+- 沙箱内 os.symlink 静默失败（不抛异常、不创建）、reparse point 不可见；
+  沙箱外 junction 可用、symlink 因无特权被拒（ERROR_PRIVILEGE_NOT_HELD）
+  ——reparse 专项在沙箱外跑，文件级 4 用例如实 skip。
+- 测试侧经验：TOML 中路径为转义存储（须解析比较，不能子串断言）；
+  manifest 条目序列化键为 `type: dir|file`；>260 路径对普通
+  rglob/os.walk 不可见（须 \\?\ 遍历）。
+
+---
+
 ## 2026-09-13（十五）T-09 源码验收：Windows 卷根 containment blocker 修复
 
 ### 做了什么
