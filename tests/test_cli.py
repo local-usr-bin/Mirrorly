@@ -254,10 +254,17 @@ class TestInit:
         assert not (ws["target"] / "MirrorlyRepo").exists()
 
     def test_existing_task_config_rejected(self, ws) -> None:
+        # task config 存在性检查必须先于 init_repo：失败时零仓库写入
         cfg_file = ws["config"] / "config.d" / "default.toml"
         cfg_file.parent.mkdir(parents=True)
-        cfg_file.write_text("[task]\n", encoding="utf-8")
+        cfg_file.write_bytes(b"[task]\n")
+        before = cfg_file.read_bytes()
         assert _init(ws) == 1
+        assert not (ws["target"] / "MirrorlyRepo").exists()
+        # target 树下不出现任何 repo.json
+        assert list(ws["target"].rglob("repo.json")) == []
+        # 原 task config 字节保持不变
+        assert cfg_file.read_bytes() == before
 
 
 # ---------------------------------------------------------------------------

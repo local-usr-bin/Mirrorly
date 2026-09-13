@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-09-13（十四）T-09 最终收尾与验收
+
+### 做了什么
+
+1. **list --verbose 规范澄清（产品裁定）**：CLI_SPEC 的 verbose 统计由
+   「文件数、总大小、增量大小、状态」改为「文件数、目录数、总大小、状态」。
+   「增量/新写入大小」为 MVP 后候选指标；如未来实现，应在 backup 创建时
+   持久化权威值（physical bytes written），而不是事后按 hardlink/link count
+   估算或从 logs 反向拼装。list 现有输出已是该四项，业务代码零改动。
+2. **write_task_config 写入边界防御**：`write_task_config()` 自身调用
+   `validate_task_name(cfg.name)`，library API 不再依赖调用者提前验证；
+   非法 name 在创建任何目录/文件之前抛 ConfigError（config.d 内外零写入）。
+   新增 3 项测试：`../evil` 拒绝、`CON` 拒绝、正常名可写。
+3. **init preflight 回归补强**：`test_existing_task_config_rejected` 在原
+   exit 1 断言上补：target/MirrorlyRepo 不存在、target 树下无任何 repo.json、
+   原 task config 字节保持不变——固化「task config 存在性检查位于 init_repo
+   之前，失败零仓库写入」。
+4. **真正完整回归**：safe-delete turn 配额刷新后，basetemp 用新的 OS 临时
+   目录一次性跑全套：**383 passed / 8 skipped / 0 failed**——上轮 20 项
+   护栏受阻用例全部转绿，确认此前判断（均护栏 SystemExit 非断言失败）成立。
+   CLI 专项 119 passed；ruff check / format --check 全绿。
+
+### 关键决定
+
+- T-09 以本 commit 最终验收；07810c3 保留不 amend。
+
+---
+
 ## 2026-09-13（十三）T-09 integration hardening follow-up
 
 ### 做了什么

@@ -129,3 +129,24 @@ class TestWrite:
         assert out.parent == tmp_path / "config.d"
         loaded = load_task_config(out)
         assert loaded == cfg
+
+    def test_write_rejects_path_escape_name(self, tmp_path) -> None:
+        # 写入边界自身校验：不依赖调用者提前 validate_task_name
+        cfg = TaskConfig(name="../evil", source="D:/Data", target_path="E:/B")
+        with pytest.raises(ConfigError, match="非法字符"):
+            write_task_config(cfg, tmp_path)
+        # config.d 内外零写入（连目录都不创建）
+        assert not (tmp_path / "config.d").exists()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_write_rejects_reserved_device_name(self, tmp_path) -> None:
+        cfg = TaskConfig(name="CON", source="D:/Data", target_path="E:/B")
+        with pytest.raises(ConfigError, match="保留设备名"):
+            write_task_config(cfg, tmp_path)
+        assert not (tmp_path / "config.d").exists()
+
+    def test_write_normal_name_still_works(self, tmp_path) -> None:
+        cfg = TaskConfig(name="daily-backup_01", source="D:/Data", target_path="E:/B")
+        out = write_task_config(cfg, tmp_path)
+        assert out.name == "daily-backup_01.toml"
+        assert out.exists()

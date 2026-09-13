@@ -147,7 +147,12 @@ def load_task_config(path: str | Path) -> TaskConfig:
 
 
 def write_task_config(cfg: TaskConfig, config_root: str | Path) -> Path:
-    """将任务配置写入 ``<config_root>/config.d/<name>.toml``，返回文件路径。"""
+    """将任务配置写入 ``<config_root>/config.d/<name>.toml``，返回文件路径。
+
+    写入边界自身校验任务名：name 直接拼进输出路径，library API 不依赖
+    调用者提前验证；非法 name 在创建任何目录/文件之前抛 ConfigError。
+    """
+    validate_task_name(cfg.name)
     out_dir = Path(config_root) / "config.d"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{cfg.name}.toml"
