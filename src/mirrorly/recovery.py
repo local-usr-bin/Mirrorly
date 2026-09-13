@@ -7,7 +7,10 @@
 - **基线一致性校验**：build_resume_baseline 校验快照目录存在、
   目录中已存在文件与清单记录一致（大小、类型）——矛盾即 RecoveryError，
   不静默继续；清单中尚未复制的条目（正常中断态）显式收入 missing 报告；
-- **tmp 残留清理**：只删除 .mrtmp 与 manifests.tmp/ 残留，不触碰正式数据。
+- **tmp 残留清理**：只删除可证明为 Mirrorly staging residue 的文件
+  （判定见 :func:`_provable_tmp_residues`，文件名后缀不足以证明 ownership），
+  且仅限 incomplete 快照——**complete 快照对清理绝对只读**（发布后零操作）；
+  manifests.tmp/ 为自有 metadata staging 目录，清理语义不变；不触碰正式数据。
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from pathlib import Path
 
 from .manifest import (
     STATUS_COMPLETE,
+    STATUS_INCOMPLETE,
     ManifestError,
     ManifestSummary,
     list_manifests,
@@ -39,7 +43,7 @@ class RecoveryReport:
 
     incomplete: tuple[ManifestSummary, ...] = ()
     orphan_dirs: tuple[str, ...] = ()  # snapshots/ 下无对应 manifest 的目录名
-    tmp_residue: tuple[str, ...] = ()  # 快照目录内 .mrtmp 残留的仓库相对路径
+    tmp_residue: tuple[str, ...] = ()  # 可证明为 Mirrorly staging residue 的仓库相对路径
     manifest_tmp_residue: tuple[str, ...] = ()  # manifests.tmp/ 内残留文件名
 
 
@@ -70,6 +74,54 @@ def _unprefix(path_str: str) -> str:
     return path_str.removeprefix("\\\\?\\")
 
 
+def _try_load_snap_manifest(repo: RepoInfo, snap_dir: Path):
+    """加载快照目录对应的 manifest；失败（孤儿/损坏清单）返回 None。"""
+    try:
+        return load_manifest(repo, snap_dir.name)
+    except (ManifestError, OSError, ValueError, KeyError):
+        return None
+
+
+def _provable_tmp_residues(repo: RepoInfo, snap_dir: Path, manifest=None) -> list[tuple[str, Path]]:
+    """枚举快照目录中可证明为 Mirrorly staging residue 的文件。
+
+    返回 ``(仓库相对 POSIX 路径, 绝对路径)`` 列表。ownership 证明必须同时满足：
+
+    1. 文件名以 TMP_SUFFIX 结尾——Mirrorly temp 命名规则是
+       ``<目标名>.mrtmp``（见 snapshot._copy_file_atomic），这只是候选信号；
+    2. 去掉后缀的目标路径（stem）是该快照 manifest 中的**文件**条目——
+       write_snapshot 只为 manifest 规划的最终文件创建 staging temp，
+       且 manifest 先于物化落盘，因此真实残留的 stem 必然可追溯到清单；
+    3. 文件自身路径**不是** manifest 条目——用户文件可以合法地以
+       .mrtmp 结尾（并非 Windows 保留扩展名），清单记录的路径永远是用户数据。
+
+    manifest 缺失或无法加载（孤儿目录、清单损坏）时无法证明 ownership，
+    返回空列表——调用方必须保留文件不删（fail safe）。
+
+    ``manifest`` 可传入已加载的实例以避免重复 IO；None 时自行加载。
+    本函数只做 ownership 判定，**不区分 complete/incomplete**——
+    complete 快照的只读保护由 :func:`clean_tmp_residue` 显式执行，
+    scan_recovery 仅报告，报告不构成删除权限。
+    """
+    if manifest is None:
+        manifest = _try_load_snap_manifest(repo, snap_dir)
+        if manifest is None:
+            return []
+    manifested = {e.path for e in manifest.entries}
+    manifested_files = {e.path for e in manifest.entries if not e.is_dir}
+    residues: list[tuple[str, Path]] = []
+    for dirpath, _dirnames, filenames in os.walk(to_long_path(snap_dir)):
+        for name in filenames:
+            if not name.endswith(TMP_SUFFIX):
+                continue
+            rel = (Path(_unprefix(dirpath)) / name).relative_to(snap_dir).as_posix()
+            if rel in manifested:
+                continue  # 清单记录的用户文件，即使以 .mrtmp 结尾也绝不动
+            if rel[: -len(TMP_SUFFIX)] in manifested_files:
+                residues.append((f"snapshots/{snap_dir.name}/{rel}", Path(dirpath) / name))
+    return residues
+
+
 def scan_recovery(repo: RepoInfo) -> RecoveryReport:
     """扫描仓库中的可恢复状态：incomplete 清单、孤儿目录、tmp 残留。"""
     summaries = list_manifests(repo)
@@ -86,11 +138,9 @@ def scan_recovery(repo: RepoInfo) -> RecoveryReport:
                 continue
             if child not in manifested_ids:
                 orphan_dirs.append(child)
-            for dirpath, _dirnames, filenames in os.walk(to_long_path(child_path)):
-                for name in filenames:
-                    if name.endswith(TMP_SUFFIX):
-                        p = Path(_unprefix(dirpath)) / name
-                        tmp_residue.append(p.relative_to(repo.path).as_posix())
+            # 只报告可证明为 Mirrorly staging residue 的文件（与清理同一判定）；
+            # 无法证明 ownership 的（如用户文件名恰以 .mrtmp 结尾）不误报
+            tmp_residue.extend(rel for rel, _p in _provable_tmp_residues(repo, child_path))
 
     manifest_tmp_dir = repo.path / "manifests.tmp"
     manifest_tmp_residue: list[str] = []
@@ -110,33 +160,48 @@ def scan_recovery(repo: RepoInfo) -> RecoveryReport:
 
 
 def clean_tmp_residue(repo: RepoInfo, snapshot_id: str | None = None) -> list[str]:
-    """删除 .mrtmp 与 manifests.tmp/ 残留，返回已清理的仓库相对路径。
+    """删除可证明为 Mirrorly staging residue 的临时文件，返回已清理的仓库相对路径。
 
-    只删除临时文件，绝不触碰正式数据文件。snapshot_id 为 None 时清理全部
-    快照目录；指定时仅清理该快照目录（manifests.tmp/ 始终清理）。
+    ownership 判定见 :func:`_provable_tmp_residues`：文件名以 .mrtmp 结尾
+    **不足以**证明是 Mirrorly 临时文件——用户文件可以合法使用该后缀
+    （B1-1 回归）。只有「stem 是该快照 manifest 文件条目、且自身不在清单中」
+    的路径才是写入路径留下的 staging residue；无法证明 ownership 的一律保留。
+
+    manifests.tmp/ 为 Mirrorly 自有 metadata staging 目录（写入路径固定、
+    目录名即保留命名空间），清理语义不变。snapshot_id 为 None 时清理全部
+    快照目录；指定时仅清理该快照目录。
+
+    **complete 快照绝对只读**（ADR-010 / B1-1 architecture review invariant）：
+    删除授权是**正向条件**——只有 manifest.status == STATUS_INCOMPLETE 的
+    快照目录才允许进入 ownership 清理；complete、未知 status（manifest
+    parser 对 status 无白名单校验，可成功加载）、manifest 加载失败
+    （孤儿/损坏）一律零操作。fail safe：宁可残留不误删。
     """
     _validate_snapshot_id(snapshot_id) if snapshot_id else None
     cleaned: list[str] = []
 
     snapshots_root = repo.path / "snapshots"
-    targets = [snapshots_root / snapshot_id] if snapshot_id else []
-    if snapshot_id is None and snapshots_root.is_dir():
+    if snapshot_id is not None:
+        targets = [snapshots_root / snapshot_id]
+    elif snapshots_root.is_dir():
         targets = [
             snapshots_root / name
             for name in sorted(os.listdir(to_long_path(snapshots_root)))
             if (snapshots_root / name).is_dir()
         ]
+    else:
+        targets = []
     for snap_dir in targets:
         if not snap_dir.is_dir():
             continue
-        for dirpath, _dirnames, filenames in os.walk(to_long_path(snap_dir)):
-            for name in filenames:
-                if name.endswith(TMP_SUFFIX):
-                    p = Path(dirpath) / name
-                    p.unlink()
-                    cleaned.append(
-                        (Path(_unprefix(dirpath)) / name).relative_to(repo.path).as_posix()
-                    )
+        manifest = _try_load_snap_manifest(repo, snap_dir)
+        if manifest is None or manifest.status != STATUS_INCOMPLETE:
+            # 正向删除授权：仅 incomplete 快照允许清理；
+            # complete / 未知 status / 无法加载 manifest 均零操作
+            continue
+        for rel, path in _provable_tmp_residues(repo, snap_dir, manifest=manifest):
+            path.unlink()
+            cleaned.append(rel)
 
     manifest_tmp_dir = repo.path / "manifests.tmp"
     if manifest_tmp_dir.is_dir():

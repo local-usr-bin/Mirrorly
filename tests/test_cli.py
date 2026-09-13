@@ -845,6 +845,37 @@ class TestSnapshotIdCollision:
         assert sorted(os.listdir(to_long_path(repo.path / "snapshots"))) == []
 
 
+class TestB1SnapshotImmutability:
+    """Gate B1-1 回归：后续 backup 不得修改/删除历史 complete snapshot 中
+    文件名以 .mrtmp 结尾的用户数据（temp residue ownership 按 manifest 判定）。"""
+
+    def test_user_mrtmp_file_survives_second_backup(self, ws, snap_ids) -> None:
+        _write(ws["src"] / "keep.mrtmp", b"keep-payload")
+        _write(ws["src"] / "normal.txt", b"normal")
+        assert _init(ws) == 0
+        assert _run(ws, "backup", "--yes") == 0
+        repo = _repo(ws)
+        sid1 = list_manifests(repo)[0].snapshot_id
+        snap1_keep = repo.path / "snapshots" / sid1 / "keep.mrtmp"
+        assert snap1_keep.read_bytes() == b"keep-payload"
+
+        _write(ws["src"] / "trigger.txt", b"trigger")
+        assert _run(ws, "backup", "--yes") == 0
+
+        # 旧 complete 快照零修改（B1-1 冻结行为）
+        assert snap1_keep.read_bytes() == b"keep-payload"
+        manifests = {m.snapshot_id: m for m in list_manifests(repo)}
+        assert manifests[sid1].status == "complete"
+        # 新快照正常
+        sid2 = [s for s in manifests if s != sid1][0]
+        snap2 = repo.path / "snapshots" / sid2
+        assert (snap2 / "keep.mrtmp").read_bytes() == b"keep-payload"
+        assert (snap2 / "normal.txt").read_bytes() == b"normal"
+        assert (snap2 / "trigger.txt").read_bytes() == b"trigger"
+        # verify --all 对全部历史快照成功
+        assert _run(ws, "verify", "--all") == 0
+
+
 class TestBackupLockScope:
     def test_lock_busy_before_any_scan(self, backed_up, monkeypatch) -> None:
         ws = backed_up

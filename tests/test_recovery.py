@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -152,13 +153,21 @@ class TestScanRecovery:
 
     def test_tmp_residue_reported(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "a.txt")
+        _write(src / "sub" / "b.txt")
+        _write(src / "keep.mrtmp")  # 用户文件名恰以 .mrtmp 结尾（合法）
+        current = scan_source(src, ()).entries
+        write_manifest(repo, create_manifest("snap1", str(src), repo.hash_algorithm, current))
         snap = repo.path / "snapshots" / "snap1"
         (snap / "sub").mkdir(parents=True)
         (snap / "a.txt.mrtmp").write_bytes(b"half")
         (snap / "sub" / "b.txt.mrtmp").write_bytes(b"half")
+        (snap / "keep.mrtmp").write_bytes(b"user data")
         (snap / "ok.txt").write_bytes(b"fine")
         (repo.path / "manifests.tmp" / "snap1.json.tmp").write_text("{}")
         report = scan_recovery(repo)
+        # 只报告可证明为 staging residue 的文件；manifested 用户文件不误报
         assert sorted(report.tmp_residue) == [
             "snapshots/snap1/a.txt.mrtmp",
             "snapshots/snap1/sub/b.txt.mrtmp",
@@ -166,9 +175,178 @@ class TestScanRecovery:
         assert report.manifest_tmp_residue == ("snap1.json.tmp",)
 
 
+class TestTmpResidueOwnership:
+    """B1-1 回归：.mrtmp 后缀不足以证明 temp ownership。
+
+    Mirrorly 只为 manifest 规划的最终文件创建 ``<目标名>.mrtmp`` staging temp，
+    因此 residue 判定必须是「stem 为该快照 manifest 文件条目、且自身不在清单中」；
+    manifested 用户文件（含合法以 .mrtmp 结尾的）绝不被清理触碰。
+    """
+
+    def _incomplete(self, repo, src: Path, snap_id: str, materialized=()) -> Path:
+        """构造 incomplete 中断态：完整计划 manifest + 部分已物化的快照目录。"""
+        current = scan_source(src, ()).entries
+        write_manifest(repo, create_manifest(snap_id, str(src), repo.hash_algorithm, current))
+        snap = repo.path / "snapshots" / snap_id
+        snap.mkdir(parents=True)
+        for rel in materialized:
+            (snap / Path(rel)).write_bytes((src / rel).read_bytes())
+        return snap
+
+    def test_manifested_mrtmp_user_files_survive_complete_snapshot(self, tmp_path) -> None:
+        """E（含 B1-1 核心）：complete 快照中 manifested 用户文件零修改。"""
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        for rel, data in (
+            ("keep.mrtmp", b"keep"),
+            ("foo.mrtmp", b"foo"),
+            ("foo.mrtmp.mrtmp", b"double"),
+            ("nested/bar.mrtmp", b"bar"),
+        ):
+            _write(src / Path(rel), data)
+        current = scan_source(src, ()).entries
+        write_manifest(
+            repo, mark_complete(create_manifest("snap1", str(src), repo.hash_algorithm, current))
+        )
+        snap = repo.path / "snapshots" / "snap1"
+        snap.mkdir(parents=True)
+        for rel, data in (
+            ("keep.mrtmp", b"keep"),
+            ("foo.mrtmp", b"foo"),
+            ("foo.mrtmp.mrtmp", b"double"),
+            ("nested/bar.mrtmp", b"bar"),
+        ):
+            p = snap / Path(rel)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+        before = _tree_bytes(snap)
+        assert clean_tmp_residue(repo) == []
+        assert _tree_bytes(snap) == before
+        assert scan_recovery(repo).tmp_residue == ()
+
+    def test_incomplete_user_mrtmp_survives_alongside_real_residue(self, tmp_path) -> None:
+        """C/D：incomplete 快照中合法 foo.mrtmp 保留，真实 residue 被清理。"""
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "foo.mrtmp", b"final-user-file")
+        _write(src / "data.txt", b"data")
+        snap = self._incomplete(repo, src, "snap1", materialized=["foo.mrtmp"])
+        # 真实 staging residue：分别为 data.txt 与用户文件 foo.mrtmp 生成
+        (snap / "data.txt.mrtmp").write_bytes(b"staging")
+        (snap / "foo.mrtmp.mrtmp").write_bytes(b"staging")
+        # stem 不在 manifest 中：无法证明 ownership，fail safe 保留
+        (snap / "unprovable.mrtmp").write_bytes(b"unknown-owner")
+        cleaned = clean_tmp_residue(repo)
+        assert sorted(cleaned) == [
+            "snapshots/snap1/data.txt.mrtmp",
+            "snapshots/snap1/foo.mrtmp.mrtmp",
+        ]
+        assert (snap / "foo.mrtmp").read_bytes() == b"final-user-file"
+        assert (snap / "unprovable.mrtmp").exists()
+        assert scan_recovery(repo).tmp_residue == ()
+
+    def test_real_write_path_residue_cleaned(self, tmp_path, monkeypatch) -> None:
+        """B：真实写入路径（os.replace 被打断）留下的 temp residue 仍可清理。"""
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=2)
+        current = scan_source(src, ()).entries
+        changes = detect_changes(src, current, None)
+        write_manifest(repo, create_manifest("snap1", str(src), repo.hash_algorithm, current))
+
+        def boom(*a, **k):
+            raise RuntimeError("simulated power loss during replace")
+
+        monkeypatch.setattr(os, "replace", boom)
+        with pytest.raises(RuntimeError):
+            write_snapshot(src, repo, current, changes, snapshot_id="snap1")
+        monkeypatch.undo()
+
+        snap = repo.path / "snapshots" / "snap1"
+        residue = sorted(
+            p.name for p in snap.rglob("*.mrtmp") if p.is_file()
+        )
+        assert residue, "真实写入路径应留下 staging temp"
+
+        cleaned = clean_tmp_residue(repo)
+        assert cleaned == [f"snapshots/snap1/{name}" for name in residue]
+        assert not [p for p in snap.rglob("*.mrtmp") if p.is_file()]
+        assert scan_recovery(repo).tmp_residue == ()
+
+    def test_orphan_dir_residue_kept_fail_safe(self, tmp_path) -> None:
+        """孤儿目录（无 manifest）无法证明 ownership，fail safe 保留。"""
+        repo = _init_repo(tmp_path / "target")
+        snap = repo.path / "snapshots" / "ghost"
+        snap.mkdir(parents=True)
+        (snap / "a.txt.mrtmp").write_bytes(b"half")
+        assert clean_tmp_residue(repo) == []
+        assert (snap / "a.txt.mrtmp").exists()
+
+    def test_complete_snapshot_absolutely_readonly_for_cleanup(self, tmp_path) -> None:
+        """Architecture review 边界冻结：complete 快照发布后，cleanup 对其是零操作。
+
+        即使快照树中存在能通过 ownership 判定的 staging-like 文件
+        （<manifested_target>.mrtmp：stem 是 complete manifest 的文件条目、
+        自身不在清单中），也不得删除——complete 即只读；
+        scan_recovery 可以报告可疑 residue，但报告不构成删除权限。
+        """
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "normal.txt", b"normal")
+        current = scan_source(src, ()).entries
+        write_manifest(
+            repo, mark_complete(create_manifest("snap1", str(src), repo.hash_algorithm, current))
+        )
+        snap = repo.path / "snapshots" / "snap1"
+        snap.mkdir(parents=True)
+        (snap / "normal.txt").write_bytes(b"normal")
+        (snap / "normal.txt.mrtmp").write_bytes(b"stale-staging")
+        before = _tree_bytes(snap)
+
+        # 全量清理（snapshot_id=None）与作用域清理（snapshot_id 指定）都是零操作
+        assert clean_tmp_residue(repo) == []
+        assert clean_tmp_residue(repo, snapshot_id="snap1") == []
+        assert _tree_bytes(snap) == before
+
+        # 报告侧：可疑 residue 可被 scan_recovery 发现（仅报告，不删除）
+        report = scan_recovery(repo)
+        assert report.tmp_residue == ("snapshots/snap1/normal.txt.mrtmp",)
+        assert _tree_bytes(snap) == before
+
+    def test_unknown_status_manifest_snapshot_zero_op(self, tmp_path) -> None:
+        """正向删除授权收口：manifest status 未知时 cleanup 零操作。
+
+        manifest parser 对 status 无白名单校验——未知 status 可成功加载，
+        因此删除授权必须是正向条件（仅 STATUS_INCOMPLETE 放行），
+        未知/损坏状态与 complete 一样零操作。
+        """
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "normal.txt", b"normal")
+        current = scan_source(src, ()).entries
+        manifest = create_manifest("snap1", str(src), repo.hash_algorithm, current)
+        # 手工构造未知 status（模拟磁盘损坏/外部篡改）；load_manifest 可成功加载
+        write_manifest(repo, replace(manifest, status="corrupted-unknown"))
+        assert load_manifest(repo, "snap1").status == "corrupted-unknown"
+        snap = repo.path / "snapshots" / "snap1"
+        snap.mkdir(parents=True)
+        (snap / "normal.txt").write_bytes(b"normal")
+        (snap / "normal.txt.mrtmp").write_bytes(b"stale-staging")
+        before = _tree_bytes(snap)
+
+        assert clean_tmp_residue(repo) == []
+        assert clean_tmp_residue(repo, snapshot_id="snap1") == []
+        assert _tree_bytes(snap) == before
+
+
 class TestCleanTmpResidue:
     def test_clean_removes_only_temp_files(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "a.txt")
+        _write(src / "sub" / "b.txt")
+        current = scan_source(src, ()).entries
+        write_manifest(repo, create_manifest("snap1", str(src), repo.hash_algorithm, current))
         snap = repo.path / "snapshots" / "snap1"
         (snap / "sub").mkdir(parents=True)
         (snap / "a.txt.mrtmp").write_bytes(b"half")
@@ -182,13 +360,17 @@ class TestCleanTmpResidue:
 
     def test_clean_scoped_to_single_snapshot(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "x.txt")
+        current = scan_source(src, ()).entries
         for sid in ("s1", "s2"):
+            write_manifest(repo, create_manifest(sid, str(src), repo.hash_algorithm, current))
             d = repo.path / "snapshots" / sid
             d.mkdir(parents=True)
-            (d / "x.mrtmp").write_bytes(b"half")
+            (d / "x.txt.mrtmp").write_bytes(b"half")
         clean_tmp_residue(repo, snapshot_id="s1")
-        assert not (repo.path / "snapshots" / "s1" / "x.mrtmp").exists()
-        assert (repo.path / "snapshots" / "s2" / "x.mrtmp").exists()
+        assert not (repo.path / "snapshots" / "s1" / "x.txt.mrtmp").exists()
+        assert (repo.path / "snapshots" / "s2" / "x.txt.mrtmp").exists()
 
 
 class TestBuildResumeBaseline:
