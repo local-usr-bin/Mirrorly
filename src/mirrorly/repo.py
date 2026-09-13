@@ -21,11 +21,12 @@ import os
 import sys
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
+from . import volume as _volume
 from .hashing import default_algorithm
 
 REPO_DIR_NAME = "MirrorlyRepo"
@@ -48,11 +49,17 @@ class RepoFormatError(RepoError):
 
 @dataclass(frozen=True)
 class VolumeInfo:
-    """目标卷标识信息（M10：防盘符漂移写错盘）。"""
+    """目标卷标识信息（M10：防盘符漂移写错盘）。
+
+    - ``serial``：32-bit 卷序列号（次级校验；克隆卷可能重复）
+    - ``guid``：Volume GUID path（主锚，Windows 安装内稳定；旧 repo.json 无此键）
+    - ``label``：卷标（仅诊断输出，不参与身份匹配——用户可改、跨卷可重复）
+    """
 
     label: str
     serial: str
     filesystem: str
+    guid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +137,14 @@ def init_repo(
     get_info = volume_info_provider or get_volume_info
     volume = get_info(target_root)
 
+    # M10 卷锚：init 时登记 Volume GUID path（Windows 安装内稳定，盘符漂移后
+    # 仍可定位同一卷）。无法建立卷锚即 fail closed——不静默写入无锚仓库。
+    try:
+        guid = _volume.get_volume_guid_for_path(target_root)
+    except _volume.VolumeError as e:
+        raise RepoError(f"无法建立卷锚（M10 自动重定位所需）: {e}") from e
+    volume = replace(volume, guid=guid)
+
     hardlinks = volume.filesystem in HARDLINK_FILESYSTEMS
     if not hardlinks:
         limitation = (
@@ -183,24 +198,32 @@ def load_repo(target_root: str | Path) -> RepoInfo:
         created_at=data["created_at"],
         tool_version=data["tool_version"],
         hash_algorithm=data["hash_algorithm"],
-        volume=VolumeInfo(label=vol["label"], serial=vol["serial"], filesystem=vol["filesystem"]),
+        volume=VolumeInfo(
+            label=vol["label"],
+            serial=vol["serial"],
+            filesystem=vol["filesystem"],
+            guid=vol.get("guid"),  # 旧 repo.json 无此键 → None（向后兼容）
+        ),
         filesystem_policy=data["filesystem_policy"],
         hardlinks=data["hardlinks"],
     )
 
 
 def _repo_to_dict(info: RepoInfo) -> dict:
+    volume: dict = {
+        "label": info.volume.label,
+        "serial": info.volume.serial,
+        "filesystem": info.volume.filesystem,
+    }
+    if info.volume.guid is not None:
+        volume["guid"] = info.volume.guid  # additive optional（format_version 不变）
     return {
         "format_version": info.format_version,
         "repo_id": info.repo_id,
         "created_at": info.created_at,
         "tool_version": info.tool_version,
         "hash_algorithm": info.hash_algorithm,
-        "volume": {
-            "label": info.volume.label,
-            "serial": info.volume.serial,
-            "filesystem": info.volume.filesystem,
-        },
+        "volume": volume,
         "filesystem_policy": info.filesystem_policy,
         "hardlinks": info.hardlinks,
     }

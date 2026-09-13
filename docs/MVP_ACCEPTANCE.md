@@ -9,7 +9,7 @@
 | # | MVP_TASKS T-10 冻结验收标准 | 结果 | 证据 |
 | --- | --- | --- | --- |
 | 1 | 完整流程 init → 多次 backup（含变更与删除）→ verify → restore → 保留清理，全部通过 | PASS | `tests/test_e2e.py` 全部通过（见 §2–§7） |
-| 2 | 盘符变化后 backup 仍能识别目标卷（卷标识匹配） | PASS（SIMULATED 场景） | 见 §8 语义裁定与 E2E |
+| 2 | 盘符变化后 backup 仍能识别目标卷（卷标识匹配） | PASS（卷锚自动重定位，真实 GUID API 链路） | 见 §8 |
 | 3 | 插错盘（卷标识不符）→ 退出码 5，零写入 | PASS | E2E：篡改 repo.json serial → exit 5、仓库树逐字节不变 |
 | 4 | 10 GB 级混合数据集（含 >4 GB 大文件、万级小文件）备份耗时与空间占用记录在案 | PASS（基线已归档） | 见 §10 性能基线（DEVELOPMENT_LOG 同步归档） |
 
@@ -63,20 +63,30 @@
 
 注：该用例在第 1–5 次运行均通过（同代码）；第 6/7 次（最终确认运行）被宿主 safe-delete 护栏拦截（count 53–61 > 50，环境限制，非断言失败）——按 T-09 既有原则精确报告，建议下轮配额刷新后复跑确认。
 
-## 8. M10 卷身份 / 盘符漂移 — 语义裁定 + PASS
+## 8. M10 卷身份 / 盘符漂移 — 卷锚自动重定位（M10 blocker 修复后 PASS）
 
-**冻结文档语义裁定**（问题：盘符漂移究竟要求 A=自动发现同一卷的新盘符，还是 B=fail closed 绝不写错卷）：
+**语义最终裁定（产品负责人，架构 review 后）**：盘符漂移要求 **A + B 同时成立**——A：已登记目标卷仍在线、只是 mount point / drive letter 改变 → 自动识别同一卷并定位原仓库继续工作（**不要求用户修改 target.path**）；B：找不到已登记卷、身份不匹配、定位结果不唯一 → fail closed，绝不写替代位置。CLI_SPEC §6 exit 5 描述的是 B 的失败行为，不否定 A。
 
-- CLI_SPEC §6（ADR-012，自述「实现须与本规范一致」的冻结契约）明确把「盘符漂移/插错盘」定义为**退出码 5 目标身份不符**的条件 → 冻结契约语义 = **B：fail closed，绝不向错误卷写入**。
-- PRD M10「盘符漂移不导致备份写错位置」与 TR-7「绝不写到替代位置」的安全不变量与 B 一致；PRD US-3 字面上的「零干预自动续写」与 CLI_SPEC exit 5 定义存在**规范内在张力**，按冻结实现契约（CLI_SPEC）判定 B 为准。US-3 的自动重定位语义未实现，列入 §11 已知限制（v2 候选），不判 blocker。
-- TR-7「配置中记录卷标识而非盘符」：当前实现把卷标识记录在 repo.json（校验依据）、config 记录 target_path 路径——为部分落地，列入已知限制。
+**实现（volume-anchored relocation）**：
 
-**E2E 结果**：
+- 信任锚 = **Volume GUID + volume serial + repo_id**（安全识别链）；volume label 仅诊断输出，不参与匹配（裁定：label 用户可改、跨卷可重复，GUID 优于字面「卷标」）。
+- `init` 登记三字段：`[target] volume_guid / repo_id / repo_dir`（all-or-none：半套配置 ConfigError，拒绝从 GUID 安全模式静默降级）；repo.json 增量可选 `volume.guid`（format_version 不变，旧文件缺键兼容）。
+- resolver 七态 fail-closed 状态机（`cli._resolve_repo`）：Case 1 全匹配正常；Case 2/3 path 失联或被其他卷占用 → `GetVolumePathNamesForVolumeNameW` 直查 expected GUID 当前挂载点 → repo_id + serial 全确认后重定位（**运行时 resolution，不自动改写 config**；stderr 提示）；Case 4 repo_id 不匹配 → exit 5；Case 5 多候选（samefile 去重后仍 >1）→ exit 5 不猜；Case 6 GUID 无挂载点 → exit 5「目标备份卷未连接或卷锚已失效」；Case 7 卷在但仓库缺失 → exit 1 不自动 init；legacy 配置（无锚）：path 有效走旧行为，失联 exit 1 + 重新登记提示，**不自动猜卷**。
+- **无身份降级 fallback**：GUID 解析失败时绝不用 serial+repo_id 自动认领另一个卷（`GetVolumePathNamesForVolumeNameW` 为主定位器；`FindFirstVolume` 枚举仅诊断用途）。
+- `repo_dir` 安全边界：config load / write / resolver 入口三重校验 + join 后 containment 复验（canonical 卷内相对路径，禁绝对/UNC/`..`/盘符限定；卷根为 `.`）。
+- 重定位成功不改写 TaskConfig（最少可变状态）；`--json` stdout 纯度不受影响。
+
+**E2E 结果**（全部真实 CLI 子进程）：
 
 1. 正确卷 → 全部主流程正常（§3 隐含）。
-2. **错误 volume serial → exit 5、零写入**（真实 CLI；「插错盘」经篡改 repo.json 记录 serial 构造，与「同一路径出现另一卷」在身份校验边界完全等价）：整仓库树含 mtime 逐字节不变、无锁、无快照、无报告。
-3. **同卷换地址**（SIMULATED 盘符漂移：同卷目录搬迁 + 用户改配置指向新地址，不改动真实盘符/挂载点）：卷标识匹配 → 继续同一仓库累积（list 2 个快照、verify --all 通过），**不会新建错位置仓库**——满足冻结 T-10 #2「盘符变化后 backup 仍能识别目标卷（卷标识匹配）」的安全核心。
-4. 真实双卷（C:/P:）存在但未做真实盘符改动实验（用户明确禁止）——该项 NOT REQUIRED BY FROZEN MVP（MVP_TASKS 允许「本地 NTFS 分区仿真」）。
+2. **错误 volume serial → exit 5、零写入**（「插错盘」经篡改 repo.json 记录 serial 构造，与「同一路径出现另一卷」在身份校验边界完全等价）：整仓库树含 mtime 逐字节不变、无锁、无快照、无报告。
+3. **盘符漂移自动重定位（REAL API）**：配置 path 失联（仿真旧盘符消失；真实盘符漂移正是此效果）+ 锚三字段不动 → 真实 `GetVolumePathNamesForVolumeNameW` 链路自动定位原仓库继续累积（不新建错位置仓库、配置未被自动改写、verify --all 通过）——满足冻结 T-10 #2 与 US-3 字面语义。
+4. **GUID 未挂载 → exit 5、零写入**（REAL API，随机 GUID）：系统上同时存在 repo_id/repo_dir/serial 完全匹配的真实仓库——证明无 serial 降级认领。
+5. **卷在但仓库缺失 → exit 1、不自动 init**（仓库搬迁走 rename，原位置不被重建）。
+6. 旧盘符被另一卷占用（unit 级 fake provider）：旧路径零写入、GUID 定位 expected 卷后继续。
+7. 真实双卷（C:/P:）存在但未做真实盘符改动实验（用户明确禁止）——该项 NOT REQUIRED BY FROZEN MVP（MVP_TASKS 允许「本地 NTFS 分区仿真」）；真实外置盘换口（TR-7 验证方式原文）保留为真机手工验收项。
+
+**Volume GUID 语义说明**（避免过强宣传）：Volume GUID path 是 Windows 安装/挂载管理器级的卷锚（首次安装与格式化时由 OS 分配），适合本 MVP「同一台 Windows 机器上的 drive-letter 漂移」场景；若因重新格式化、系统迁移/重装、挂载管理状态变化等原因登记 GUID 不再可解析，Mirrorly fail closed，需要显式重新登记（重新 init）。它不是跨系统、跨重装、硬件级永久身份。
 
 ## 9. reparse / junction 真机补验 — 4 PASS + 4 SKIP（环境限制）
 
@@ -115,30 +125,32 @@
 
 ## 11. 已知限制清单（MVP）
 
-1. **盘符漂移不自动重定位**（US-3 字面语义）：目标卷换盘符后需用户更新 config `target.path`，卷标识校验确认同一卷后继续同一仓库；绝不写错位置（CLI_SPEC exit 5 语义，已 E2E 验证）。
-2. **config 记录的是 target_path 路径而非卷标识**（TR-7 理想形态）：卷标识存 repo.json，路径解析依赖 config 手工维护。
+1. **M10 自动重定位限「同一 Windows 安装内」**：Volume GUID 为 OS 级卷锚（格式化/系统重装/挂载管理状态变化会失效）→ fail closed 后需显式重新登记；仓库跨卷拷贝/迁移（repo_id 匹配但卷锚不匹配）不接受，未来如有需要走显式 migration 工作流（裁定）。
+2. **真实外置盘换口（真盘符漂移）未真机执行**（禁止改真实盘符；重定位以真实 GUID API 链路 + 配置 path 失联仿真验证，TR-7 原文验证方式保留为手工验收项）。
 3. **崩溃后任务锁需手工删除**（有意取舍：不自动清理防误判活锁；E2E 验证 exit 6 + 文档化手工步骤）。
 4. **verify --quick 不重算哈希**：同尺寸静默损坏不被 quick 模式发现（冻结设计，full verify 覆盖）。
 5. **文件级 symlink reparse 防护未真机验证**（本机无 SeCreateSymbolicLinkPrivilege；目录级 junction 已真机通过，代码路径相同）。
 6. **restore --overwrite always 到已存在目录**：已存在目录计入 skip → exit 3（partial）而非 0（冻结 partial 语义，明细列明「目录已存在」，无数据风险）。
 7. **list --verbose 无「增量大小」**（T-09 裁定：MVP 后候选，须 backup 时持久化权威值）。
 8. exFAT 整文件复制模式（D2 降级）未做外置盘真机验收（沙箱无真实 exFAT 卷；strict/warn 逻辑有单元覆盖）——NOT REQUIRED BY FROZEN MVP（可用本地 NTFS 仿真口径）。
+9. **旧 anchored 配置被更旧版本代码读取**：新 `[target]` 三键对旧版本严格模式是「未知配置键」→ 报错拒绝（向前不兼容，如实接受；MVP 未发布）。
 
 ## 12. 测试与工具链结果
 
-- 新增 `tests/test_e2e.py`（11 用例，真实 CLI 子进程 E2E）
+- 新增 `tests/test_e2e.py`（13 用例，真实 CLI 子进程 E2E，含 M10 重定位/GUID 未挂载/仓库缺失三用例）
 - 新增 `scripts/t10_perf_baseline.py`（性能基线）
 - 修改 `tests/test_restore.py`：`_make_symlink` 目录场景 junction 回退（真机补验）
-- E2E 最终确认运行（run7）：9 passed / 2 guard-blocked（§7 注）；中断+retention 在 runs 1–5 全绿（同代码）
-- reparse 专项（沙箱外真实 Windows）：4 passed / 4 skipped
-- ruff check：All checks passed；ruff format --check：37 files already formatted
-- **完整 pytest 全套回归：待跑**——本轮被宿主 safe-delete 护栏配额拦截（多次 E2E 迭代消耗删除额度）；基线 390 passed / 8 skipped / 0 failed（T-09 验收时），T-10 变更不触碰产品代码（仅新增测试/脚本 + 测试辅助回退），风险极低，但按验收门槛要求须在配额刷新后复跑确认（预期 4+4 → skip 变化：目录 reparse 4 项在沙箱内仍会环境 skip，沙箱外通过）
+- M10 修复（架构 review 后）：新增 `src/mirrorly/volume.py`（Windows 卷定位 API）+ `tests/test_volume.py`（7 用例真实 API smoke）；`tests/test_cli.py` 增 `TestM10Resolver`（11 用例状态机）；`tests/test_config.py` 增锚校验（16 用例）
+- E2E 最终确认运行：**13 passed / 0 failed**（含此前被宿主 safe-delete 护栏拦截的中断/retention 用例，本轮全部转绿）
+- reparse 专项：4 passed / 4 skipped（4 个目录级 junction 用例在本轮沙箱内亦通过）
+- ruff check：All checks passed；ruff format --check：40 files already formatted
+- **完整 pytest 全套回归：452 passed / 4 skipped / 0 failed**（43.5 s，basetemp 用 OS 临时目录；4 skip 均为文件级 symlink 权限限制——`无法创建文件符号链接：无管理员/开发者模式`，与 §9 一致）
 
 ## 13. 结论
 
-**推荐：PASS WITH ENVIRONMENTAL SKIPS（待最终确认运行）**
+**PASS WITH ENVIRONMENTAL SKIPS（M10 blocker 已修复并验证）**
 
-- 冻结 T-10 四项验收标准均有真实证据（§1）；主流程 / 不可变性 / 硬链接 / 字节级恢复 / 损坏检测 / TR-5 中断续传 / M10 身份安全 / retention / 性能基线全部通过
-- 环境性 skip：4 个文件级 symlink 用例（权限限制，§9）；最终确认运行待全套 pytest 在配额刷新后复跑（§12）
-- 无生产代码缺陷发现；无冻结规范冲突 blocker；发现一处**规范内在张力**（US-3 自动重定位 vs CLI_SPEC exit 5，§8 已裁定按冻结契约 B 执行并列入已知限制）
-- 是否允许 MVP 在上述环境性 skip 下验收，交由产品负责人依据本报告证据裁定
+- 冻结 T-10 四项验收标准均有真实证据（§1）；主流程 / 不可变性 / 硬链接 / 字节级恢复 / 损坏检测 / TR-5 中断续传 / M10 身份安全（含卷锚自动重定位）/ retention / 性能基线全部通过
+- 环境性 skip：仅 4 个文件级 symlink 用例（权限限制，§9）；完整 pytest 全套 452 passed / 4 skipped / 0 failed 已复跑确认（§12）
+- M10 blocker（盘符漂移无自动重定位）已按产品负责人裁定修复并验证（§8）；无其他生产代码缺陷；无冻结规范冲突
+- 是否允许 MVP 在上述环境性 skip 下盖章，交由产品负责人依据本报告证据最终裁定

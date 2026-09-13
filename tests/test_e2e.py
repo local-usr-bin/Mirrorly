@@ -12,7 +12,8 @@
 - restore：整快照字节级一致、--path 文件/子树、overwrite never/always
 - verify：主动损坏 → exit 4、报告定位
 - TR-5 中断恢复：真实 subprocess kill → incomplete → 续传（REAL E2E）
-- M10 卷身份：错误 serial → exit 5 零写入；同卷新路径（盘符漂移仿真）
+- M10 卷身份：错误 serial → exit 5 零写入；盘符漂移自动重定位（真实 GUID
+  链路 + 配置 path 失联仿真）；GUID 未挂载零写入；仓库缺失不自动 init
 - retention：keep_last=2 多快照清理后 verify 全过
 """
 
@@ -650,51 +651,104 @@ class TestM10VolumeIdentity:
         assert not list((repo / "locks").glob("*.lock"))
         assert len(_manifest_ids(repo)) == 1
 
-    def test_same_volume_relocated_path_recognized(self, tmp_path) -> None:
-        """盘符漂移语义（SIMULATED）：同一卷换地址，卷标识匹配后继续同一仓库。
+    def test_drive_letter_relocation_real_guid_chain(self, tmp_path) -> None:
+        """盘符漂移自动重定位（REAL API）：配置 path 失联，GUID 锚定位原卷原仓库。
 
-        真实卷 + 真实 CLI；「盘符变化」以同卷目录搬迁仿真（不改动真实
-        盘符/挂载点）——MVP_TASKS T-10 #2「盘符变化后 backup 仍能识别
-        目标卷（卷标识匹配）」的安全核心：识别为同一卷、继续同一仓库，
-        不会在新位置新建错误仓库。
+        M10 冻结语义 A：用户不修改 TaskConfig 任何字段的情况下，盘符 D:→E:
+        后 backup 自动定位同一目标卷并继续同一仓库（T-10 #2）。
+        真实 Windows Volume GUID API 链路（GetVolumePathNamesForVolumeNameW）；
+        「盘符变化」以配置 path 指向已消失的旧位置仿真（真实盘符漂移的效果
+        正是 path 失效而卷与仓库仍由锚定位）。不改动真实盘符/挂载点。
         """
-        cfg_root, target = self._make_repo(tmp_path)
-        # 仿真盘符漂移：同卷搬迁仓库，用户改配置指向新地址
-        # （TOML 中路径为转义存储，走解析-重写而非子串替换）
-        from mirrorly.config import TaskConfig, load_task_config, write_task_config
+        from dataclasses import replace as dc_replace
 
+        from mirrorly.config import load_task_config, write_task_config
+
+        cfg_root, target = self._make_repo(tmp_path)
+        repo = target / "MirrorlyRepo"
+        ids_before = _manifest_ids(repo)
+
+        # 仿真盘符漂移：仅把配置中的 path 换成旧盘符的失联地址（锚三字段原样保留）
         cfg_file = cfg_root / "config.d" / "default.toml"
         cfg = load_task_config(cfg_file)
-        assert Path(cfg.target_path).resolve() == target.resolve()
-        new_target = target.parent / "relocated"
-        os.rename(target, new_target)  # 同卷搬迁（仿真换盘符）
-        write_task_config(
-            TaskConfig(
-                name=cfg.name,
-                source=cfg.source,
-                target_path=str(new_target),
-                filesystem_policy=cfg.filesystem_policy,
-                exclude=cfg.exclude,
-                keep_last=cfg.keep_last,
-                keep_monthly=cfg.keep_monthly,
-                verify_on_write=cfg.verify_on_write,
-            ),
-            cfg_root,
-        )
+        assert cfg.volume_guid, "init 未登记卷锚"
+        assert cfg.repo_id and cfg.repo_dir
+        stale = target.parent / "old-drive-letter-gone"
+        assert not stale.exists()
+        write_task_config(dc_replace(cfg, target_path=str(stale)), cfg_root)
 
-        src = tmp_path / "src"
-        (src / "after-move.txt").write_bytes(b"written after relocation\n")
+        (Path(cfg.source) / "after-relocation.txt").write_bytes(b"after relocation\n")
+
         r = run_cli("--config", str(cfg_root), "backup", "--yes")
         assert r.returncode == 0, r.stdout + r.stderr
-        repo = new_target / "MirrorlyRepo"
-        ids = _manifest_ids(repo)
-        assert len(ids) == 2  # 同一仓库继续累积，未新建
-        r = run_cli("--config", str(cfg_root), "list", "--json")
-        payload = json.loads(r.stdout)
-        assert {p["snapshot_id"] for p in payload} == set(ids)
-        assert all(p["status"] == "complete" for p in payload)
+        # 重定位提示走 stderr（stdout 纯度不受影响）
+        assert "重定位" in r.stderr, r.stderr
+
+        # 自动定位回原仓库继续累积，未在失联位置新建仓库
+        ids_after = _manifest_ids(repo)
+        assert len(ids_after) == len(ids_before) + 1
+        assert not (stale / "MirrorlyRepo").exists()
+
+        # 配置未被自动改写（运行时 resolution，不落盘）
+        cfg2 = load_task_config(cfg_file)
+        assert str(cfg2.target_path) == str(stale)
+        assert cfg2.volume_guid == cfg.volume_guid
+        assert cfg2.repo_id == cfg.repo_id
+
+        # 原仓库整体可 verify
         r = run_cli("--config", str(cfg_root), "verify", "--all")
         assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_unmounted_guid_exit_5_zero_writes_real_api(self, tmp_path) -> None:
+        """expected GUID 未挂载（REAL API）→ exit 5、零写入、无 serial 降级认领。
+
+        真实 API：随机 GUID 无当前挂载点；而系统上就存在 repo_id/repo_dir/
+        serial 完全匹配的真实仓库（本卷）——若存在任何 serial fallback，
+        本用例必失败。
+        """
+        from dataclasses import replace as dc_replace
+
+        from mirrorly.config import load_task_config, write_task_config
+
+        cfg_root, target = self._make_repo(tmp_path)
+        repo = target / "MirrorlyRepo"
+        cfg_file = cfg_root / "config.d" / "default.toml"
+        cfg = load_task_config(cfg_file)
+        # 形式合法但（几乎必然）不存在的 GUID
+        fake_guid = "\\\\?\\Volume{00000000-0000-0000-0000-00c0ffee0002}\\"
+        assert fake_guid != cfg.volume_guid
+        write_task_config(
+            dc_replace(cfg, target_path=str(target.parent / "stale"), volume_guid=fake_guid),
+            cfg_root,
+        )
+        before = _tree_fingerprint(repo)
+
+        r = run_cli("--config", str(cfg_root), "backup", "--yes")
+        assert r.returncode == 5, r.stdout + r.stderr
+        assert "未连接或卷锚已失效" in (r.stdout + r.stderr)
+        assert _tree_fingerprint(repo) == before
+        assert not list((repo / "locks").glob("*.lock"))
+
+    def test_relocated_repo_missing_exit_1_no_auto_init(self, tmp_path) -> None:
+        """expected volume 在（真实锚），但仓库目录已消失 → exit 1、不自动 init。"""
+        from dataclasses import replace as dc_replace
+
+        from mirrorly.config import load_task_config, write_task_config
+
+        cfg_root, target = self._make_repo(tmp_path)
+        # 仓库搬迁走 rename（避免删除配额）：配置 path 失效 + 原位置无仓库
+        moved = target.parent / "moved-away"
+        os.rename(target, moved)
+        cfg_file = cfg_root / "config.d" / "default.toml"
+        cfg = load_task_config(cfg_file)
+        write_task_config(dc_replace(cfg, target_path=str(target.parent / "stale")), cfg_root)
+
+        r = run_cli("--config", str(cfg_root), "backup", "--yes")
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "预期仓库路径缺失" in (r.stdout + r.stderr)
+        # 原位置不被自动重建
+        assert not (target / "MirrorlyRepo").exists()
+        assert (moved / "MirrorlyRepo" / "repo.json").is_file()  # 搬走者原样
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +759,9 @@ class TestM10VolumeIdentity:
 class TestRetentionE2E:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path) -> None:
-        from mirrorly.config import TaskConfig, write_task_config
+        from dataclasses import replace as dc_replace
+
+        from mirrorly.config import load_task_config, write_task_config
 
         self.src = tmp_path / "src"
         self.cfg_root = tmp_path / "cfg"
@@ -723,17 +779,11 @@ class TestRetentionE2E:
             "--yes",
         )
         assert r.returncode == 0, r.stdout + r.stderr
-        # keep_last=2 / keep_monthly=1：第 3 次备份起触发清理（模拟用户改 TOML）
-        write_task_config(
-            TaskConfig(
-                name="default",
-                source=str(self.src),
-                target_path=str(self.target),
-                keep_last=2,
-                keep_monthly=1,
-            ),
-            self.cfg_root,
-        )
+        # keep_last=2 / keep_monthly=1：第 3 次备份起触发清理（模拟用户改 TOML；
+        # 锚三字段原样保留——重定位能力与 retention 同时在场）
+        cfg = load_task_config(self.cfg_root / "config.d" / "default.toml")
+        assert cfg.volume_guid  # anchored 配置
+        write_task_config(dc_replace(cfg, keep_last=2, keep_monthly=1), self.cfg_root)
         self.repo = self.target / "MirrorlyRepo"
 
     def test_retention_keeps_two_and_data_alive(self) -> None:

@@ -29,7 +29,15 @@ from datetime import datetime
 from pathlib import Path
 
 from . import __version__
-from .config import ConfigError, TaskConfig, load_task_config, validate_task_name, write_task_config
+from . import volume as _volume
+from .config import (
+    ConfigError,
+    TaskConfig,
+    load_task_config,
+    validate_anchor,
+    validate_task_name,
+    write_task_config,
+)
 from .manifest import (
     STATUS_COMPLETE,
     ManifestError,
@@ -44,6 +52,7 @@ from .recovery import RecoveryError, build_resume_baseline, clean_tmp_residue, s
 from .repo import (
     HARDLINK_FILESYSTEMS,
     REPO_DIR_NAME,
+    REPO_INFO_FILE,
     RepoError,
     RepoFormatError,
     RepoInfo,
@@ -190,16 +199,141 @@ def _resolve_task_config(args: argparse.Namespace) -> TaskConfig:
     return load_task_config(candidates[0])
 
 
-def _open_repo(cfg: TaskConfig) -> RepoInfo:
-    """加载仓库并做卷标识校验（M10：盘符漂移/插错盘 → 退出码 5，零写入）。"""
-    repo = load_repo(cfg.target_path)
-    current = get_volume_info(Path(cfg.target_path))
-    if current.serial != repo.volume.serial:
+def _guid_matches(current: str | None, expected: str) -> bool:
+    """Volume GUID path 比对（canonical 形式，大小写不敏感）。"""
+    return current is not None and current.casefold() == expected.casefold()
+
+
+def _notify_relocation(cfg: TaskConfig, repo: RepoInfo) -> None:
+    """重定位提示：始终走 stderr（--json 下 stdout 仍保持单一 JSON 文档）。"""
+    print(
+        f"目标卷已重定位: {cfg.target_path} → {repo.path.parent}（卷标识匹配；配置未自动修改）",
+        file=sys.stderr,
+    )
+
+
+def _search_anchored(cfg: TaskConfig) -> RepoInfo:
+    """M10 Phase 1：按已登记 Volume GUID 搜索当前挂载点并确认仓库。
+
+    fail-closed 状态机（冻结裁定）：
+    - GUID 无当前挂载点 → _IdentityMismatch（exit 5，"目标备份卷未连接或卷锚已失效"）
+    - GUID 定位成功但 repo_id 不匹配 → exit 5
+    - GUID 定位成功但卷序列号不匹配 → exit 5
+    - 卷在但预期仓库路径缺失 → RepoError（exit 1，不自动 init）
+    - 多个不同仓库候选 → exit 5（同一卷的多个挂载点指向同一 repo，samefile 去重）
+
+    绝不用 serial + repo_id 自动认领 GUID 解析不到的卷（无身份降级 fallback）。
+    """
+    assert cfg.volume_guid is not None and cfg.repo_id is not None and cfg.repo_dir is not None
+    try:
+        mount_roots = _volume.get_mount_roots(cfg.volume_guid)
+    except _volume.VolumeError as e:
+        raise _IdentityMismatch(f"目标备份卷未连接或卷锚已失效（无法解析 volume GUID）: {e}") from e
+    if not mount_roots:
         raise _IdentityMismatch(
-            f"目标卷标识不匹配：仓库记录序列号 {repo.volume.serial}，"
-            f"当前卷序列号 {current.serial}（盘符漂移或插错盘），拒绝继续"
+            f"目标备份卷未连接或卷锚已失效（volume GUID 无当前挂载点）: {cfg.volume_guid}"
         )
-    return repo
+    candidates: list[tuple[Path, RepoInfo]] = []
+    for m in mount_roots:
+        root = Path(m)
+        # join 后 containment 复验：不信任 config load 时的单次校验（防运行时逃逸）
+        target_dir = root if cfg.repo_dir == "." else root / cfg.repo_dir
+        if not _path_within(target_dir, root):
+            raise _IdentityMismatch(f"repo_dir 逃逸出卷挂载根（拒绝）: {cfg.repo_dir!r} @ {m}")
+        info_file = target_dir / REPO_DIR_NAME / REPO_INFO_FILE
+        if not info_file.exists():
+            continue
+        repo = load_repo(target_dir)
+        if repo.repo_id != cfg.repo_id:
+            raise _IdentityMismatch(
+                f"卷定位成功但预期仓库 id 不匹配（配置 {cfg.repo_id}，"
+                f"实际 {repo.repo_id}），拒绝继续"
+            )
+        current = get_volume_info(target_dir)
+        if current.serial != repo.volume.serial:
+            raise _IdentityMismatch(
+                f"目标卷标识不匹配：仓库记录序列号 {repo.volume.serial}，"
+                f"当前卷序列号 {current.serial}，拒绝继续"
+            )
+        candidates.append((target_dir, repo))
+    # 同一卷的多个挂载点指向同一物理仓库：按文件身份去重（samefile，非字符串比较）
+    unique: list[tuple[Path, RepoInfo]] = []
+    for td, repo in candidates:
+        try:
+            dup = any(os.path.samefile(td / REPO_DIR_NAME, u / REPO_DIR_NAME) for u, _ in unique)
+        except OSError:
+            dup = False
+        if not dup:
+            unique.append((td, repo))
+    if len(unique) == 1:
+        repo = unique[0][1]
+        _notify_relocation(cfg, repo)
+        return repo
+    if not unique:
+        raise RepoError(
+            "注册目标卷存在，但预期仓库路径缺失（"
+            + "、".join(mount_roots)
+            + f" 下未找到 {cfg.repo_dir}\\MirrorlyRepo；不会自动初始化新仓库）"
+        )
+    raise _IdentityMismatch(
+        "卷定位结果不唯一（多个不同仓库候选，拒绝猜测）: " + ", ".join(str(td) for td, _ in unique)
+    )
+
+
+def _resolve_repo(cfg: TaskConfig) -> RepoInfo:
+    """加载仓库并解析目标位置（M10：卷锚 + 盘符漂移自动重定位）。
+
+    任何解析失败均发生在任务锁/源扫描/一切仓库写入之前（零写入）：
+    - anchored 配置（volume_guid/repo_id/repo_dir 齐全）：
+      路径有效且 guid+repo_id+serial 全匹配 → 正常使用；
+      路径失联或被其他卷占用 → 按 GUID 搜索同一卷并重定位；
+    - legacy 配置（无卷锚）：保持既有行为（path + serial 校验，不自动猜卷）；
+    - 卷在但仓库缺失 → RepoError（exit 1）；身份域失败 → exit 5。
+    """
+    # 防直接构造 TaskConfig 绕过 load 边界（写入边界校验之外的第三重防线）
+    validate_anchor(cfg.volume_guid, cfg.repo_id, cfg.repo_dir)
+    anchored = cfg.volume_guid is not None
+    path = Path(cfg.target_path)
+    info_file = path / REPO_DIR_NAME / REPO_INFO_FILE
+
+    if info_file.exists():
+        repo = load_repo(path)
+        if anchored:
+            assert cfg.volume_guid is not None and cfg.repo_id is not None
+            try:
+                current_guid = _volume.get_volume_guid_for_path(path)
+            except _volume.VolumeError:
+                current_guid = None
+            if not _guid_matches(current_guid, cfg.volume_guid):
+                # 配置路径当前不在已登记卷上（盘符漂移/旧盘符被其他卷占用）→ 搜索
+                return _search_anchored(cfg)
+            if repo.repo_id != cfg.repo_id:
+                raise _IdentityMismatch(
+                    f"预期仓库 id 不匹配（配置记录 {cfg.repo_id}，实际 {repo.repo_id}），拒绝继续"
+                )
+            current = get_volume_info(path)
+            if current.serial != repo.volume.serial:
+                raise _IdentityMismatch(
+                    f"目标卷标识不匹配：仓库记录序列号 {repo.volume.serial}，"
+                    f"当前卷序列号 {current.serial}，拒绝继续"
+                )
+            return repo
+        # legacy：既有行为（MVP_TASKS 之前语义，不自动猜卷）
+        current = get_volume_info(path)
+        if current.serial != repo.volume.serial:
+            raise _IdentityMismatch(
+                f"目标卷标识不匹配：仓库记录序列号 {repo.volume.serial}，"
+                f"当前卷序列号 {current.serial}（盘符漂移或插错盘），拒绝继续"
+            )
+        return repo
+
+    if anchored:
+        return _search_anchored(cfg)
+    raise RepoError(
+        f"未找到仓库（repo.json 不存在）: {info_file}\n"
+        "该任务配置为 legacy 格式（无卷锚），无法自动重定位；"
+        "请重新运行 mirrorly init 登记目标卷，或手工修正 target.path"
+    )
 
 
 def _latest_complete(repo: RepoInfo) -> ManifestSummary | None:
@@ -349,14 +483,28 @@ def cmd_init(args: argparse.Namespace) -> int:
         )
         _confirm(args, "是否仍以整文件复制模式继续？")
 
+    # M10 卷锚前置解析（失败零仓库写入；init_repo 内部会再取 Volume GUID）
+    try:
+        mount_root = _volume.get_volume_mount_root(str(target.resolve()))
+    except _volume.VolumeError as e:
+        _err(f"无法解析目标卷挂载点（M10 卷锚所需）: {e}")
+        return EXIT_ERROR
+
     # 确认已完成（或 strict 由底层直接拒绝），assume_yes 防止底层二次提问
     info = init_repo(target, filesystem_policy=policy, assume_yes=True)
 
+    # M10 卷锚三字段：Volume GUID + repo_id + 卷内相对路径（重定位依据）
+    assert info.volume.guid is not None
+    rel = os.path.relpath(str(target.resolve()), mount_root)
+    repo_dir = "." if rel == "." else rel.replace("/", "\\")
     cfg = TaskConfig(
         name=task_name,
         source=str(source.resolve()),
         target_path=str(target.resolve()),
         filesystem_policy=policy,
+        volume_guid=info.volume.guid,
+        repo_id=info.repo_id,
+        repo_dir=repo_dir,
     )
     written = write_task_config(cfg, config_root)
 
@@ -467,7 +615,7 @@ def _scan_and_detect(args: argparse.Namespace, cfg: TaskConfig, baseline: _Basel
 
 def cmd_backup(args: argparse.Namespace) -> int:
     cfg = _resolve_task_config(args)
-    repo = _open_repo(cfg)
+    repo = _resolve_repo(cfg)
 
     if args.dry_run:
         # dry-run 有意例外：零写入，因此不取任务锁（只读预览不与其他实例互斥）
@@ -625,7 +773,7 @@ def _finish_dry_run(
 
 def cmd_verify(args: argparse.Namespace) -> int:
     cfg = _resolve_task_config(args)
-    repo = _open_repo(cfg)
+    repo = _resolve_repo(cfg)
 
     if args.all:
         targets = [s.snapshot_id for s in list_manifests(repo) if s.status == STATUS_COMPLETE]
@@ -702,7 +850,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def cmd_restore(args: argparse.Namespace) -> int:
     cfg = _resolve_task_config(args)
-    repo = _open_repo(cfg)
+    repo = _resolve_repo(cfg)
 
     # CLI_SPEC §4：--in-place 为危险操作，必须显式 --yes（非法组合 → 用法错误）
     if args.in_place and not _flag(args, "yes"):
@@ -802,7 +950,7 @@ def cmd_restore(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     cfg = _resolve_task_config(args)
-    repo = _open_repo(cfg)
+    repo = _resolve_repo(cfg)
     summaries = list_manifests(repo)
 
     if _flag(args, "json"):

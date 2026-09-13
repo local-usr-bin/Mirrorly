@@ -4,6 +4,67 @@
 
 ---
 
+## 2026-09-13（十七）T-10 M10 blocker 修复：卷锚自动重定位
+
+### 做了什么
+
+- 架构 review 裁定 M10「盘符漂移」为真实 MVP blocker：冻结语义应为 A+B（自动重定位
+  同一卷 + fail closed），原实现只有 B（`_open_repo` 只校验字面路径 serial，全仓无
+  卷枚举代码，D:\→E:\ 后必然失败，唯一出路是用户手工改 target.path）。
+- 新增 `src/mirrorly/volume.py`：Windows 官方卷定位 API（ctypes，只读，零依赖）——
+  `GetVolumePathNameW`（路径→挂载点根）、`GetVolumeNameForVolumeMountPointW`
+  （挂载点→Volume GUID）、`GetVolumePathNamesForVolumeNameW`（GUID→当前全部挂载点，
+  未挂载/不可解析返回空）、`FindFirstVolumeW`（仅诊断）。
+- 数据模型：repo.json `volume.guid` 增量可选（format_version 维持 1，旧文件缺键
+  兼容读，旧 reader 忽略新键——双向兼容测试确认）；TaskConfig `[target]` 新增
+  `volume_guid / repo_id / repo_dir` 三键，**all-or-none**（半套 ConfigError，拒绝
+  从 GUID 安全模式静默降级），`repo_dir` 为 canonical 卷内相对路径（卷根 "."，
+  禁绝对/UNC/`..`/盘符限定），load/write/resolver 入口三重校验 + join 后 containment 复验。
+- `cli._open_repo` → `cli._resolve_repo` 七态 fail-closed 状态机：Case 1 全匹配正常；
+  Case 2/3 path 失联或被其他卷占用 → GUID 直查挂载点 → repo_id+serial 确认 →
+  自动重定位（运行时 resolution，不自动改写 config，stderr 提示）；Case 4 repo_id
+  不匹配 exit 5；Case 5 多候选 samefile 去重后仍 >1 → exit 5 不猜；Case 6 GUID 无
+  挂载点 exit 5「目标备份卷未连接或卷锚已失效」；Case 7 卷在仓库缺失 exit 1 不自动
+  init；legacy 配置零行为变化。所有失败先于锁/扫描/写入（T-09 零写入语义保持）。
+- **无身份降级**：GUID 解析失败绝不用 serial+repo_id 认领另一个卷（FindFirstVolume
+  枚举仅诊断，不作为 acceptance fallback）。
+- 测试：test_volume.py（7 用例，真实 API smoke，沙箱内 GUID 往返链路可用——关键
+  前置验证）；test_cli.py `TestM10Resolver`（11 用例：Case 1-7 + samefile 去重 +
+  无降级 + repo_dir 双防线）；test_config.py（+16 用例：partial/非法 GUID/repo_dir
+  逃逸/写边界零写入）；test_e2e.py 重写重定位用例（真实 GUID API 链路，仅把配置
+  path 换为失联地址，锚字段不动）+ 新增 GUID 未挂载零写入（REAL API）与仓库缺失
+  exit 1 两用例；retention fixture 保留锚字段。
+- 文档：MVP_ACCEPTANCE §8/§11/§12/§13 重写（移除「盘符漂移不自动重定位」限制；
+  GUID 语义措辞按裁定——「Windows 安装/挂载管理器级卷锚」，不写 BitLocker 因果）。
+
+### 关键决定
+
+- 信任锚 = Volume GUID + serial + repo_id；label 只做诊断（裁定：label 用户可改、
+  跨卷可重复，GUID 优于字面「卷标」）。
+- init 时一次性登记锚，重定位后不自动改写 config（最少可变状态；resolver 每次 O(1)）。
+- repo 被复制/移动到另一卷（repo_id 匹配但卷锚不匹配）→ fail closed（裁定：未来
+  需要时走显式 migration，backup 不猜）。
+- Case 7（卷在但仓库缺失）exit 1 而非 5（裁定：volume identity 已正确，失败域是
+  repo-not-found）。
+
+### 结果
+
+- 完整 pytest 全套：**452 passed / 4 skipped / 0 failed**（4 skip 均为文件级
+  symlink 权限限制；4 个目录级 junction 用例本轮沙箱内亦通过）。
+- E2E 全套 13 passed（含上轮被护栏拦截的中断/retention）；ruff check /
+  format --check 全绿。
+- MVP_ACCEPTANCE 结论更新为 PASS WITH ENVIRONMENTAL SKIPS（M10 blocker 已修复），
+  等产品负责人最终盖章。
+
+### 遇到的问题
+
+- `c_wchar` 数组无 `.raw` 属性（改切片读取多字符串）；未挂载 GUID 返回
+  WinError 2 而非空列表（按「未挂载」语义映射为 []）。
+- bash 环境 PATH 再度瞬时故障（dirname/mkdir not found）→ 本轮全程 PowerShell。
+- TOML 值含反斜杠时测试须用 literal string（单引号），双引号下 `\?` 为非法转义。
+
+---
+
 ## 2026-09-13（十六）T-10 端到端验收
 
 ### 做了什么

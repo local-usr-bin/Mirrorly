@@ -23,9 +23,9 @@ import pytest
 
 from mirrorly import cli
 from mirrorly.cli import main
-from mirrorly.config import ConfigError, validate_task_name
+from mirrorly.config import ConfigError, TaskConfig, validate_task_name
 from mirrorly.manifest import list_manifests, load_manifest
-from mirrorly.repo import VolumeInfo, load_repo
+from mirrorly.repo import RepoError, VolumeInfo, init_repo, load_repo
 from mirrorly.scan import to_long_path
 
 # ---------------------------------------------------------------------------
@@ -1162,3 +1162,166 @@ class TestCliContractGaps:
         assert reports[0].name != reports[1].name
         for r in reports:
             assert json.loads(r.read_text(encoding="utf-8"))["command"] == "verify"
+
+
+# ---------------------------------------------------------------------------
+# M10 卷锚 resolver 状态机（T-10 M10 修订：GUID 主锚 + repo_id/serial 确认）
+# ---------------------------------------------------------------------------
+
+_FAKE_GUID_A = "\\\\?\\Volume{11111111-2222-3333-4444-555555555555}\\"
+_FAKE_GUID_B = "\\\\?\\Volume{99999999-8888-7777-6666-555555555555}\\"
+_OTHER_REPO_ID = "ffffffffffffffffffffffffffffffff"  # 32-hex canonical 形式
+
+
+def _make_repo_at(base: Path):
+    """在 base（target 根）下创建真实仓库，返回 RepoInfo。"""
+    src = base.parent / f"src_{base.name}"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "seed.txt").write_bytes(b"seed")
+    return init_repo(base)
+
+
+def _anchor_cfg(path, guid, repo_id, repo_dir) -> TaskConfig:
+    return TaskConfig(
+        name="default",
+        source="C:/whatever",
+        target_path=str(path),
+        volume_guid=guid,
+        repo_id=repo_id,
+        repo_dir=repo_dir,
+    )
+
+
+def _rel_repo_dir(target: Path) -> str:
+    """target 的卷内相对路径（与 cmd_init 同口径）。"""
+    from mirrorly import volume as vol
+
+    mount_root = vol.get_volume_mount_root(str(target))
+    rel = os.path.relpath(str(target), mount_root)
+    return "." if rel == "." else rel.replace("/", "\\")
+
+
+def _tree_fp(root: Path) -> dict:
+    """目录树指纹（路径 → 内容哈希），用于零写入断言。"""
+    import hashlib
+
+    fp = {}
+    for p in sorted(Path(root).rglob("*")):
+        fp[str(p)] = hashlib.sha256(p.read_bytes() if p.is_file() else b"<dir>").hexdigest()
+    return fp
+
+
+class TestM10Resolver:
+    def test_case1_anchored_fast_path(self, tmp_path) -> None:
+        target = tmp_path / "t" / "Backup"
+        info = _make_repo_at(target)
+        cfg = _anchor_cfg(target, info.volume.guid, info.repo_id, _rel_repo_dir(target))
+        repo = cli._resolve_repo(cfg)
+        assert repo.path == target / "MirrorlyRepo"
+        assert repo.repo_id == info.repo_id
+
+    def test_case2_real_api_relocation_stale_path(self, tmp_path) -> None:
+        """真实 Windows API 链路重定位：配置 path 失联（仿真盘符漂移），不改配置。"""
+        target = tmp_path / "t" / "Backup"
+        info = _make_repo_at(target)
+        stale = tmp_path / "t" / "gone"  # 旧盘符位置（已不存在）
+        cfg = _anchor_cfg(stale, info.volume.guid, info.repo_id, _rel_repo_dir(target))
+        repo = cli._resolve_repo(cfg)  # 真实 get_mount_roots：C:\ → 原位置
+        assert repo.path == target / "MirrorlyRepo"
+
+    def test_case2_fake_mount_root_relocation(self, tmp_path, monkeypatch) -> None:
+        """仿真 E 盘 Backup：fake mount root 指向同一仓库，自动重定位成功。"""
+        fake_e = tmp_path / "fakeE"
+        info = _make_repo_at(fake_e / "Backup")
+        monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
+        cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, info.repo_id, "Backup")
+        repo = cli._resolve_repo(cfg)
+        assert repo.path == fake_e / "Backup" / "MirrorlyRepo"
+
+    def test_case3_wrong_volume_at_old_path_zero_write(self, tmp_path, monkeypatch) -> None:
+        """旧盘符被另一卷占用（guid 不匹配）→ 不写旧路径，搜索 expected 卷继续。"""
+        occupied = tmp_path / "occupied"  # 旧盘符位置：被另一（不同 guid）卷占用
+        _make_repo_at(occupied)
+        fake_e = tmp_path / "fakeE"
+        expected = _make_repo_at(fake_e / "Backup")
+        before = _tree_fp(occupied)
+
+        monkeypatch.setattr("mirrorly.volume.get_volume_guid_for_path", lambda p: _FAKE_GUID_B)
+        monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
+        cfg = _anchor_cfg(occupied, _FAKE_GUID_A, expected.repo_id, "Backup")
+        repo = cli._resolve_repo(cfg)
+        assert repo.path == fake_e / "Backup" / "MirrorlyRepo"
+        assert _tree_fp(occupied) == before  # 旧路径零写入
+
+    def test_case4_guid_volume_correct_repo_id_mismatch(self, tmp_path, monkeypatch) -> None:
+        fake_e = tmp_path / "fakeE"
+        _make_repo_at(fake_e / "Backup")
+        monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
+        cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "Backup")
+        with pytest.raises(cli._IdentityMismatch, match="仓库 id 不匹配"):
+            cli._resolve_repo(cfg)
+
+    def test_case5_multiple_distinct_candidates_rejected(self, tmp_path, monkeypatch) -> None:
+        """两个不同 repo 候选（同 repo_id 的仓库副本）→ 拒绝猜测。"""
+        import shutil
+
+        fake_e = tmp_path / "fakeE"
+        info = _make_repo_at(fake_e / "Backup")
+        fake_f = tmp_path / "fakeF"
+        shutil.copytree(str(fake_e / "Backup"), str(fake_f / "Backup"))  # 同 repo_id 副本
+        monkeypatch.setattr(
+            "mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\", str(fake_f) + "\\"]
+        )
+        cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, info.repo_id, "Backup")
+        with pytest.raises(cli._IdentityMismatch, match="不唯一"):
+            cli._resolve_repo(cfg)
+
+    def test_case5f_same_repo_two_mount_roots_not_ambiguous(self, tmp_path, monkeypatch) -> None:
+        """同一卷多个挂载点指向同一 repo（samefile 去重）→ 不视为歧义。"""
+        fake_e = tmp_path / "fakeE"
+        info = _make_repo_at(fake_e / "Backup")
+        roots = [str(fake_e) + "\\", str(fake_e).upper() + "\\"]
+        monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: roots)
+        cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, info.repo_id, "Backup")
+        repo = cli._resolve_repo(cfg)
+        assert repo.path == fake_e / "Backup" / "MirrorlyRepo"
+
+    def test_case6_and_e_no_downgrade_real_api(self, tmp_path) -> None:
+        """GUID 未挂载 → fail closed；即使系统存在 serial+repo_id 完全一致的候选。
+
+        真实 API（不 monkeypatch）：_FAKE_GUID_B 无当前挂载点，而 expected
+        repo_id/repo_dir/serial 的真实仓库就在 C: 上——证明没有 serial 降级认领。
+        """
+        target = tmp_path / "t" / "Backup"
+        info = _make_repo_at(target)
+        cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_B, info.repo_id, _rel_repo_dir(target))
+        with pytest.raises(cli._IdentityMismatch, match="未连接或卷锚已失效"):
+            cli._resolve_repo(cfg)
+
+    def test_case7_volume_found_repo_missing(self, tmp_path, monkeypatch) -> None:
+        fake_e = tmp_path / "fakeE"
+        (fake_e / "Backup").mkdir(parents=True)  # 卷在、目录在、仓库缺失
+        monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
+        cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "Backup")
+        with pytest.raises(RepoError, match="预期仓库路径缺失"):
+            cli._resolve_repo(cfg)
+        assert list((fake_e / "Backup").iterdir()) == []  # 不自动 init：零新增
+
+    def test_legacy_missing_path_fail_closed_with_hint(self, tmp_path) -> None:
+        cfg = _anchor_cfg(tmp_path / "gone", None, None, None)
+        with pytest.raises(RepoError, match="legacy"):
+            cli._resolve_repo(cfg)
+
+    def test_d_runtime_repo_dir_escape_containment(self, tmp_path, monkeypatch) -> None:
+        """直接构造 TaskConfig 篡改 repo_dir：入口校验 + join 后 containment 双防线。"""
+        fake_e = tmp_path / "fakeE"
+        fake_e.mkdir()
+        # 防线 1：_resolve_repo 入口 validate_anchor（防 library API 绕过 load/write）
+        cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "../escape")
+        with pytest.raises(ConfigError, match="repo_dir"):
+            cli._resolve_repo(cfg)
+        # 防线 2：_search_anchored join 后 containment 复验（不信任单次校验）
+        monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
+        bad_cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "..\\escape")
+        with pytest.raises(cli._IdentityMismatch, match="逃逸"):
+            cli._search_anchored(bad_cfg)

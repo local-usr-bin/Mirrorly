@@ -150,3 +150,157 @@ class TestWrite:
         out = write_task_config(cfg, tmp_path)
         assert out.name == "daily-backup_01.toml"
         assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# M10 卷锚（all-or-none + 格式校验）
+# ---------------------------------------------------------------------------
+
+_VALID_GUID = "\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\"
+_VALID_REPO_ID = "0123456789abcdef0123456789abcdef"  # uuid4().hex canonical 形式
+
+
+def _anchored(
+    *,
+    volume_guid: str | None = _VALID_GUID,
+    repo_id: str | None = _VALID_REPO_ID,
+    repo_dir: str | None = "Backups",
+) -> str:
+    """生成 anchored 配置文本；参数传 None 表示省略该键（构造 partial 组合）。
+
+    锚值统一用 TOML literal string（单引号）：反斜杠不转义，值原样进入解析结果。
+    """
+    lines: list[str] = []
+    if volume_guid is not None:
+        lines.append(f"volume_guid = '{volume_guid}'")
+    if repo_id is not None:
+        lines.append(f"repo_id = '{repo_id}'")
+    if repo_dir is not None:
+        lines.append(f"repo_dir = '{repo_dir}'")
+    if not lines:
+        return MINIMAL_CONFIG
+    anchor = "\n".join(lines)
+    return MINIMAL_CONFIG.replace('path = "E:/Backups"', f'path = "E:/Backups"\n{anchor}')
+
+
+class TestAnchorValidation:
+    def test_valid_anchor_config_loads(self, tmp_path) -> None:
+        cfg = load_task_config(_write(tmp_path, _anchored()))
+        assert cfg.volume_guid == _VALID_GUID
+        assert cfg.repo_id == _VALID_REPO_ID
+        assert cfg.repo_dir == "Backups"
+
+    def test_legacy_config_has_no_anchor(self, tmp_path) -> None:
+        cfg = load_task_config(_write(tmp_path, MINIMAL_CONFIG))
+        assert cfg.volume_guid is None
+        assert cfg.repo_id is None
+        assert cfg.repo_dir is None
+
+    # A. partial anchor → ConfigError（拒绝静默降级）
+    def test_partial_anchor_guid_only(self, tmp_path) -> None:
+        with pytest.raises(ConfigError, match="卷锚字段必须同时存在"):
+            load_task_config(_write(tmp_path, _anchored(repo_id=None, repo_dir=None)))
+
+    def test_partial_anchor_missing_repo_dir(self, tmp_path) -> None:
+        with pytest.raises(ConfigError, match="缺 repo_dir"):
+            load_task_config(_write(tmp_path, _anchored(repo_dir=None)))
+
+    def test_partial_anchor_repo_id_only(self, tmp_path) -> None:
+        with pytest.raises(ConfigError, match="缺 volume_guid, repo_dir"):
+            load_task_config(_write(tmp_path, _anchored(volume_guid=None, repo_dir=None)))
+
+    def test_partial_anchor_repo_dir_only(self, tmp_path) -> None:
+        with pytest.raises(ConfigError, match="卷锚字段必须同时存在"):
+            load_task_config(_write(tmp_path, _anchored(volume_guid=None, repo_id=None)))
+
+    # B. 非法 volume_guid → ConfigError
+    @pytest.mark.parametrize(
+        "bad_guid",
+        [
+            "\\\\?\\Device\\HarddiskVolume3",  # 非 Volume GUID namespace
+            "\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}",  # 缺尾反斜杠
+            "\\\\?\\Volume{not-a-guid}\\",  # 非 GUID 内容
+            "\\\\\\\\?\\\\Volume{12345678-1234-1234-1234-123456789abc}\\\\",  # 双反斜杠
+            "C:\\",  # 盘符路径
+        ],
+    )
+    def test_invalid_volume_guid(self, tmp_path, bad_guid: str) -> None:
+        with pytest.raises(ConfigError, match="volume_guid 非法"):
+            load_task_config(_write(tmp_path, _anchored(volume_guid=bad_guid)))
+
+    def test_invalid_repo_id(self, tmp_path) -> None:
+        for bad in (
+            "not-hex-at-all",
+            "0123456789abcdef0123456789abcde",  # 31 位
+            "G123456789abcdef0123456789abcdef",  # 非十六进制字符
+        ):
+            with pytest.raises(ConfigError, match="repo_id 非法"):
+                load_task_config(_write(tmp_path, _anchored(repo_id=bad)))
+
+    # C. repo_dir 路径逃逸 → ConfigError
+    @pytest.mark.parametrize(
+        "bad_dir",
+        [
+            "../x",  # 父目录逃逸
+            "a/../b",
+            "..",
+            "C:/x",  # 盘符限定
+            "C:\\x",
+            "\\\\server\\share",  # UNC
+            "/abs",  # 绝对路径
+            "a//b",  # 空段
+            "trailing.",  # 尾点段
+            "bad<name",  # 非法字符
+        ],
+    )
+    def test_repo_dir_escape_rejected(self, tmp_path, bad_dir: str) -> None:
+        with pytest.raises(ConfigError, match="repo_dir"):
+            load_task_config(_write(tmp_path, _anchored(repo_dir=bad_dir)))
+
+    def test_repo_dir_volume_root_dot_allowed(self, tmp_path) -> None:
+        cfg = load_task_config(_write(tmp_path, _anchored(repo_dir=".")))
+        assert cfg.repo_dir == "."
+
+    def test_repo_dir_slash_normalized_to_backslash(self, tmp_path) -> None:
+        cfg = load_task_config(_write(tmp_path, _anchored(repo_dir="Backups/daily")))
+        assert cfg.repo_dir == "Backups\\daily"
+
+
+class TestAnchorWriteBoundary:
+    def test_anchored_roundtrip_via_write(self, tmp_path) -> None:
+        cfg = TaskConfig(
+            name="daily",
+            source="D:/Data",
+            target_path="E:/Backups",
+            volume_guid=_VALID_GUID,
+            repo_id=_VALID_REPO_ID,
+            repo_dir="Backups",
+        )
+        out = write_task_config(cfg, tmp_path)
+        loaded = load_task_config(out)
+        assert loaded == cfg
+
+    def test_write_rejects_partial_anchor_zero_write(self, tmp_path) -> None:
+        # 写入边界：library API 直接构造 partial 锚 → 拒绝且零写入
+        cfg = TaskConfig(
+            name="daily",
+            source="D:/Data",
+            target_path="E:/Backups",
+            volume_guid=_VALID_GUID,
+        )
+        with pytest.raises(ConfigError, match="卷锚字段必须同时存在"):
+            write_task_config(cfg, tmp_path)
+        assert not (tmp_path / "config.d").exists()
+
+    def test_write_rejects_bad_repo_dir_zero_write(self, tmp_path) -> None:
+        cfg = TaskConfig(
+            name="daily",
+            source="D:/Data",
+            target_path="E:/Backups",
+            volume_guid=_VALID_GUID,
+            repo_id=_VALID_REPO_ID,
+            repo_dir="../escape",
+        )
+        with pytest.raises(ConfigError, match="repo_dir"):
+            write_task_config(cfg, tmp_path)
+        assert not (tmp_path / "config.d").exists()

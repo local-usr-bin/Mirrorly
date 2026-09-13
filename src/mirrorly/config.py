@@ -1,20 +1,32 @@
-"""任务配置加载（T-01，ADR-011）。
+"""任务配置加载（T-01，ADR-011；M10 卷锚见 [target] 可选三键）。
 
 格式：TOML（``tomllib`` 标准库解析，零依赖）。
 结构：``config.toml``（全局默认，预留）+ ``config.d/<task>.toml``（每任务一文件）。
 解析为严格模式：未知配置节/键一律报错，防止拼写错误静默失效。
+
+M10 卷锚（all-or-none，拒绝半套配置静默降级）：
+
+- ``volume_guid``：``\\\\?\\\\Volume{GUID}\\\\`` canonical 形式（Windows 安装内稳定）
+- ``repo_id``：预期仓库 id（当前格式为 uuid4 的 32 位十六进制 canonical 形式）
+- ``repo_dir``：卷根到仓库父目录的安全相对路径（卷根为 ``"."``）
+
+三者要么全部存在并通过校验（anchored，启用自动重定位），要么全部缺失
+（legacy，仅按 ``path`` + 卷序列号校验）。
 """
 
 from __future__ import annotations
 
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .volume import VOLUME_GUID_RE
 
 #: 允许的配置节与键（严格模式白名单）
 _VALID_SECTIONS: dict[str, set[str]] = {
     "task": {"name", "source"},
-    "target": {"path", "filesystem_policy"},
+    "target": {"path", "filesystem_policy", "volume_guid", "repo_id", "repo_dir"},
     "filter": {"exclude"},
     "retention": {"keep_last", "keep_monthly"},
     "verify": {"on_write"},
@@ -78,6 +90,82 @@ class TaskConfig:
     keep_last: int = DEFAULT_KEEP_LAST
     keep_monthly: int = DEFAULT_KEEP_MONTHLY
     verify_on_write: bool = True
+    # M10 卷锚（all-or-none：三者全有=anchored，全无=legacy；partial 一律非法）
+    volume_guid: str | None = None
+    repo_id: str | None = None
+    repo_dir: str | None = None
+
+
+# repo_dir 内禁用的字符（Windows 非法文件名字符 + 控制字符由逐字符检查覆盖）
+_REPO_DIR_FORBIDDEN_CHARS = frozenset('<>"|?*')
+
+
+def _validate_repo_dir(repo_dir: str) -> None:
+    """校验 repo_dir 是安全的卷内相对路径（会被拼进 ``<mount>/<repo_dir>/MirrorlyRepo``）。
+
+    保守规则：非空字符串、非绝对（不以 ``/`` ``\\`` 开头）、非 UNC、不含 ``:``
+    （盘符限定/ADS）、按 ``\\`` 分割后每段均非空且不为 ``.``/``..``、不含
+    非法字符/控制字符、不以点或空格结尾。卷根用 ``"."`` 表示。
+    """
+    if not isinstance(repo_dir, str) or not repo_dir:
+        raise ConfigError("target.repo_dir 必须是非空字符串（卷根用 '.' 表示）")
+    if repo_dir.startswith(("/", "\\")):
+        raise ConfigError(f"target.repo_dir 不能是绝对路径/UNC: {repo_dir!r}")
+    if ":" in repo_dir:
+        raise ConfigError(f"target.repo_dir 不能含 ':'（盘符限定/ADS）: {repo_dir!r}")
+    if repo_dir == ".":
+        return
+    for part in repo_dir.replace("/", "\\").split("\\"):
+        if part in ("", ".", ".."):
+            raise ConfigError(f"target.repo_dir 含空段或 '.'/'..' 段（禁止路径逃逸）: {repo_dir!r}")
+        if any(c in _REPO_DIR_FORBIDDEN_CHARS or ord(c) < 0x20 or ord(c) == 0x7F for c in part):
+            raise ConfigError(f"target.repo_dir 含非法字符: {repo_dir!r}")
+        if part[-1] in (".", " "):
+            raise ConfigError(f"target.repo_dir 存在以点/空格结尾的段: {repo_dir!r}")
+
+
+def validate_anchor(volume_guid: str | None, repo_id: str | None, repo_dir: str | None) -> None:
+    """校验 M10 卷锚三字段 all-or-none 与各自格式。
+
+    - 全部缺失：合法（legacy 配置，按 path+serial 校验，无自动重定位）
+    - 全部存在且通过校验：合法（anchored 配置）
+    - 任何部分组合 / 格式非法：ConfigError（拒绝半套配置静默降级）
+    """
+    present = [
+        key
+        for key, value in (
+            ("volume_guid", volume_guid),
+            ("repo_id", repo_id),
+            ("repo_dir", repo_dir),
+        )
+        if value is not None
+    ]
+    if not present:
+        return
+    if len(present) != 3:
+        missing = ", ".join(k for k in ("volume_guid", "repo_id", "repo_dir") if k not in present)
+        raise ConfigError(
+            f"target 卷锚字段必须同时存在或同时缺失（缺 {missing}；"
+            "半套配置拒绝——不允许从 GUID 安全模式静默降级）"
+        )
+    if not VOLUME_GUID_RE.match(volume_guid):  # type: ignore[arg-type]
+        raise ConfigError(
+            f"target.volume_guid 非法（只接受 canonical 形式，含尾反斜杠）: {volume_guid!r}"
+        )
+    try:
+        repo_id_ok = uuid.UUID(repo_id).hex == repo_id.lower()  # type: ignore[arg-type]
+    except (ValueError, AttributeError):
+        repo_id_ok = False
+    if not repo_id_ok:
+        raise ConfigError(
+            f"target.repo_id 非法（只接受 32 位十六进制 canonical 形式）: {repo_id!r}"
+        )
+    _validate_repo_dir(repo_dir)  # type: ignore[arg-type]
+
+
+def normalize_repo_dir(repo_dir: str) -> str:
+    """repo_dir 规范化：``/`` 分隔符统一为 ``\\``，其余形式原样（已通过校验）。"""
+    return "." if repo_dir == "." else repo_dir.replace("/", "\\")
 
 
 def load_task_config(path: str | Path) -> TaskConfig:
@@ -134,6 +222,17 @@ def load_task_config(path: str | Path) -> TaskConfig:
     except ConfigError as e:
         raise ConfigError(f"{path}: task.name {e}") from e
 
+    # M10 卷锚：all-or-none 校验（partial → ConfigError，拒绝静默降级）
+    volume_guid = target.get("volume_guid")
+    repo_id = target.get("repo_id")
+    repo_dir = target.get("repo_dir")
+    try:
+        validate_anchor(volume_guid, repo_id, repo_dir)
+    except ConfigError as e:
+        raise ConfigError(f"{path}: {e}") from e
+    if repo_dir is not None:
+        repo_dir = normalize_repo_dir(repo_dir)
+
     return TaskConfig(
         name=task["name"],
         source=task["source"],
@@ -143,16 +242,21 @@ def load_task_config(path: str | Path) -> TaskConfig:
         keep_last=keep_last,
         keep_monthly=keep_monthly,
         verify_on_write=on_write,
+        volume_guid=volume_guid,
+        repo_id=repo_id,
+        repo_dir=repo_dir,
     )
 
 
 def write_task_config(cfg: TaskConfig, config_root: str | Path) -> Path:
     """将任务配置写入 ``<config_root>/config.d/<name>.toml``，返回文件路径。
 
-    写入边界自身校验任务名：name 直接拼进输出路径，library API 不依赖
-    调用者提前验证；非法 name 在创建任何目录/文件之前抛 ConfigError。
+    写入边界自身校验任务名与卷锚三字段：name 直接拼进输出路径、卷锚决定
+    运行时目标定位，library API 不依赖调用者提前验证；非法值在创建任何
+    目录/文件之前抛 ConfigError。
     """
     validate_task_name(cfg.name)
+    validate_anchor(cfg.volume_guid, cfg.repo_id, cfg.repo_dir)
     out_dir = Path(config_root) / "config.d"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{cfg.name}.toml"
@@ -163,6 +267,16 @@ def write_task_config(cfg: TaskConfig, config_root: str | Path) -> Path:
 def dump_task_config(cfg: TaskConfig) -> str:
     """序列化为 TOML 文本（供 init 生成默认配置）。"""
     excludes = ", ".join(_toml_basic_str(p) for p in cfg.exclude)
+    anchor_lines = ""
+    if cfg.volume_guid is not None:
+        assert cfg.repo_id is not None and cfg.repo_dir is not None  # validate_anchor 保证
+        anchor_lines = (
+            f"volume_guid = {_toml_basic_str(cfg.volume_guid)}"
+            "  # M10 卷锚：Volume GUID（Windows 安装内稳定，盘符漂移后定位同一卷）\n"
+            f"repo_id = {_toml_basic_str(cfg.repo_id)}  # 预期仓库 id（重定位确认）\n"
+            f"repo_dir = {_toml_basic_str(cfg.repo_dir)}"
+            '  # 卷根到仓库父目录的相对路径（卷根为 "."）\n'
+        )
     return (
         "# Mirrorly 备份任务配置（ADR-011：严格模式，未知键会被拒绝）\n"
         "[task]\n"
@@ -171,6 +285,7 @@ def dump_task_config(cfg: TaskConfig) -> str:
         "\n"
         "[target]\n"
         f"path = {_toml_basic_str(cfg.target_path)}\n"
+        f"{anchor_lines}"
         f"filesystem_policy = {_toml_basic_str(cfg.filesystem_policy)}"
         "  # strict: 非 NTFS 拒绝；warn: 提示后由用户确认继续\n"
         "\n"
