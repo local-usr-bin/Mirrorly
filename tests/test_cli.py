@@ -30,6 +30,7 @@ from mirrorly.manifest import create_manifest, list_manifests, load_manifest, wr
 from mirrorly.repo import RepoError, VolumeInfo, init_repo, load_repo
 from mirrorly.scan import detect_changes, scan_source, to_long_path
 from mirrorly.snapshot import write_snapshot
+from mirrorly.verify import verify_snapshot
 
 # ---------------------------------------------------------------------------
 # 辅助
@@ -895,8 +896,12 @@ class TestB12ResumeHashCoverage:
             repo, create_manifest("snap-inc", str(ws["src"]), repo.hash_algorithm, current)
         )
         write_snapshot(
-            ws["src"], repo, current, changes,
-            snapshot_id="snap-inc", verify_writes=verify_writes,
+            ws["src"],
+            repo,
+            current,
+            changes,
+            snapshot_id="snap-inc",
+            verify_writes=verify_writes,
         )
         for rel in post_files:
             (repo.path / "snapshots" / "snap-inc" / rel).unlink()
@@ -1029,9 +1034,7 @@ class TestB12ResumeHashCoverage:
         m = self._final_manifest(repo)
         entries = {e.path: e for e in m.entries if not e.is_dir}
         # 核心断言：不允许任何普通文件 entry 以 sha=None 进入 complete manifest
-        assert all(e.sha for e in entries.values()), {
-            p: e.sha for p, e in entries.items()
-        }
+        assert all(e.sha for e in entries.values()), {p: e.sha for p, e in entries.items()}
         # pre0 未经认证不得复用：走正常 copy/write-verify 路径
         rep = self._backup_report(repo, m.snapshot_id)
         assert rep["resume_uncertified"] == ["pre0.txt"]
@@ -1062,9 +1065,7 @@ class TestB12ResumeHashCoverage:
             if str(path) == victim_src and not fired:
                 fired.append(True)
                 st = real_stat(path, *args, **kwargs)
-                return SimpleNamespace(
-                    st_size=st.st_size, st_mtime_ns=st.st_mtime_ns + 1_000_000
-                )
+                return SimpleNamespace(st_size=st.st_size, st_mtime_ns=st.st_mtime_ns + 1_000_000)
             return real_stat(path, *args, **kwargs)
 
         monkeypatch.setattr(os, "stat", lying_stat)
@@ -1073,9 +1074,7 @@ class TestB12ResumeHashCoverage:
 
         m = self._final_manifest(repo)
         entries = {e.path: e for e in m.entries if not e.is_dir}
-        assert all(e.sha for e in entries.values()), {
-            p: e.sha for p, e in entries.items()
-        }
+        assert all(e.sha for e in entries.values()), {p: e.sha for p, e in entries.items()}
         rep = self._backup_report(repo, m.snapshot_id)
         assert rep["resume_uncertified"] == ["pre0.txt"]
         assert "pre0.txt" in rep["copied"]
@@ -1084,9 +1083,9 @@ class TestB12ResumeHashCoverage:
         assert _run(ws, "verify", "--snapshot", m.snapshot_id) == 0
 
     def test_pre_publication_guard_fails_closed(self, ws, snap_ids, monkeypatch) -> None:
-        """B1-2 defense-in-depth：模拟未来回归（认证哈希丢失、条目以
-        sha=None 停留在可 unchanged 复用状态且未标记 uncertified）→
-        发布前终检必须 fail closed，complete manifest 不得发布。"""
+        """B1-2 defense-in-depth：模拟未来回归（认证哈希丢失，且
+        sha=None 条目重新被错误判为 unchanged）→ 发布前终检必须
+        fail closed，complete manifest 不得发布。"""
         from dataclasses import replace
 
         _write(ws["src"] / "pre0.txt", b"pre-zero")
@@ -1102,19 +1101,214 @@ class TestB12ResumeHashCoverage:
             return replace(
                 baseline,
                 uncertified=(),
-                previous={
-                    p: replace(e, sha=None) for p, e in baseline.previous.items()
-                },
+                previous={p: replace(e, sha=None) for p, e in baseline.previous.items()},
             )
 
         monkeypatch.setattr(cli, "build_resume_baseline", regressed_build)
 
-        # fail closed：RecoveryError → exit 1，不发布 complete
+        real_detect = cli.detect_changes
+
+        def regressed_detect(*args, **kwargs):
+            changes = real_detect(*args, **kwargs)
+            # 同时模拟 eligibility guard 回归：把未认证 pre0 从 modified
+            # 错误恢复成 unchanged，使其硬链接但没有 carried hash。
+            return replace(changes, modified=[p for p in changes.modified if p != "pre0.txt"])
+
+        monkeypatch.setattr(cli, "detect_changes", regressed_detect)
+
+        # fail closed：SnapshotError → exit 1，不发布 complete
         assert _run(ws, "backup", "--yes") == 1
         # 新快照保持 incomplete（可再次续传），不产生新的 complete manifest
         summaries = list_manifests(repo)
         assert {s.snapshot_id for s in summaries} == {"snap-inc", "2026-09-13_000001"}
         assert all(s.status == "incomplete" for s in summaries)
+
+
+class TestVerifyOnWriteHashCoverageTransition:
+    """Gate B：False→True 时无哈希 complete 基线必须安全重物化。"""
+
+    @staticmethod
+    def _set_verify_on_write(ws, enabled: bool) -> None:
+        cfg_file = ws["config"] / "config.d" / "default.toml"
+        current = cfg_file.read_text(encoding="utf-8")
+        old = f"on_write = {str(not enabled).lower()}"
+        new = f"on_write = {str(enabled).lower()}"
+        assert old in current
+        cfg_file.write_text(current.replace(old, new), encoding="utf-8")
+
+    @staticmethod
+    def _complete_manifests(repo):
+        summaries = sorted(
+            (s for s in list_manifests(repo) if s.status == "complete"),
+            key=lambda s: s.snapshot_id,
+        )
+        return [load_manifest(repo, s.snapshot_id) for s in summaries]
+
+    @staticmethod
+    def _backup_report(repo, snapshot_id: str) -> dict:
+        return json.loads(
+            list((repo.path / "logs").glob(f"backup-{snapshot_id}-*.json"))[0].read_text(
+                encoding="utf-8"
+            )
+        )
+
+    @staticmethod
+    def _replace_same_size(path: Path, replacement: bytes) -> None:
+        """以同尺寸 sibling replacement 打断 hardlink，避免污染其他快照。"""
+        original = path.read_bytes()
+        assert replacement != original and len(replacement) == len(original)
+        stat_before = path.stat()
+        temp = path.with_name(path.name + ".corrupt-replacement")
+        temp.write_bytes(replacement)
+        os.utime(temp, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
+        os.replace(temp, path)
+        assert path.read_bytes() == replacement
+        assert path.stat().st_size == stat_before.st_size
+        assert path.stat().st_mtime_ns == stat_before.st_mtime_ns
+
+    def test_false_to_true_unchanged_recopies_and_full_verify_detects_corruption(
+        self, ws, snap_ids
+    ) -> None:
+        _write(ws["src"] / "alpha.txt", b"alpha-deterministic")
+        _write(ws["src"] / "nested" / "beta.bin", bytes(range(32)))
+        assert _init(ws) == 0
+        self._set_verify_on_write(ws, False)
+        assert _run(ws, "backup", "--yes") == 0
+        repo = _repo(ws)
+        first = self._complete_manifests(repo)[0]
+        first_entries = {e.path: e for e in first.entries if not e.is_dir}
+        assert all(e.sha is None for e in first_entries.values())
+
+        source_metadata = {
+            rel: (entry.size, entry.mtime_ns)
+            for rel, entry in scan_source(ws["src"], ()).entries.items()
+            if not entry.is_dir
+        }
+        self._set_verify_on_write(ws, True)
+        assert _run(ws, "backup", "--yes") == 0
+        first, second = self._complete_manifests(repo)
+        second_entries = {e.path: e for e in second.entries if not e.is_dir}
+        assert source_metadata == {
+            rel: (entry.size, entry.mtime_ns)
+            for rel, entry in scan_source(ws["src"], ()).entries.items()
+            if not entry.is_dir
+        }
+        assert all(e.sha for e in second_entries.values())
+        for rel, entry in second_entries.items():
+            assert entry.sha == hash_file(to_long_path(ws["src"] / rel), repo.hash_algorithm)
+
+        report = self._backup_report(repo, second.snapshot_id)
+        assert report["linked"] == []
+        assert sorted(report["copied"]) == ["alpha.txt", "nested/beta.bin"]
+        assert sorted(report["changes"]["modified"]) == ["alpha.txt", "nested/beta.bin"]
+        assert not os.path.samefile(
+            repo.path / "snapshots" / first.snapshot_id / "alpha.txt",
+            repo.path / "snapshots" / second.snapshot_id / "alpha.txt",
+        )
+
+        before = verify_snapshot(repo, second.snapshot_id)
+        assert before.ok
+        assert before.hashed_files == before.checked_files == 2
+        assert before.unhashed_entries == 0
+
+        victim = repo.path / "snapshots" / second.snapshot_id / "alpha.txt"
+        original = victim.read_bytes()
+        self._replace_same_size(victim, bytes([original[0] ^ 0xFF]) + original[1:])
+        after = verify_snapshot(repo, second.snapshot_id)
+        assert not after.ok
+        assert after.hashed_files == after.checked_files == 2
+        assert after.unhashed_entries == 0
+        assert [(issue.path, issue.kind) for issue in after.issues] == [("alpha.txt", "corrupt")]
+        assert _run(ws, "verify", "--snapshot", second.snapshot_id) == 4
+
+    def test_corrupted_unhashed_complete_candidate_is_not_reused(self, ws, snap_ids) -> None:
+        source_bytes = b"trusted-source-content"
+        _write(ws["src"] / "victim.bin", source_bytes)
+        assert _init(ws) == 0
+        self._set_verify_on_write(ws, False)
+        assert _run(ws, "backup", "--yes") == 0
+        repo = _repo(ws)
+        first = self._complete_manifests(repo)[0]
+        candidate = repo.path / "snapshots" / first.snapshot_id / "victim.bin"
+        corrupted = bytes([source_bytes[0] ^ 0xFF]) + source_bytes[1:]
+        self._replace_same_size(candidate, corrupted)
+        assert (ws["src"] / "victim.bin").read_bytes() == source_bytes
+
+        self._set_verify_on_write(ws, True)
+        assert _run(ws, "backup", "--yes") == 0
+        _first, second = self._complete_manifests(repo)
+        final = repo.path / "snapshots" / second.snapshot_id / "victim.bin"
+        entry = next(e for e in second.entries if e.path == "victim.bin")
+        report = self._backup_report(repo, second.snapshot_id)
+        assert report["copied"] == ["victim.bin"]
+        assert report["linked"] == []
+        assert final.read_bytes() == source_bytes
+        assert final.read_bytes() != corrupted
+        assert entry.sha == hash_file(to_long_path(ws["src"] / "victim.bin"))
+        assert verify_snapshot(repo, second.snapshot_id).ok
+
+    def test_current_false_preserves_unhashed_hardlink_reuse(self, ws, snap_ids) -> None:
+        _write(ws["src"] / "stable.txt", b"stable")
+        assert _init(ws) == 0
+        self._set_verify_on_write(ws, False)
+        assert _run(ws, "backup", "--yes") == 0
+        assert _run(ws, "backup", "--yes") == 0
+        repo = _repo(ws)
+        first, second = self._complete_manifests(repo)
+        assert all(e.sha is None for e in first.entries if not e.is_dir)
+        assert all(e.sha is None for e in second.entries if not e.is_dir)
+        report = self._backup_report(repo, second.snapshot_id)
+        assert report["linked"] == ["stable.txt"]
+        assert report["copied"] == []
+        assert os.path.samefile(
+            repo.path / "snapshots" / first.snapshot_id / "stable.txt",
+            repo.path / "snapshots" / second.snapshot_id / "stable.txt",
+        )
+        verification = verify_snapshot(repo, second.snapshot_id)
+        assert verification.ok
+        assert verification.hashed_files == 0
+        assert verification.unhashed_entries == 1
+
+    def test_true_to_true_unchanged_carries_hash_and_hardlinks(self, ws, snap_ids) -> None:
+        _write(ws["src"] / "stable.txt", b"stable")
+        assert _init(ws) == 0
+        assert _run(ws, "backup", "--yes") == 0
+        assert _run(ws, "backup", "--yes") == 0
+        repo = _repo(ws)
+        first, second = self._complete_manifests(repo)
+        first_entry = next(e for e in first.entries if e.path == "stable.txt")
+        second_entry = next(e for e in second.entries if e.path == "stable.txt")
+        assert first_entry.sha
+        assert second_entry.sha == first_entry.sha
+        report = self._backup_report(repo, second.snapshot_id)
+        assert report["linked"] == ["stable.txt"]
+        assert report["copied"] == []
+        assert os.path.samefile(
+            repo.path / "snapshots" / first.snapshot_id / "stable.txt",
+            repo.path / "snapshots" / second.snapshot_id / "stable.txt",
+        )
+        verification = verify_snapshot(repo, second.snapshot_id)
+        assert verification.ok
+        assert verification.hashed_files == verification.checked_files == 1
+        assert verification.unhashed_entries == 0
+
+    def test_global_publication_guard_rejects_missing_hash(self, ws, snap_ids, monkeypatch) -> None:
+        """模拟写入校验哈希在 merge 前丢失；任何 True backup 都必须 fail closed。"""
+        from dataclasses import replace
+
+        _write(ws["src"] / "file.txt", b"content")
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        real_write = cli.write_snapshot
+
+        def drop_hashes(*args, **kwargs):
+            return replace(real_write(*args, **kwargs), hashes={})
+
+        monkeypatch.setattr(cli, "write_snapshot", drop_hashes)
+        assert _run(ws, "backup", "--yes") == 1
+        summaries = list_manifests(repo)
+        assert len(summaries) == 1
+        assert summaries[0].status == "incomplete"
 
 
 class TestBackupLockScope:

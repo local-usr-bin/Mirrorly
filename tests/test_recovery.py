@@ -265,9 +265,7 @@ class TestTmpResidueOwnership:
         monkeypatch.undo()
 
         snap = repo.path / "snapshots" / "snap1"
-        residue = sorted(
-            p.name for p in snap.rglob("*.mrtmp") if p.is_file()
-        )
+        residue = sorted(p.name for p in snap.rglob("*.mrtmp") if p.is_file())
         assert residue, "真实写入路径应留下 staging temp"
 
         cleaned = clean_tmp_residue(repo)
@@ -583,9 +581,7 @@ class TestResumeBaselineContentCertification:
             if str(path) == victim and not fired:
                 fired.append(True)
                 st = real_stat(path, *args, **kwargs)
-                return SimpleNamespace(
-                    st_size=st.st_size, st_mtime_ns=st.st_mtime_ns + 1_000_000
-                )
+                return SimpleNamespace(st_size=st.st_size, st_mtime_ns=st.st_mtime_ns + 1_000_000)
             return real_stat(path, *args, **kwargs)
 
         monkeypatch.setattr(os, "stat", lying_stat)

@@ -627,19 +627,19 @@ def _scan_and_detect(args: argparse.Namespace, cfg: TaskConfig, baseline: _Basel
     # --full-hash：跳过元数据初筛——把基线 mtime 置为不可能匹配的值，
     # 强制 detect_changes 对所有共存文件做哈希复核（复用 ADR-006 冻结逻辑）
     prev_for_detect = baseline.previous
-    if baseline.uncertified:
-        # B1-2 blocker：认证未完成的续传条目（源 stat 瞬时失败 / 认证时
-        # 元数据与清单不一致）不得走 unchanged 硬链接复用——若源随后恢复
-        # 可读且 size/mtime 恢复清单值，detect_changes 会判未变而
-        # carried_shas 不含该条目，complete manifest 将再现 sha=None。
+    force_recopy = set(baseline.uncertified)
+    if cfg.verify_on_write:
+        # 当前已启用写入校验时，任何缺少可信哈希的基线文件都不得走
+        # unchanged 硬链接复用。尤其是 False→True：旧 complete snapshot
+        # 的 sha=None 副本可能已损坏，不能只重算旧副本哈希后为其背书。
+        # 将其送入既有 copy/write-verify 路径，以当前源重新物化并获得哈希。
+        force_recopy.update(p for p, e in baseline.previous.items() if e.sha is None)
+    if force_recopy:
         # mtime 置为不可能值（与 --full-hash 同一冻结机制）强制哈希复核：
         # prev.sha=None → 保守判 modified → 正常 write-verify 重拷获得可信
         # 哈希；源已删除的条目则维持 deleted 分类（keys 不变）。
-        uncertified = set(baseline.uncertified)
         prev_for_detect = {
-            k: PreviousEntry(size=v.size, mtime_ns=-1, sha=v.sha)
-            if k in uncertified
-            else v
+            k: PreviousEntry(size=v.size, mtime_ns=-1, sha=v.sha) if k in force_recopy else v
             for k, v in prev_for_detect.items()
         }
     if args.full_hash:
@@ -698,21 +698,18 @@ def cmd_backup(args: argparse.Namespace) -> int:
         final_manifest = create_manifest(
             snapshot_id, source_root, repo.hash_algorithm, final_current, hashes=merged_hashes
         )
-        # B1-2 defense-in-depth：发布前终检。resume + verify_on_write=True 的
-        # complete 快照不允许存在无可信哈希的普通文件条目——正常数据流
-        # （certified 结转 / untrusted·uncertified·missing 重拷哈希）下
-        # 此断言恒真；若未来回归重新引入 silent sha=None 复用路径，在此
-        # fail closed（新快照保持 incomplete，可再次续传），绝不给
-        # 「未证明的副本」补哈希发布。
-        if baseline.resumed_from and cfg.verify_on_write:
+        # 全局 defense-in-depth：当前 verify_on_write=True 的 complete 快照
+        # 不允许存在无可信哈希的普通文件条目。skipped/deleted 文件已不在
+        # final_current，目录不需要内容哈希；其余文件必须来自可信结转，或
+        # 正常 copy/write-verify。若未来回归产生 coverage gap，在此 fail
+        # closed（新快照保持 incomplete），绝不现场重哈希副本来生成信任。
+        if cfg.verify_on_write:
             unhashed_final = sorted(
-                rel
-                for rel, e in final_current.items()
-                if not e.is_dir and rel not in merged_hashes
+                entry.path for entry in final_manifest.entries if not entry.is_dir and not entry.sha
             )
             if unhashed_final:
-                raise RecoveryError(
-                    f"续传快照 {snapshot_id} 存在 {len(unhashed_final)} 个未获得"
+                raise SnapshotError(
+                    f"快照 {snapshot_id} 存在 {len(unhashed_final)} 个未获得"
                     f"可信哈希的文件（首个: {unhashed_final[0]!r}），"
                     "拒绝发布 complete（fail closed）"
                 )
