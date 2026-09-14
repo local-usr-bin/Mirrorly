@@ -583,6 +583,9 @@ class TestInterruptedBackupResume:
         assert new_id != ids[0]
         m = json.loads((self.repo / "manifests" / f"{new_id}.json").read_text(encoding="utf-8"))
         assert m["status"] == "complete"
+        # B1-2：verify_on_write=True（默认配置）下 resume 发布的 complete 快照
+        # 不得因 PRE_FILE 复用而静默失去内容完整性覆盖——所有文件 entry 必须有哈希
+        assert all(e["sha"] for e in m["entries"] if e["type"] == "file")
         rep = json.loads(
             list((self.repo / "logs").glob(f"backup-{new_id}*.json"))[0].read_text(encoding="utf-8")
         )
@@ -593,9 +596,13 @@ class TestInterruptedBackupResume:
         # 无 tmp 残留；旧 incomplete 目录已清理
         assert list(self.repo.rglob("*.mrtmp")) == []
         assert not (self.repo / "snapshots" / ids[0]).exists()
-        # 最终 complete 可 verify
-        r = run_cli("--config", str(self.cfg_root), "verify")
+        # 最终 complete 可 verify；且必须直接断言完整性覆盖（B1-2 教训：
+        # rc==0 不代表内容被哈希校验——sha=None 条目会被静默跳过）
+        r = run_cli("--config", str(self.cfg_root), "verify", "--json")
         assert r.returncode == 0, r.stdout + r.stderr
+        vrep = json.loads(r.stdout)["snapshots"][0]
+        assert vrep["unhashed_entries"] == 0
+        assert vrep["hashed_files"] == vrep["checked_files"] == 60
 
 
 # ---------------------------------------------------------------------------

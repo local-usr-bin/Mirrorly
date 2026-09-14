@@ -20,6 +20,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from .hashing import hash_file
 from .manifest import (
     STATUS_COMPLETE,
     STATUS_INCOMPLETE,
@@ -53,7 +54,18 @@ class ResumeBaseline:
 
     - previous/previous_dirs：incomplete 清单中已确认存在于快照目录的条目；
     - missing：清单中记录但尚未复制的文件（正常中断态，调用方应重新复制，
-      detect_changes 会因基线中无记录而将其判为 added）。
+      detect_changes 会因基线中无记录而将其判为 added）；
+    - untrusted：verify_content=True 时已物化但内容与当前源不一致的条目
+      （中断后副本可能被损坏）。这些条目**不纳入 previous**（detect_changes
+      判为 added 走正常 write-verify 重新复制），绝不把未证明的旧副本
+      重新哈希后认证为正确备份数据（B1-2）；
+    - uncertified：verify_content=True 但内容等价认证**未完成**的已物化条目
+      （源 stat 瞬时失败，或认证瞬间源元数据与清单记录不一致）。条目
+      保留在 previous（真实元数据，维持 detect_changes 的 modified/deleted
+      分类），但 sha 保持 None 且**不得走 unchanged 复用**——否则状态反转
+      （源恢复可读、size/mtime 恢复清单值）会让 complete manifest 再现
+      sha=None（B1-2 blocker）。调用方对 uncertified 条目强制重拷
+      （见 cli._scan_and_detect 的 mtime 失配处理）。
     """
 
     snapshot_id: str
@@ -61,6 +73,8 @@ class ResumeBaseline:
     previous: dict[str, PreviousEntry]
     previous_dirs: frozenset[str]
     missing: tuple[str, ...] = ()
+    untrusted: tuple[str, ...] = ()
+    uncertified: tuple[str, ...] = ()
 
 
 def _validate_snapshot_id(snapshot_id: str) -> None:
@@ -214,7 +228,13 @@ def clean_tmp_residue(repo: RepoInfo, snapshot_id: str | None = None) -> list[st
     return sorted(cleaned)
 
 
-def build_resume_baseline(repo: RepoInfo, snapshot_id: str) -> ResumeBaseline:
+def build_resume_baseline(
+    repo: RepoInfo,
+    snapshot_id: str,
+    *,
+    source: str | Path | None = None,
+    verify_content: bool = False,
+) -> ResumeBaseline:
     """以 incomplete 快照构建续传基线（只读校验，不修改任何数据）。
 
     校验（任一不满足即 RecoveryError，不静默继续）：
@@ -224,6 +244,37 @@ def build_resume_baseline(repo: RepoInfo, snapshot_id: str) -> ResumeBaseline:
 
     清单中记录但目录中缺失的文件属于正常中断态，收入 missing 显式报告，
     不纳入 previous（detect_changes 会将其判为 added 重新复制）。
+
+    内容等价认证（B1-2，仅 verify_content=True 且提供 source 时启用）：
+    incomplete manifest 在物化前落盘、从不携带哈希，因此已物化条目
+    entry.sha 恒为 None。若直接复用（硬链接）并结转，最终 complete
+    manifest 会让这些文件永久失去内容完整性覆盖（full verify 对
+    sha=None 条目只查存在/类型/大小）。为此，对「按元数据会被判为未变
+    而复用」的条目（当前源 size+mtime_ns 与清单记录一致），分别重算
+    源文件与 recovered 副本的内容哈希并比对：
+
+    - 相等 → 证明 recovered content == 当前正确 source content，
+      PreviousEntry.sha 记入该哈希（经 carried_shas 结转入 final manifest）；
+    - 不等 → 不信任旧副本：条目收入 untrusted 且不纳入 previous，
+      由 detect_changes 判 added 走正常 write-verify 重新复制。
+      **绝不对未证明相等的 recovered 副本重新哈希后认证**——那只会给
+      可能已损坏的数据重新签名；
+    - 认证未完成（源 stat 瞬时失败 / 认证瞬间源元数据与清单不一致）
+      → 条目收入 uncertified、sha 保持 None，但保留在 previous 中
+      （真实元数据，维持 modified/deleted 分类）。这些条目**不得走
+      unchanged 复用**：若后续状态反转（源恢复可读、或 size/mtime
+      恢复清单值），detect_changes 判未变而 carried_shas 不含该条目，
+      complete manifest 将再现 sha=None（B1-2 blocker）。调用方
+      （cli._scan_and_detect）对 uncertified 条目把基线 mtime 置为
+      不可能值，强制哈希复核并保守判 modified → 正常 write-verify
+      重拷获得可信哈希；源已删除的条目则保持 deleted 分类。
+
+    TOCTOU：先哈希源再哈希副本，窗口内任一侧变动倾向判不等 → 重新复制
+    （fail safe）；认证完成后源再变化时，硬链接内容 == 已认证副本 ==
+    记录的哈希，快照自洽（与正常未变文件硬链接同一保证级别）。
+
+    verify_content=False（用户显式关闭 verify_on_write）时保持既有语义：
+    不做内容认证，sha 原样结转（恒 None），不强制哈希覆盖。
     """
     _validate_snapshot_id(snapshot_id)
     try:
@@ -240,6 +291,8 @@ def build_resume_baseline(repo: RepoInfo, snapshot_id: str) -> ResumeBaseline:
     previous: dict[str, PreviousEntry] = {}
     previous_dirs: set[str] = set()
     missing: list[str] = []
+    untrusted: list[str] = []
+    uncertified: list[str] = []
     for entry in manifest.entries:
         target = snap_dir / Path(entry.path)
         if entry.is_dir:
@@ -262,9 +315,31 @@ def build_resume_baseline(repo: RepoInfo, snapshot_id: str) -> ResumeBaseline:
                 f"清单与快照内容不一致: {entry.path!r} "
                 f"清单记录大小 {entry.size}，实际 {actual_size}"
             )
-        previous[entry.path] = PreviousEntry(
-            size=entry.size, mtime_ns=entry.mtime_ns, sha=entry.sha
-        )
+        sha = entry.sha
+        if verify_content and sha is None and source is not None:
+            src_file = Path(source) / Path(entry.path)
+            try:
+                sst = os.stat(to_long_path(src_file))
+                metadata_match = sst.st_size == entry.size and sst.st_mtime_ns == entry.mtime_ns
+            except OSError:
+                metadata_match = False
+            if metadata_match:
+                src_hash = hash_file(to_long_path(src_file), repo.hash_algorithm)
+                if src_hash == hash_file(to_long_path(target), repo.hash_algorithm):
+                    sha = src_hash
+                else:
+                    untrusted.append(entry.path)
+                    continue
+            else:
+                # 认证未完成（源暂不可读，或认证瞬间源元数据与清单不一致）。
+                # 绝不停留在「可 unchanged 复用」的普通基线状态：若后续状态
+                # 反转（源恢复可读 / size+mtime 恢复清单值），detect_changes
+                # 会判未变走硬链接复用，而 carried_shas 不含该条目，complete
+                # manifest 将再现 sha=None（B1-2 blocker）。条目保留在
+                # previous（真实元数据，维持 modified/deleted 分类），由调用方
+                # 强制走重拷路径。
+                uncertified.append(entry.path)
+        previous[entry.path] = PreviousEntry(size=entry.size, mtime_ns=entry.mtime_ns, sha=sha)
 
     return ResumeBaseline(
         snapshot_id=snapshot_id,
@@ -272,6 +347,8 @@ def build_resume_baseline(repo: RepoInfo, snapshot_id: str) -> ResumeBaseline:
         previous=previous,
         previous_dirs=frozenset(previous_dirs),
         missing=tuple(sorted(missing)),
+        untrusted=tuple(sorted(untrusted)),
+        uncertified=tuple(sorted(uncertified)),
     )
 
 

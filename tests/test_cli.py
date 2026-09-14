@@ -18,15 +18,18 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from mirrorly import cli
 from mirrorly.cli import main
 from mirrorly.config import ConfigError, TaskConfig, validate_task_name
-from mirrorly.manifest import list_manifests, load_manifest
+from mirrorly.hashing import hash_file
+from mirrorly.manifest import create_manifest, list_manifests, load_manifest, write_manifest
 from mirrorly.repo import RepoError, VolumeInfo, init_repo, load_repo
-from mirrorly.scan import to_long_path
+from mirrorly.scan import detect_changes, scan_source, to_long_path
+from mirrorly.snapshot import write_snapshot
 
 # ---------------------------------------------------------------------------
 # 辅助
@@ -874,6 +877,244 @@ class TestB1SnapshotImmutability:
         assert (snap2 / "trigger.txt").read_bytes() == b"trigger"
         # verify --all 对全部历史快照成功
         assert _run(ws, "verify", "--all") == 0
+
+
+class TestB12ResumeHashCoverage:
+    """Gate B1-2 回归：verify_on_write=True 时 crash→resume 发布的 complete
+    快照不得因 PRE_FILE 复用而静默 sha=None（full verify false negative）；
+    crash 后被损坏的 recovered 副本不得被重新哈希认证为正确备份数据。"""
+
+    def _make_interrupted(self, ws, post_files, verify_writes=True):
+        """用 production 写路径构造真实中断现场：incomplete manifest（物化前
+        落盘，全 entry sha=None）+ 部分物化的快照目录（post_files 模拟中断
+        时未来得及复制的文件，删除后处于正常中断态）。"""
+        repo = _repo(ws)
+        current = scan_source(ws["src"], ()).entries
+        changes = detect_changes(ws["src"], current, None)
+        write_manifest(
+            repo, create_manifest("snap-inc", str(ws["src"]), repo.hash_algorithm, current)
+        )
+        write_snapshot(
+            ws["src"], repo, current, changes,
+            snapshot_id="snap-inc", verify_writes=verify_writes,
+        )
+        for rel in post_files:
+            (repo.path / "snapshots" / "snap-inc" / rel).unlink()
+        return repo
+
+    def _final_manifest(self, repo):
+        summaries = list_manifests(repo)
+        assert len(summaries) == 1  # 旧 incomplete 已被善后删除
+        m = load_manifest(repo, summaries[0].snapshot_id)
+        assert m.status == "complete"
+        return m
+
+    def _backup_report(self, repo, snapshot_id) -> dict:
+        return json.loads(
+            list((repo.path / "logs").glob(f"backup-{snapshot_id}-*.json"))[0].read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_resume_grants_full_hash_coverage(self, ws, snap_ids) -> None:
+        _write(ws["src"] / "pre0.txt", b"pre-zero")
+        _write(ws["src"] / "pre1.txt", b"pre-one")
+        _write(ws["src"] / "post0.txt", b"post-zero")
+        assert _init(ws) == 0
+        repo = self._make_interrupted(ws, ["post0.txt"])
+        assert _run(ws, "backup", "--yes") == 0
+
+        m = self._final_manifest(repo)
+        assert m.snapshot_id != "snap-inc"
+        entries = {e.path: e for e in m.entries if not e.is_dir}
+        # Test A：全部文件 entry 获得有效哈希覆盖，无 sha=None 静默降级
+        assert set(entries) == {"pre0.txt", "pre1.txt", "post0.txt"}
+        assert all(e.sha for e in entries.values())
+        # Test C：认证哈希 == 当前源内容哈希（source↔recovered 比较真实执行，
+        # 不是对副本的盲目重签名）
+        assert entries["pre0.txt"].sha == hash_file(
+            to_long_path(ws["src"] / "pre0.txt"), repo.hash_algorithm
+        )
+        # 复用优化保留：内容相等 → 硬链接复用而非重拷
+        rep = self._backup_report(repo, m.snapshot_id)
+        assert rep["resumed_from"] == "snap-inc"
+        assert sorted(rep["linked"]) == ["pre0.txt", "pre1.txt"]
+        assert rep["copied"] == ["post0.txt"]
+        assert rep["resume_untrusted"] == []
+        # 旧 incomplete 已善后；final 内容与源一致
+        assert not (repo.path / "snapshots" / "snap-inc").exists()
+        assert (repo.path / "snapshots" / m.snapshot_id / "pre0.txt").read_bytes() == b"pre-zero"
+
+        # Test E：对本应有哈希覆盖的文件做同尺寸损坏，full verify 必须检出
+        victim = repo.path / "snapshots" / m.snapshot_id / "pre0.txt"
+        original = victim.read_bytes()
+        victim.write_bytes(bytes([original[0] ^ 0xFF]) + original[1:])
+        assert _run(ws, "verify", "--snapshot", m.snapshot_id) == 4
+
+    def test_corrupted_recovered_copy_never_certified(self, ws, snap_ids) -> None:
+        _write(ws["src"] / "pre0.txt", b"pre-zero")
+        _write(ws["src"] / "pre1.txt", b"pre-one")
+        _write(ws["src"] / "post0.txt", b"post-zero")
+        assert _init(ws) == 0
+        repo = self._make_interrupted(ws, ["post0.txt"])
+        # crash 后 / resume 前：同尺寸损坏 incomplete 快照中的 pre0
+        victim = repo.path / "snapshots" / "snap-inc" / "pre0.txt"
+        original = victim.read_bytes()
+        corrupted = bytes([original[0] ^ 0xFF]) + original[1:]
+        assert corrupted != original and len(corrupted) == len(original)
+        victim.write_bytes(corrupted)
+
+        assert _run(ws, "backup", "--yes") == 0
+        m = self._final_manifest(repo)
+        entries = {e.path: e for e in m.entries if not e.is_dir}
+        rep = self._backup_report(repo, m.snapshot_id)
+        # Test B/D：坏副本不被信任——排除复用、走正常 write-verify 重拷，
+        # 最终内容来自当前可信源而非坏副本
+        assert rep["resume_untrusted"] == ["pre0.txt"]
+        assert "pre0.txt" in rep["copied"]
+        assert "pre0.txt" not in rep["linked"]
+        final_bytes = (repo.path / "snapshots" / m.snapshot_id / "pre0.txt").read_bytes()
+        assert final_bytes == b"pre-zero"
+        assert final_bytes != corrupted
+        assert entries["pre0.txt"].sha == hash_file(
+            to_long_path(ws["src"] / "pre0.txt"), repo.hash_algorithm
+        )
+        assert all(e.sha for e in entries.values())
+        assert _run(ws, "verify", "--snapshot", m.snapshot_id) == 0
+
+    def test_verify_on_write_false_semantics_preserved(self, ws, snap_ids) -> None:
+        _write(ws["src"] / "pre0.txt", b"pre-zero")
+        _write(ws["src"] / "post0.txt", b"post-zero")
+        assert _init(ws) == 0
+        # 用户显式关闭 write verification（既有产品语义）
+        cfg_file = ws["config"] / "config.d" / "default.toml"
+        cfg_file.write_text(
+            cfg_file.read_text(encoding="utf-8").replace("on_write = true", "on_write = false"),
+            encoding="utf-8",
+        )
+        repo = self._make_interrupted(ws, ["post0.txt"], verify_writes=False)
+        assert _run(ws, "backup", "--yes") == 0
+        m = self._final_manifest(repo)
+        entries = {e.path: e for e in m.entries if not e.is_dir}
+        # Test F：不强制哈希覆盖，sha=None 仍是该配置下的合法状态
+        assert all(e.sha is None for e in entries.values())
+        assert _run(ws, "verify", "--snapshot", m.snapshot_id) == 0
+
+    def test_transient_stat_failure_no_unhashed_reuse(self, ws, snap_ids, monkeypatch) -> None:
+        """B1-2 blocker：认证阶段源 stat 瞬时失败（如 sharing violation）→
+        resume 数据流中源恢复可读且 size/mtime 满足 unchanged 条件——
+        该条目不得重新成为「可 silent reuse 但无可信 hash」的 entry。"""
+        _write(ws["src"] / "pre0.txt", b"pre-zero")
+        _write(ws["src"] / "pre1.txt", b"pre-one")
+        _write(ws["src"] / "post0.txt", b"post-zero")
+        assert _init(ws) == 0
+        repo = self._make_interrupted(ws, ["post0.txt"])
+
+        # 认证阶段对 pre0 源文件的 os.stat 瞬时失败；其后的扫描/复制阶段
+        # （os.scandir 的 DirEntry.stat 不经过 os.stat）源恢复正常可读
+        real_stat = os.stat
+        victim_src = to_long_path(ws["src"] / "pre0.txt")
+        fired = []
+
+        def flaky_stat(path, *args, **kwargs):
+            if str(path) == victim_src and not fired:
+                fired.append(True)
+                raise OSError(13, "transient sharing violation", str(path))
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", flaky_stat)
+
+        assert _run(ws, "backup", "--yes") == 0
+
+        m = self._final_manifest(repo)
+        entries = {e.path: e for e in m.entries if not e.is_dir}
+        # 核心断言：不允许任何普通文件 entry 以 sha=None 进入 complete manifest
+        assert all(e.sha for e in entries.values()), {
+            p: e.sha for p, e in entries.items()
+        }
+        # pre0 未经认证不得复用：走正常 copy/write-verify 路径
+        rep = self._backup_report(repo, m.snapshot_id)
+        assert rep["resume_uncertified"] == ["pre0.txt"]
+        assert "pre0.txt" in rep["copied"]
+        assert "pre0.txt" not in rep["linked"]
+        assert sorted(rep["linked"]) == ["pre1.txt"]
+        # 最终内容来自当前源；full verify 完整通过
+        assert (repo.path / "snapshots" / m.snapshot_id / "pre0.txt").read_bytes() == b"pre-zero"
+        assert _run(ws, "verify", "--snapshot", m.snapshot_id) == 0
+
+    def test_metadata_reversal_no_unhashed_reuse(self, ws, snap_ids, monkeypatch) -> None:
+        """B1-2 blocker：认证瞬间源 mtime 与清单不一致（状态反转前半段），
+        随后源恢复原 mtime 满足 unchanged 条件（后半段）——同样不得
+        进入未哈希的 silent reuse。"""
+        _write(ws["src"] / "pre0.txt", b"pre-zero")
+        _write(ws["src"] / "pre1.txt", b"pre-one")
+        _write(ws["src"] / "post0.txt", b"post-zero")
+        assert _init(ws) == 0
+        repo = self._make_interrupted(ws, ["post0.txt"])
+
+        # 认证阶段的 os.stat 谎报 mtime（+1ms）；真实扫描（DirEntry.stat）
+        # 读到与清单一致的原始 mtime → 构成完整的状态反转
+        real_stat = os.stat
+        victim_src = to_long_path(ws["src"] / "pre0.txt")
+        fired = []
+
+        def lying_stat(path, *args, **kwargs):
+            if str(path) == victim_src and not fired:
+                fired.append(True)
+                st = real_stat(path, *args, **kwargs)
+                return SimpleNamespace(
+                    st_size=st.st_size, st_mtime_ns=st.st_mtime_ns + 1_000_000
+                )
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", lying_stat)
+
+        assert _run(ws, "backup", "--yes") == 0
+
+        m = self._final_manifest(repo)
+        entries = {e.path: e for e in m.entries if not e.is_dir}
+        assert all(e.sha for e in entries.values()), {
+            p: e.sha for p, e in entries.items()
+        }
+        rep = self._backup_report(repo, m.snapshot_id)
+        assert rep["resume_uncertified"] == ["pre0.txt"]
+        assert "pre0.txt" in rep["copied"]
+        assert "pre0.txt" not in rep["linked"]
+        assert (repo.path / "snapshots" / m.snapshot_id / "pre0.txt").read_bytes() == b"pre-zero"
+        assert _run(ws, "verify", "--snapshot", m.snapshot_id) == 0
+
+    def test_pre_publication_guard_fails_closed(self, ws, snap_ids, monkeypatch) -> None:
+        """B1-2 defense-in-depth：模拟未来回归（认证哈希丢失、条目以
+        sha=None 停留在可 unchanged 复用状态且未标记 uncertified）→
+        发布前终检必须 fail closed，complete manifest 不得发布。"""
+        from dataclasses import replace
+
+        _write(ws["src"] / "pre0.txt", b"pre-zero")
+        _write(ws["src"] / "post0.txt", b"post-zero")
+        assert _init(ws) == 0
+        repo = self._make_interrupted(ws, ["post0.txt"])
+
+        real_build = cli.build_resume_baseline
+
+        def regressed_build(repo_, snapshot_id, **kwargs):
+            baseline = real_build(repo_, snapshot_id, **kwargs)
+            # 模拟回归：认证结果全部丢失，条目留在 previous 且不标记 uncertified
+            return replace(
+                baseline,
+                uncertified=(),
+                previous={
+                    p: replace(e, sha=None) for p, e in baseline.previous.items()
+                },
+            )
+
+        monkeypatch.setattr(cli, "build_resume_baseline", regressed_build)
+
+        # fail closed：RecoveryError → exit 1，不发布 complete
+        assert _run(ws, "backup", "--yes") == 1
+        # 新快照保持 incomplete（可再次续传），不产生新的 complete manifest
+        summaries = list_manifests(repo)
+        assert {s.snapshot_id for s in summaries} == {"snap-inc", "2026-09-13_000001"}
+        assert all(s.status == "incomplete" for s in summaries)
 
 
 class TestBackupLockScope:

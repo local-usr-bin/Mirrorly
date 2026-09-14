@@ -546,9 +546,11 @@ class _Baseline:
     previous_snapshot_dir: Path | None
     carried_shas: dict[str, str]
     resumed_from: str | None
+    untrusted: tuple[str, ...] = ()
+    uncertified: tuple[str, ...] = ()
 
 
-def _select_baseline(args: argparse.Namespace, repo: RepoInfo) -> _Baseline:
+def _select_baseline(args: argparse.Namespace, cfg: TaskConfig, repo: RepoInfo) -> _Baseline:
     """选择变更检测基线：发现 incomplete 时提示续传（TR-5），否则用最近 complete。"""
     recovery = scan_recovery(repo)
     if recovery.incomplete:
@@ -561,18 +563,39 @@ def _select_baseline(args: argparse.Namespace, repo: RepoInfo) -> _Baseline:
             f"（{latest_inc.created_at}），是否以其为基线续传？"
             "（选 n 将从头开始新备份，incomplete 保留不动）",
         ):
-            baseline = build_resume_baseline(repo, latest_inc.snapshot_id)
+            # B1-2：verify_on_write=True 时对已物化条目做内容等价认证，
+            # 获得可信哈希覆盖或拒绝信任旧副本；False 时保持既有语义
+            baseline = build_resume_baseline(
+                repo,
+                latest_inc.snapshot_id,
+                source=cfg.source,
+                verify_content=cfg.verify_on_write,
+            )
             _info(
                 args,
                 f"将以 {latest_inc.snapshot_id} 为基线续传"
                 f"（已物化 {len(baseline.previous)} 个文件，待补 {len(baseline.missing)} 个）",
             )
+            if baseline.untrusted:
+                _info(
+                    args,
+                    f"  {len(baseline.untrusted)} 个已物化文件内容与当前源不一致"
+                    "（中断后副本可能被损坏），不信任旧副本，将重新复制",
+                )
+            if baseline.uncertified:
+                _info(
+                    args,
+                    f"  {len(baseline.uncertified)} 个已物化文件未能完成内容认证"
+                    "（源暂不可读或元数据与清单不一致），将重新复制",
+                )
             return _Baseline(
                 previous=dict(baseline.previous),
                 previous_dirs=tuple(sorted(baseline.previous_dirs)),
                 previous_snapshot_dir=baseline.snapshot_path,
                 carried_shas={p: e.sha for p, e in baseline.previous.items() if e.sha},
                 resumed_from=latest_inc.snapshot_id,
+                untrusted=baseline.untrusted,
+                uncertified=baseline.uncertified,
             )
         else:
             _info(args, "不续传，从头开始新备份（incomplete 快照保留不动）")
@@ -604,10 +627,25 @@ def _scan_and_detect(args: argparse.Namespace, cfg: TaskConfig, baseline: _Basel
     # --full-hash：跳过元数据初筛——把基线 mtime 置为不可能匹配的值，
     # 强制 detect_changes 对所有共存文件做哈希复核（复用 ADR-006 冻结逻辑）
     prev_for_detect = baseline.previous
+    if baseline.uncertified:
+        # B1-2 blocker：认证未完成的续传条目（源 stat 瞬时失败 / 认证时
+        # 元数据与清单不一致）不得走 unchanged 硬链接复用——若源随后恢复
+        # 可读且 size/mtime 恢复清单值，detect_changes 会判未变而
+        # carried_shas 不含该条目，complete manifest 将再现 sha=None。
+        # mtime 置为不可能值（与 --full-hash 同一冻结机制）强制哈希复核：
+        # prev.sha=None → 保守判 modified → 正常 write-verify 重拷获得可信
+        # 哈希；源已删除的条目则维持 deleted 分类（keys 不变）。
+        uncertified = set(baseline.uncertified)
+        prev_for_detect = {
+            k: PreviousEntry(size=v.size, mtime_ns=-1, sha=v.sha)
+            if k in uncertified
+            else v
+            for k, v in prev_for_detect.items()
+        }
     if args.full_hash:
         prev_for_detect = {
             k: PreviousEntry(size=v.size, mtime_ns=-1, sha=v.sha)
-            for k, v in baseline.previous.items()
+            for k, v in prev_for_detect.items()
         }
     changes = detect_changes(cfg.source, current, prev_for_detect, baseline.previous_dirs)
     return scan, current, changes
@@ -619,7 +657,7 @@ def cmd_backup(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         # dry-run 有意例外：零写入，因此不取任务锁（只读预览不与其他实例互斥）
-        baseline = _select_baseline(args, repo)
+        baseline = _select_baseline(args, cfg, repo)
         scan, _current, changes = _scan_and_detect(args, cfg, baseline)
         return _finish_dry_run(args, changes, scan.skipped)
 
@@ -628,7 +666,7 @@ def cmd_backup(args: argparse.Namespace) -> int:
     # 数分钟、甚至先读到另一个活动任务的 incomplete 后才发现锁被占用
     with _TaskLock(repo, cfg.name):
         started = time.monotonic()
-        baseline = _select_baseline(args, repo)
+        baseline = _select_baseline(args, cfg, repo)
         scan, current, changes = _scan_and_detect(args, cfg, baseline)
 
         clean_tmp_residue(repo)
@@ -660,6 +698,24 @@ def cmd_backup(args: argparse.Namespace) -> int:
         final_manifest = create_manifest(
             snapshot_id, source_root, repo.hash_algorithm, final_current, hashes=merged_hashes
         )
+        # B1-2 defense-in-depth：发布前终检。resume + verify_on_write=True 的
+        # complete 快照不允许存在无可信哈希的普通文件条目——正常数据流
+        # （certified 结转 / untrusted·uncertified·missing 重拷哈希）下
+        # 此断言恒真；若未来回归重新引入 silent sha=None 复用路径，在此
+        # fail closed（新快照保持 incomplete，可再次续传），绝不给
+        # 「未证明的副本」补哈希发布。
+        if baseline.resumed_from and cfg.verify_on_write:
+            unhashed_final = sorted(
+                rel
+                for rel, e in final_current.items()
+                if not e.is_dir and rel not in merged_hashes
+            )
+            if unhashed_final:
+                raise RecoveryError(
+                    f"续传快照 {snapshot_id} 存在 {len(unhashed_final)} 个未获得"
+                    f"可信哈希的文件（首个: {unhashed_final[0]!r}），"
+                    "拒绝发布 complete（fail closed）"
+                )
         write_manifest(repo, mark_complete(final_manifest))
 
         # 续传善后：显式删除旧 incomplete（complete 快照被底层拒绝，双保险）
@@ -682,6 +738,8 @@ def cmd_backup(args: argparse.Namespace) -> int:
             "duration_seconds": round(duration, 3),
             "full_hash": bool(args.full_hash),
             "resumed_from": baseline.resumed_from,
+            "resume_untrusted": list(baseline.untrusted),
+            "resume_uncertified": list(baseline.uncertified),
             "changes": {
                 "added": changes.added,
                 "modified": changes.modified,

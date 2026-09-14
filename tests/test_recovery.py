@@ -9,10 +9,12 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from mirrorly import snapshot as snapshot_mod
+from mirrorly.hashing import hash_file
 from mirrorly.manifest import (
     create_manifest,
     list_manifests,
@@ -454,6 +456,154 @@ class TestBuildResumeBaseline:
         repo = _init_repo(tmp_path / "target")
         with pytest.raises(RecoveryError):
             build_resume_baseline(repo, "../evil")
+
+
+class TestResumeBaselineContentCertification:
+    """B1-2：verify_content=True 时对已物化条目做 source↔recovered 内容等价认证。
+
+    认证通过 → PreviousEntry.sha 获得可信哈希（结转入 final manifest）；
+    认证失败（同尺寸内容不同）→ 条目不信任、排除出 previous（重新复制），
+    绝不把坏副本重新哈希后认证为正确备份数据；
+    认证未完成（源 stat 瞬时失败 / 元数据与清单不一致）→ 收入 uncertified，
+    不得作为「可 unchanged 复用但 sha=None」的条目（B1-2 blocker）。
+    """
+
+    def _make_incomplete(self, repo, src: Path, snap_id: str, copied_files: list[str]) -> None:
+        current = scan_source(src, ()).entries
+        manifest = create_manifest(snap_id, str(src), repo.hash_algorithm, current)
+        write_manifest(repo, manifest)
+        snap_dir = repo.path / "snapshots" / snap_id
+        for rel in sorted(current):
+            e = current[rel]
+            if e.is_dir:
+                (snap_dir / Path(rel)).mkdir(parents=True, exist_ok=True)
+            elif rel in copied_files:
+                dst = snap_dir / Path(rel)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes((src / rel).read_bytes())
+
+    def test_certifies_equal_content_and_populates_sha(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt", "file1.txt"])
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
+        for rel in ("file0.txt", "file1.txt"):
+            expected = hash_file(to_long_path(src / rel), repo.hash_algorithm)
+            assert baseline.previous[rel].sha == expected
+        assert baseline.untrusted == ()
+        # 未物化条目仍按正常中断态报告
+        assert sorted(baseline.missing) == ["file2.txt", "sub/nested.txt"]
+
+    def test_same_size_corruption_distrusted_not_recertified(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt", "file1.txt"])
+        victim = repo.path / "snapshots" / "snap1" / "file0.txt"
+        original = victim.read_bytes()
+        corrupted = bytes([original[0] ^ 0xFF]) + original[1:]
+        assert corrupted != original and len(corrupted) == len(original)
+        victim.write_bytes(corrupted)
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
+        # 坏副本不被信任：排除出 previous（→ 重新复制），sha 绝不取坏副本的哈希
+        assert "file0.txt" not in baseline.previous
+        assert baseline.untrusted == ("file0.txt",)
+        bad_hash = hash_file(to_long_path(victim), repo.hash_algorithm)
+        assert all(e.sha != bad_hash for e in baseline.previous.values())
+        # 未损坏的副本正常认证
+        assert baseline.previous["file1.txt"].sha is not None
+
+    def test_source_metadata_changed_not_certified_but_safe(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt"])
+        # 中断后源文件 mtime 变化：认证未完成（元数据与清单不一致），
+        # 收入 uncertified；条目保留在 previous 维持 modified/deleted 分类，
+        # 但 sha 不得伪造，也不得走 unchanged 复用（B1-2 blocker）
+        os.utime(to_long_path(src / "file0.txt"), ns=(3_000_000, 3_000_000))
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
+        assert baseline.previous["file0.txt"].sha is None
+        assert baseline.untrusted == ()
+        assert baseline.uncertified == ("file0.txt",)
+
+    def test_source_deleted_not_certified(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt"])
+        (src / "file0.txt").unlink()
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
+        assert baseline.previous["file0.txt"].sha is None
+        assert baseline.untrusted == ()
+        assert baseline.uncertified == ("file0.txt",)
+
+    def test_transient_stat_failure_marked_uncertified(self, tmp_path, monkeypatch) -> None:
+        """B1-2 blocker（认证阶段瞬时 I/O 失败）：源 stat 瞬时 OSError →
+        条目不得停留在「可 unchanged 复用且 sha=None」状态。"""
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt", "file1.txt"])
+        real_stat = os.stat
+        victim = to_long_path(src / "file0.txt")
+        fired = []
+
+        def flaky_stat(path, *args, **kwargs):
+            if str(path) == victim and not fired:
+                fired.append(True)
+                raise OSError(13, "transient sharing violation", str(path))
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", flaky_stat)
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
+        assert baseline.uncertified == ("file0.txt",)
+        # 保留在 previous（真实元数据维持变更分类），但 sha 保持 None 不伪造
+        assert baseline.previous["file0.txt"].sha is None
+        assert baseline.untrusted == ()
+        # 未受影响的条目正常认证
+        assert baseline.previous["file1.txt"].sha is not None
+
+    def test_certification_metadata_mismatch_marked_uncertified(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """B1-2 blocker（认证瞬间元数据不一致）：stat 谎报 mtime → 认证未完成
+        → uncertified；若真实 mtime 随后恢复清单值（状态反转），由调用方
+        强制重拷兜底（CLI 级回归见 TestB12ResumeHashCoverage）。"""
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt", "file1.txt"])
+        real_stat = os.stat
+        victim = to_long_path(src / "file0.txt")
+        fired = []
+
+        def lying_stat(path, *args, **kwargs):
+            if str(path) == victim and not fired:
+                fired.append(True)
+                st = real_stat(path, *args, **kwargs)
+                return SimpleNamespace(
+                    st_size=st.st_size, st_mtime_ns=st.st_mtime_ns + 1_000_000
+                )
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", lying_stat)
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
+        assert baseline.uncertified == ("file0.txt",)
+        assert baseline.previous["file0.txt"].sha is None
+        assert baseline.untrusted == ()
+        assert baseline.previous["file1.txt"].sha is not None
+
+    def test_verify_content_false_preserves_legacy_semantics(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt"])
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=False)
+        assert baseline.previous["file0.txt"].sha is None
+        assert baseline.untrusted == ()
+        assert baseline.uncertified == ()
 
 
 class TestResumeIntegration:
