@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from mirrorly import cli
+from mirrorly import snapshot as snapshot_mod
 from mirrorly.cli import main
 from mirrorly.config import ConfigError, TaskConfig, validate_task_name
 from mirrorly.hashing import hash_file
@@ -297,6 +298,29 @@ class TestBackup:
         assert (
             repo.path / "snapshots" / manifests[0].snapshot_id / "a.txt"
         ).read_bytes() == b"alpha"
+
+    def test_staging_metadata_failure_keeps_snapshot_incomplete(
+        self, ws, snap_ids, monkeypatch
+    ) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        real_utime = snapshot_mod.os.utime
+
+        def fail_staging_mtime(path, *args, **kwargs):
+            if str(path).endswith("a.txt.mrtmp"):
+                raise OSError(28, "simulated staging metadata failure")
+            return real_utime(path, *args, **kwargs)
+
+        monkeypatch.setattr(snapshot_mod.os, "utime", fail_staging_mtime)
+        assert _run(ws, "backup", "--yes") == 1
+
+        repo = _repo(ws)
+        manifests = list_manifests(repo)
+        assert len(manifests) == 1 and manifests[0].status == "incomplete"
+        snapshot = repo.path / "snapshots" / manifests[0].snapshot_id
+        assert not (snapshot / "a.txt").exists()
+        assert not (snapshot / "a.txt.mrtmp").exists()
+        assert list((repo.path / "logs").glob("backup-*.json")) == []
 
     def test_second_backup_hardlink_reuse(self, backed_up, capsys) -> None:
         ws = backed_up
@@ -968,6 +992,11 @@ class TestB12ResumeHashCoverage:
         corrupted = bytes([original[0] ^ 0xFF]) + original[1:]
         assert corrupted != original and len(corrupted) == len(original)
         victim.write_bytes(corrupted)
+        source_stat = os.stat(to_long_path(ws["src"] / "pre0.txt"))
+        os.utime(
+            to_long_path(victim),
+            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+        )
 
         assert _run(ws, "backup", "--yes") == 0
         m = self._final_manifest(repo)
@@ -986,6 +1015,116 @@ class TestB12ResumeHashCoverage:
         )
         assert all(e.sha for e in entries.values())
         assert _run(ws, "verify", "--snapshot", m.snapshot_id) == 0
+
+    def test_recovered_mtime_mismatch_is_rematerialized(self, ws, snap_ids) -> None:
+        """Legacy post-replace residue with correct bytes but wrong mtime is not linked."""
+        _write(ws["src"] / "pre0.txt", b"pre-zero")
+        expected_mtime = 1_710_000_000_000_000_000
+        os.utime(
+            to_long_path(ws["src"] / "pre0.txt"),
+            ns=(expected_mtime, expected_mtime),
+        )
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        current = scan_source(ws["src"], ()).entries
+        write_manifest(
+            repo, create_manifest("snap-inc", str(ws["src"]), repo.hash_algorithm, current)
+        )
+        recovered = repo.path / "snapshots" / "snap-inc" / "pre0.txt"
+        recovered.parent.mkdir(parents=True)
+        recovered.write_bytes((ws["src"] / "pre0.txt").read_bytes())
+        wrong_mtime = current["pre0.txt"].mtime_ns + 10_000_000
+        os.utime(to_long_path(recovered), ns=(wrong_mtime, wrong_mtime))
+        recovered_inode = os.stat(to_long_path(recovered)).st_ino
+
+        assert _run(ws, "backup", "--yes") == 0
+
+        m = self._final_manifest(repo)
+        entry = next(e for e in m.entries if e.path == "pre0.txt")
+        final = repo.path / "snapshots" / m.snapshot_id / "pre0.txt"
+        report = self._backup_report(repo, m.snapshot_id)
+        final_stat = os.stat(to_long_path(final))
+        source_stat = os.stat(to_long_path(ws["src"] / "pre0.txt"))
+        assert report["resume_uncertified"] == ["pre0.txt"]
+        assert report["linked"] == []
+        assert report["copied"] == ["pre0.txt"]
+        assert report["changes"]["modified"] == ["pre0.txt"]
+        assert final_stat.st_ino != recovered_inode
+        assert final.read_bytes() == (ws["src"] / "pre0.txt").read_bytes()
+        assert abs(final_stat.st_mtime_ns - source_stat.st_mtime_ns) <= 100
+        assert entry.mtime_ns == source_stat.st_mtime_ns
+        assert entry.sha == hash_file(to_long_path(final), repo.hash_algorithm)
+        verification = verify_snapshot(repo, m.snapshot_id)
+        assert verification.ok
+        assert verification.hashed_files == verification.checked_files == 1
+        assert verification.unhashed_entries == 0
+
+    def test_shared_recovered_mtime_mismatch_preserves_complete_inode(self, ws, snap_ids) -> None:
+        """Metadata repair must recopy, never utime a recovered hardlink in place."""
+        _write(ws["src"] / "shared.txt", b"shared-content")
+        old_mtime = 1_700_000_000_000_000_000
+        os.utime(
+            to_long_path(ws["src"] / "shared.txt"),
+            ns=(old_mtime, old_mtime),
+        )
+        assert _init(ws) == 0
+        assert _run(ws, "backup", "--yes") == 0
+        repo = _repo(ws)
+        old_summary = next(s for s in list_manifests(repo) if s.status == "complete")
+        old_manifest_path = repo.path / "manifests" / f"{old_summary.snapshot_id}.json"
+        old_manifest_bytes = old_manifest_path.read_bytes()
+        old_file = repo.path / "snapshots" / old_summary.snapshot_id / "shared.txt"
+        old_initial_stat = os.stat(to_long_path(old_file))
+        old_content = old_file.read_bytes()
+
+        expected_mtime = old_initial_stat.st_mtime_ns + 10_000_000_000
+        os.utime(
+            to_long_path(ws["src"] / "shared.txt"),
+            ns=(expected_mtime, expected_mtime),
+        )
+        current = scan_source(ws["src"], ()).entries
+        write_manifest(
+            repo, create_manifest("snap-inc", str(ws["src"]), repo.hash_algorithm, current)
+        )
+        recovered = repo.path / "snapshots" / "snap-inc" / "shared.txt"
+        recovered.parent.mkdir(parents=True)
+        os.link(to_long_path(old_file), to_long_path(recovered))
+        old_before_resume = os.stat(to_long_path(old_file))
+        recovered_before_resume = os.stat(to_long_path(recovered))
+        assert old_before_resume.st_ino == recovered_before_resume.st_ino
+        assert recovered_before_resume.st_mtime_ns != current["shared.txt"].mtime_ns
+        assert old_file.read_bytes() == old_content
+
+        assert _run(ws, "backup", "--yes") == 0
+
+        summaries = list_manifests(repo)
+        assert {s.status for s in summaries} == {"complete"}
+        assert len(summaries) == 2
+        new_summary = next(s for s in summaries if s.snapshot_id != old_summary.snapshot_id)
+        new_manifest = load_manifest(repo, new_summary.snapshot_id, require_complete=True)
+        new_entry = next(e for e in new_manifest.entries if e.path == "shared.txt")
+        new_file = repo.path / "snapshots" / new_summary.snapshot_id / "shared.txt"
+        new_stat = os.stat(to_long_path(new_file))
+        source_stat = os.stat(to_long_path(ws["src"] / "shared.txt"))
+        old_after_resume = os.stat(to_long_path(old_file))
+        report = self._backup_report(repo, new_summary.snapshot_id)
+
+        assert report["resume_uncertified"] == ["shared.txt"]
+        assert report["linked"] == []
+        assert report["copied"] == ["shared.txt"]
+        assert old_manifest_path.read_bytes() == old_manifest_bytes
+        assert old_file.read_bytes() == old_content
+        assert old_after_resume.st_ino == old_before_resume.st_ino == old_initial_stat.st_ino
+        assert old_after_resume.st_mtime_ns == old_before_resume.st_mtime_ns
+        assert new_stat.st_ino != old_after_resume.st_ino
+        assert new_file.read_bytes() == (ws["src"] / "shared.txt").read_bytes()
+        assert abs(new_stat.st_mtime_ns - source_stat.st_mtime_ns) <= 100
+        assert new_entry.mtime_ns == source_stat.st_mtime_ns
+        assert new_entry.sha == hash_file(to_long_path(new_file), repo.hash_algorithm)
+        verification = verify_snapshot(repo, new_summary.snapshot_id)
+        assert verification.ok
+        assert verification.hashed_files == verification.checked_files == 1
+        assert verification.unhashed_entries == 0
 
     def test_verify_on_write_false_semantics_preserved(self, ws, snap_ids) -> None:
         _write(ws["src"] / "pre0.txt", b"pre-zero")

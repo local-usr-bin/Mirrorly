@@ -4,8 +4,9 @@
 1. **旧快照永不修改**：所有写入只发生在新快照目录内；已完成的快照目录
    不被任何写操作触碰。
 2. **绝不原地写已链接文件**：变更文件写入 ``<name>.mrtmp`` 临时文件，
-   flush + fsync + 关闭后经复测再 ``os.replace`` 原子改名；os.replace 的
-   目标是新快照中的新路径，绝不覆盖旧快照中通过硬链接共享的文件。
+   flush + fsync + 关闭后经复测并在 staging 上设置 mtime，再由
+   ``os.replace`` 原子改名；os.replace 的目标是新快照中的新路径，绝不
+   覆盖旧快照中通过硬链接共享的文件。
 3. **os.link 失败显式报错**（SnapshotError），不静默降级（TR-2）。
 
 变动中文件（TR-4）：复制完成后复测源文件 size/mtime_ns，与扫描时不一致
@@ -76,7 +77,7 @@ def write_snapshot(
 
     - current 中不在 added/modified 的文件（含 suspected_modified）视为未变：
       有上一快照且仓库启用硬链接时 os.link 复用，否则复制；
-    - added/modified 文件走"临时文件 + fsync + 复测 + 原子改名"；
+    - added/modified 文件走"临时文件 + fsync + 复测 + staging mtime + 原子改名"；
     - deleted 的文件/目录自然缺席新快照，旧快照不受影响；
     - verify_writes=True 时（T-06 写入即校验）：每个 copied 文件在原子改名后
       重算目标端哈希与源端比对，不一致仅重试该文件一次，仍失败抛
@@ -172,7 +173,7 @@ def _verify_write(src_file: Path, dst: Path, entry: ScannedEntry, algorithm: str
 
 
 def _copy_file_atomic(src_file: Path, dst: Path, entry: ScannedEntry) -> bool:
-    """临时文件 + fsync + 复测 + 原子改名复制单个文件。
+    """临时文件 + fsync + 复测 + staging mtime + 原子改名复制单个文件。
 
     返回 True 表示写入完成；False 表示复制期间源文件发生变动（TR-4，
     临时文件已清理，目标未产生任何内容）。
@@ -191,10 +192,12 @@ def _copy_file_atomic(src_file: Path, dst: Path, entry: ScannedEntry) -> bool:
         if st_after.st_size != entry.size or st_after.st_mtime_ns != entry.mtime_ns:
             os.remove(tmp_lp)
             return False
-        os.replace(tmp_lp, to_long_path(dst))
-        # mtime 保真：快照文件 mtime 与源一致（恢复保真 + 元数据比对稳定）。
+        # mtime 是 snapshot entry 正确性的一部分，必须在 staging phase 完成；
+        # 失败时清理 temp，绝不能先发布 dst 再留下 metadata half-published entry。
         # 注意：Windows FILETIME 粒度 100ns，os.utime 会截断，属平台限制。
-        os.utime(to_long_path(dst), ns=(st_after.st_atime_ns, entry.mtime_ns))
+        os.utime(tmp_lp, ns=(st_after.st_atime_ns, entry.mtime_ns))
+        # 单文件 publication point：content 与所需 mtime 均准备好后才公开。
+        os.replace(tmp_lp, to_long_path(dst))
         return True
     except OSError:
         # 清理临时文件，错误向上抛（IO 错误不应留下半成品临时文件）

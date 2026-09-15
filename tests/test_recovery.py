@@ -387,7 +387,13 @@ class TestBuildResumeBaseline:
             elif rel in copied_files:
                 dst = snap_dir / Path(rel)
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                dst.write_bytes((src / rel).read_bytes())
+                source_file = src / rel
+                dst.write_bytes(source_file.read_bytes())
+                source_stat = source_file.stat()
+                os.utime(
+                    dst,
+                    ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+                )
 
     def test_baseline_happy_path_and_missing_reported(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
@@ -478,7 +484,13 @@ class TestResumeBaselineContentCertification:
             elif rel in copied_files:
                 dst = snap_dir / Path(rel)
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                dst.write_bytes((src / rel).read_bytes())
+                source_file = src / rel
+                dst.write_bytes(source_file.read_bytes())
+                source_stat = source_file.stat()
+                os.utime(
+                    dst,
+                    ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+                )
 
     def test_certifies_equal_content_and_populates_sha(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
@@ -503,6 +515,11 @@ class TestResumeBaselineContentCertification:
         corrupted = bytes([original[0] ^ 0xFF]) + original[1:]
         assert corrupted != original and len(corrupted) == len(original)
         victim.write_bytes(corrupted)
+        source_stat = os.stat(to_long_path(src / "file0.txt"))
+        os.utime(
+            to_long_path(victim),
+            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+        )
         baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
         # 坏副本不被信任：排除出 previous（→ 重新复制），sha 绝不取坏副本的哈希
         assert "file0.txt" not in baseline.previous
@@ -510,6 +527,41 @@ class TestResumeBaselineContentCertification:
         bad_hash = hash_file(to_long_path(victim), repo.hash_algorithm)
         assert all(e.sha != bad_hash for e in baseline.previous.values())
         # 未损坏的副本正常认证
+        assert baseline.previous["file1.txt"].sha is not None
+
+    def test_recovered_mtime_mismatch_is_uncertified_before_content_reuse(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _build_source(src, n=3)
+        self._make_incomplete(repo, src, "snap1", ["file0.txt", "file1.txt"])
+        current = scan_source(src, ()).entries
+        write_manifest(
+            repo,
+            create_manifest(
+                "snap1",
+                str(src),
+                repo.hash_algorithm,
+                current,
+                hashes={
+                    "file0.txt": hash_file(to_long_path(src / "file0.txt"), repo.hash_algorithm)
+                },
+            ),
+        )
+        victim = repo.path / "snapshots" / "snap1" / "file0.txt"
+        source_mtime = os.stat(to_long_path(src / "file0.txt")).st_mtime_ns
+        os.utime(
+            to_long_path(victim),
+            ns=(source_mtime + 10_000_000, source_mtime + 10_000_000),
+        )
+
+        baseline = build_resume_baseline(repo, "snap1", source=src, verify_content=True)
+
+        # Content equality cannot certify inconsistent snapshot metadata. Keep the
+        # entry only for change classification; CLI force_recopy consumes this flag.
+        assert baseline.previous["file0.txt"].sha is None
+        assert baseline.uncertified == ("file0.txt",)
+        assert baseline.untrusted == ()
+        # The unaffected recovered file still takes the normal certification path.
         assert baseline.previous["file1.txt"].sha is not None
 
     def test_source_metadata_changed_not_certified_but_safe(self, tmp_path) -> None:

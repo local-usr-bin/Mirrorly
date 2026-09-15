@@ -240,7 +240,7 @@ def build_resume_baseline(
     校验（任一不满足即 RecoveryError，不静默继续）：
     - manifest 存在且 status=incomplete（complete 快照无需续传）；
     - snapshots/<id> 目录存在；
-    - 清单中已存在于目录的条目与记录一致（文件大小、文件/目录类型）。
+    - 清单中已存在于目录的条目与记录一致（文件大小、mtime、文件/目录类型）。
 
     清单中记录但目录中缺失的文件属于正常中断态，收入 missing 显式报告，
     不纳入 previous（detect_changes 会将其判为 added 重新复制）。
@@ -269,12 +269,19 @@ def build_resume_baseline(
       不可能值，强制哈希复核并保守判 modified → 正常 write-verify
       重拷获得可信哈希；源已删除的条目则保持 deleted 分类。
 
+    recovered 普通文件的实际 mtime 与 incomplete manifest 不一致时，同样
+    收入 uncertified 并强制安全重物化。即使内容与当前源相同，也不得直接
+    hardlink reuse：该路径可能是历史 post-replace metadata failure 的残留，
+    也可能与 complete snapshot 共享 inode。绝不对 recovered path 原地
+    ``utime``，避免通过 hardlink 修改已发布的历史恢复点。
+
     TOCTOU：先哈希源再哈希副本，窗口内任一侧变动倾向判不等 → 重新复制
     （fail safe）；认证完成后源再变化时，硬链接内容 == 已认证副本 ==
     记录的哈希，快照自洽（与正常未变文件硬链接同一保证级别）。
 
-    verify_content=False（用户显式关闭 verify_on_write）时保持既有语义：
-    不做内容认证，sha 原样结转（恒 None），不强制哈希覆盖。
+    verify_content=False（用户显式关闭 verify_on_write）时保持既有哈希语义：
+    不做内容认证、不强制哈希覆盖；但 recovered mtime 不一致仍必须重物化，
+    不能把 metadata 不一致发布进新的 complete snapshot。
     """
     _validate_snapshot_id(snapshot_id)
     try:
@@ -309,12 +316,20 @@ def build_resume_baseline(
             raise RecoveryError(
                 f"清单与快照内容类型不一致: {entry.path!r} 清单记录为文件，实际不是文件"
             )
-        actual_size = target.stat().st_size
-        if actual_size != entry.size:
+        target_stat = target.stat()
+        if target_stat.st_size != entry.size:
             raise RecoveryError(
                 f"清单与快照内容不一致: {entry.path!r} "
-                f"清单记录大小 {entry.size}，实际 {actual_size}"
+                f"清单记录大小 {entry.size}，实际 {target_stat.st_size}"
             )
+        if target_stat.st_mtime_ns != entry.mtime_ns:
+            # 只读分类，不在 recovered path 上修 metadata：它可能与 complete
+            # snapshot 共享 inode。保留 previous 维持 modified/deleted 分类，
+            # 但清除 sha，确保调用方的 mtime sentinel 只能保守判 modified，
+            # 即使异常/历史 incomplete 意外携带 hash 也不能回到硬链接路径。
+            uncertified.append(entry.path)
+            previous[entry.path] = PreviousEntry(size=entry.size, mtime_ns=entry.mtime_ns, sha=None)
+            continue
         sha = entry.sha
         if verify_content and sha is None and source is not None:
             src_file = Path(source) / Path(entry.path)

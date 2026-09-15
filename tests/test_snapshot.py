@@ -4,6 +4,8 @@ import os
 
 import pytest
 
+from mirrorly import snapshot as snapshot_mod
+from mirrorly.hashing import hash_file
 from mirrorly.repo import VolumeInfo, init_repo
 from mirrorly.scan import detect_changes, scan_source
 from mirrorly.snapshot import (
@@ -69,10 +71,16 @@ class TestFirstSnapshot:
         _write(src / "a.txt", b"aaa", mtime_ns=123456789)
         repo = init_repo(tmp_path / "target", volume_info_provider=lambda p: _NTFS)
         current, changes = _scan_and_detect(src)
-        result = write_snapshot(src, repo, current, changes, snapshot_id="snap1")
+        result = write_snapshot(
+            src, repo, current, changes, snapshot_id="snap1", verify_writes=True
+        )
         st = os.stat(result.path / "a.txt")
         # Windows FILETIME 粒度为 100ns，os.utime 会截断；容差 100ns
         assert abs(st.st_mtime_ns - 123456789) <= 100
+        assert (result.path / "a.txt").read_bytes() == b"aaa"
+        assert st.st_size == 3
+        assert result.hashes["a.txt"] == hash_file(result.path / "a.txt", repo.hash_algorithm)
+        assert list(result.path.rglob("*.mrtmp")) == []
 
     def test_unicode_filename(self, tmp_path) -> None:
         src = tmp_path / "src"
@@ -132,6 +140,43 @@ class TestHardlinkReuse:
 
 
 class TestSafetyInvariants:
+    @pytest.mark.parametrize("destination_exists", [False, True])
+    def test_staging_mtime_failure_never_publishes_destination(
+        self, tmp_path, monkeypatch, destination_exists
+    ) -> None:
+        """mtime preparation failure is pre-publication and cleans its owned temp.
+
+        An existing destination is legal when _verify_write retries a file, so that
+        path must remain byte/metadata/identity identical when staging fails.
+        """
+        src = tmp_path / "src"
+        source_file = _write(src / "a.txt", b"new-content", mtime_ns=123456700)
+        current, _changes = _scan_and_detect(src)
+        entry = current["a.txt"]
+        dst = tmp_path / "snapshot" / "a.txt"
+        before = None
+        if destination_exists:
+            _write(dst, b"existing-content", mtime_ns=987654300)
+            before = (dst.read_bytes(), os.stat(dst).st_mtime_ns, os.stat(dst).st_ino)
+        else:
+            dst.parent.mkdir(parents=True)
+
+        def fail_staging_mtime(path, *args, **kwargs):
+            assert str(path).endswith("a.txt.mrtmp")
+            raise OSError(28, "simulated staging metadata failure")
+
+        monkeypatch.setattr(snapshot_mod.os, "utime", fail_staging_mtime)
+
+        with pytest.raises(OSError, match="staging metadata failure"):
+            snapshot_mod._copy_file_atomic(source_file, dst, entry)
+
+        assert not dst.with_name("a.txt.mrtmp").exists()
+        if destination_exists:
+            assert before is not None
+            assert (dst.read_bytes(), os.stat(dst).st_mtime_ns, os.stat(dst).st_ino) == before
+        else:
+            assert not dst.exists()
+
     def test_link_failure_raises_explicitly(self, tmp_path, monkeypatch) -> None:
         src = tmp_path / "src"
         _write(src / "a.txt", b"aaa", mtime_ns=1000)
