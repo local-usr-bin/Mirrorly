@@ -567,12 +567,19 @@ class TestInterruptedBackupResume:
         assert len(ids) == 1
         inc = json.loads((self.repo / "manifests" / f"{ids[0]}.json").read_text(encoding="utf-8"))
         assert inc["status"] == "incomplete"
-        # 锁状态与冻结语义一致：崩溃残留锁 → 下一实例 exit 6，需人工确认后删除
+        # 锁状态与冻结语义一致：崩溃残留 task/repo 锁 → 下一实例 exit 6，
+        # 需人工确认后同时删除（均不做 PID 猜测或自动 stale cleanup）。
         r = run_cli("--config", str(self.cfg_root), "backup", "--yes")
         assert r.returncode == 6
-        lock = self.repo / "locks" / "default.lock"
-        assert lock.is_file()
-        lock.unlink()  # 文档化的手工恢复步骤（_TaskLock docstring）
+        task_lock = self.repo / "locks" / "default.lock"
+        repo_lock_dir = self.repo / "locks" / "repo-writer"
+        repo_lock = repo_lock_dir / "active.lock"
+        assert task_lock.is_file()
+        assert repo_lock.is_file()
+        task_lock.unlink()
+        repo_lock.unlink()
+        assert repo_lock_dir.is_dir()
+        assert not repo_lock.exists()
 
         # --yes 续传：以 incomplete 为基线，产出新 snapshot id
         r = run_cli("--config", str(self.cfg_root), "backup", "--yes")

@@ -16,6 +16,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,7 +27,13 @@ import pytest
 from mirrorly import cli
 from mirrorly import snapshot as snapshot_mod
 from mirrorly.cli import main
-from mirrorly.config import ConfigError, TaskConfig, validate_task_name
+from mirrorly.config import (
+    ConfigError,
+    TaskConfig,
+    load_task_config,
+    validate_task_name,
+    write_task_config,
+)
 from mirrorly.hashing import hash_file
 from mirrorly.manifest import create_manifest, list_manifests, load_manifest, write_manifest
 from mirrorly.repo import RepoError, VolumeInfo, init_repo, load_repo
@@ -106,6 +114,13 @@ def backed_up(ws, snap_ids):
 
 def _repo(ws):
     return load_repo(ws["target"])
+
+
+def _assert_repo_writer_idle(repo) -> None:
+    namespace = repo.path / "locks" / "repo-writer"
+    assert namespace.is_dir()
+    assert list(namespace.iterdir()) == []
+    assert not list((repo.path / "locks").glob("*.lock"))
 
 
 def _tamper_repo_json(ws, **changes) -> None:
@@ -339,10 +354,11 @@ class TestBackup:
         repo = _repo(ws)
         before_snaps = sorted(os.listdir(to_long_path(repo.path / "snapshots")))
         before_logs = sorted(os.listdir(to_long_path(repo.path / "logs")))
+        before_locks = sorted(os.listdir(to_long_path(repo.path / "locks")))
         assert _run(ws, "backup", "--dry-run") == 0
         assert sorted(os.listdir(to_long_path(repo.path / "snapshots"))) == before_snaps
         assert sorted(os.listdir(to_long_path(repo.path / "logs"))) == before_logs
-        assert sorted(os.listdir(to_long_path(repo.path / "locks"))) == []
+        assert sorted(os.listdir(to_long_path(repo.path / "locks"))) == before_locks
 
     def test_dry_run_preview_output(self, backed_up, capsys) -> None:
         ws = backed_up
@@ -410,7 +426,7 @@ class TestBackup:
     def test_lock_released_after_success(self, backed_up) -> None:
         ws = backed_up
         assert _run(ws, "backup", "--yes") == 0
-        assert sorted(os.listdir(to_long_path(_repo(ws).path / "locks"))) == []
+        _assert_repo_writer_idle(_repo(ws))
 
     def test_keyboard_interrupt_exit_130_and_cleanup(self, backed_up, monkeypatch) -> None:
         ws = backed_up
@@ -422,7 +438,7 @@ class TestBackup:
         assert _run(ws, "backup", "--yes") == 130
         repo = _repo(ws)
         # 锁已释放；中断态 manifest 保留（可被下次续传），不是 complete
-        assert sorted(os.listdir(to_long_path(repo.path / "locks"))) == []
+        _assert_repo_writer_idle(repo)
         manifests = list_manifests(repo)
         assert any(m.status == "incomplete" for m in manifests)
 
@@ -1471,6 +1487,227 @@ class TestBackupLockScope:
         assert _run(ws, "backup", "--dry-run") == 0
         assert lock.read_text(encoding="utf-8") == "pid=999999"
         assert len(list_manifests(_repo(ws))) == 1
+
+    def test_repo_writer_lock_busy_before_recovery_or_scan(self, backed_up, monkeypatch) -> None:
+        ws = backed_up
+        repo = _repo(ws)
+        namespace = repo.path / "locks" / "repo-writer"
+        namespace.mkdir(exist_ok=True)
+        writer_lock = namespace / "active.lock"
+        writer_lock.write_text("pid=999999", encoding="utf-8")
+        before_manifests = sorted(os.listdir(to_long_path(repo.path / "manifests")))
+        before_snapshots = sorted(os.listdir(to_long_path(repo.path / "snapshots")))
+        before_reports = sorted(os.listdir(to_long_path(repo.path / "logs")))
+
+        def forbidden(*a, **k):
+            raise AssertionError("仓库写锁被占用时不应触发 recovery/扫描")
+
+        monkeypatch.setattr(cli, "scan_recovery", forbidden)
+        monkeypatch.setattr(cli, "scan_source", forbidden)
+        assert _run(ws, "backup", "--yes") == 6
+        assert writer_lock.is_file()
+        assert not (repo.path / "locks" / "default.lock").exists()
+        assert sorted(os.listdir(to_long_path(repo.path / "manifests"))) == before_manifests
+        assert sorted(os.listdir(to_long_path(repo.path / "snapshots"))) == before_snapshots
+        assert sorted(os.listdir(to_long_path(repo.path / "logs"))) == before_reports
+
+    def test_repo_writer_namespace_cannot_collide_with_task_lock(self, backed_up) -> None:
+        repo = _repo(backed_up)
+        task_lock = repo.path / "locks" / "repo-writer.lock"
+        writer_lock = repo.path / "locks" / "repo-writer" / "active.lock"
+        assert task_lock != writer_lock
+
+        with cli._TaskLock(repo, "repo-writer"), cli._RepoWriterLock(repo):
+            assert task_lock.is_file()
+            assert writer_lock.is_file()
+        _assert_repo_writer_idle(repo)
+
+    def test_repo_writer_namespace_persists_across_reacquire(self, backed_up) -> None:
+        repo = _repo(backed_up)
+        namespace = repo.path / "locks" / "repo-writer"
+        writer_lock = namespace / "active.lock"
+
+        with cli._RepoWriterLock(repo):
+            assert writer_lock.is_file()
+        assert namespace.is_dir()
+        assert not writer_lock.exists()
+
+        with cli._RepoWriterLock(repo):
+            assert writer_lock.is_file()
+        assert namespace.is_dir()
+        assert not writer_lock.exists()
+
+    def test_repo_writer_locks_are_independent_across_repositories(
+        self, backed_up, tmp_path
+    ) -> None:
+        repo1 = _repo(backed_up)
+        target2 = tmp_path / "independent-target"
+        target2.mkdir()
+        repo2 = init_repo(target2, assume_yes=True)
+
+        with cli._RepoWriterLock(repo1), cli._RepoWriterLock(repo2):
+            assert (repo1.path / "locks" / "repo-writer" / "active.lock").is_file()
+            assert (repo2.path / "locks" / "repo-writer" / "active.lock").is_file()
+        _assert_repo_writer_idle(repo1)
+        _assert_repo_writer_idle(repo2)
+
+    def test_repo_writer_lock_released_after_handled_error(self, backed_up, monkeypatch) -> None:
+        ws = backed_up
+        repo = _repo(ws)
+
+        def boom(*a, **kw):
+            raise cli.SnapshotError("simulated handled backup error")
+
+        monkeypatch.setattr(cli, "scan_source", boom)
+        assert _run(ws, "backup", "--yes") == 1
+        _assert_repo_writer_idle(repo)
+        with cli._RepoWriterLock(repo):
+            assert (repo.path / "locks" / "repo-writer" / "active.lock").is_file()
+        _assert_repo_writer_idle(repo)
+
+    def test_different_task_can_backup_after_normal_release(self, backed_up) -> None:
+        ws = backed_up
+        repo = _repo(ws)
+        cfg = load_task_config(ws["config"] / "config.d" / "default.toml")
+        write_task_config(replace(cfg, name="taskB"), ws["config"])
+
+        assert _run(ws, "--task", "taskB", "backup", "--yes") == 0
+        _assert_repo_writer_idle(repo)
+        complete = [m for m in list_manifests(repo) if m.status == "complete"]
+        assert len(complete) == 2
+
+    def test_cross_task_resume_cannot_discard_active_backup(self, ws, snap_ids, tmp_path) -> None:
+        """CONCURRENCY-1: repo writer lock closes the confirmed false-complete race."""
+        _write(ws["src"] / "base.txt", b"baseline")
+        assert _init(ws, "--task", "taskA") == 0
+        cfg_a = load_task_config(ws["config"] / "config.d" / "taskA.toml")
+        write_task_config(replace(cfg_a, name="taskB"), ws["config"])
+        assert _run(ws, "--task", "taskA", "backup", "--yes") == 0
+        _write(ws["src"] / "new.txt", b"new payload")
+
+        worker = tmp_path / "pause_after_write_snapshot.py"
+        marker = tmp_path / "after-write.marker"
+        release = tmp_path / "release.marker"
+        worker.write_text(
+            """from pathlib import Path
+import os
+import sys
+import time
+from mirrorly import cli
+
+config, marker, release = map(Path, sys.argv[1:])
+real_write_snapshot = cli.write_snapshot
+
+def pause_after_write(*args, **kwargs):
+    result = real_write_snapshot(*args, **kwargs)
+    marker.write_text(str(os.getpid()), encoding="utf-8")
+    deadline = time.monotonic() + 30
+    while not release.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError("test barrier release timeout")
+        time.sleep(0.01)
+    return result
+
+cli.write_snapshot = pause_after_write
+raise SystemExit(cli.main([
+    "--config", str(config), "--task", "taskA", "backup", "--yes", "--json"
+]))
+""",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        proc_a = subprocess.Popen(
+            [sys.executable, "-B", str(worker), str(ws["config"]), str(marker), str(release)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            env=env,
+        )
+        a_stdout = a_stderr = ""
+        try:
+            deadline = time.monotonic() + 30
+            while not marker.exists():
+                if proc_a.poll() is not None:
+                    a_stdout, a_stderr = proc_a.communicate()
+                    pytest.fail(
+                        f"taskA exited before deterministic barrier: "
+                        f"{proc_a.returncode}\n{a_stdout}\n{a_stderr}"
+                    )
+                if time.monotonic() > deadline:
+                    pytest.fail("taskA did not reach after-write_snapshot barrier")
+                time.sleep(0.01)
+
+            repo = _repo(ws)
+            before = list_manifests(repo)
+            incomplete = [m for m in before if m.status == "incomplete"]
+            assert len(incomplete) == 1
+            active_id = incomplete[0].snapshot_id
+            active_manifest = repo.path / "manifests" / f"{active_id}.json"
+            active_tree = repo.path / "snapshots" / active_id
+            expected_files = ["base.txt", "new.txt"]
+            assert sorted(p.name for p in active_tree.iterdir()) == expected_files
+            before_manifest_bytes = active_manifest.read_bytes()
+            before_snapshot_dirs = sorted(p.name for p in (repo.path / "snapshots").iterdir())
+            before_reports = sorted(p.name for p in (repo.path / "logs").glob("backup-*.json"))
+
+            proc_b = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "mirrorly",
+                    "--config",
+                    str(ws["config"]),
+                    "--task",
+                    "taskB",
+                    "backup",
+                    "--yes",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=env,
+                timeout=30,
+            )
+            assert proc_b.returncode == 6
+            assert "仓库写锁被占用" in proc_b.stderr
+            assert active_manifest.read_bytes() == before_manifest_bytes
+            assert sorted(p.name for p in active_tree.iterdir()) == expected_files
+            assert sorted(p.name for p in (repo.path / "snapshots").iterdir()) == (
+                before_snapshot_dirs
+            )
+            assert sorted(p.name for p in (repo.path / "logs").glob("backup-*.json")) == (
+                before_reports
+            )
+            assert [m.snapshot_id for m in list_manifests(repo) if m.status == "incomplete"] == [
+                active_id
+            ]
+        finally:
+            release.write_text("continue", encoding="utf-8")
+            if proc_a.poll() is None:
+                try:
+                    a_stdout, a_stderr = proc_a.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc_a.kill()
+                    a_stdout, a_stderr = proc_a.communicate()
+            elif not a_stdout and not a_stderr:
+                a_stdout, a_stderr = proc_a.communicate()
+
+        assert proc_a.returncode == 0, a_stdout + a_stderr
+        payload_a = json.loads(a_stdout)
+        assert payload_a["snapshot_id"] == active_id
+        final_manifest = load_manifest(repo, active_id, require_complete=True)
+        assert all(entry.sha for entry in final_manifest.entries if not entry.is_dir)
+        assert active_tree.is_dir()
+        assert sorted(p.name for p in active_tree.iterdir()) == expected_files
+        verified = verify_snapshot(repo, active_id)
+        assert verified.ok
+        assert verified.hashed_files == verified.checked_files == 2
+        assert verified.unhashed_entries == 0
+        assert not [m for m in list_manifests(repo) if m.status == "incomplete"]
+        _assert_repo_writer_idle(repo)
 
 
 class TestJsonPurity:
