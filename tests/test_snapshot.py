@@ -258,11 +258,18 @@ class TestDegradedRepo:
 
 
 class TestHelpers:
-    def test_generate_snapshot_id_format(self) -> None:
+    def test_generate_snapshot_id_format(self, monkeypatch) -> None:
         from datetime import datetime
+        from uuid import UUID
 
-        sid = generate_snapshot_id(datetime(2026, 9, 13, 1, 2, 3))
-        assert sid == "2026-09-13_010203"
+        fixed_uuid = UUID("12345678-1234-4abc-8def-1234567890ab")
+        monkeypatch.setattr("mirrorly.snapshot.uuid.uuid4", lambda: fixed_uuid)
+        sid = generate_snapshot_id(datetime(2026, 9, 13, 1, 2, 3), ordinal=42)
+        assert sid == "2026-09-13_010203-u000042-1234567812344abc8def1234567890ab"
+        suffix = sid.rsplit("-", 1)[1]
+        assert len(suffix) == 32
+        assert suffix == suffix.lower()
+        assert UUID(hex=suffix).version == 4
 
 
 def _prev_entry(path, scanned):

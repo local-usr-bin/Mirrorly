@@ -18,13 +18,15 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
 from mirrorly import cli
+from mirrorly import manifest as manifest_mod
 from mirrorly import snapshot as snapshot_mod
 from mirrorly.cli import main
 from mirrorly.config import (
@@ -35,10 +37,17 @@ from mirrorly.config import (
     write_task_config,
 )
 from mirrorly.hashing import hash_file
-from mirrorly.manifest import create_manifest, list_manifests, load_manifest, write_manifest
+from mirrorly.manifest import (
+    create_manifest,
+    list_manifests,
+    load_manifest,
+    mark_complete,
+    write_manifest,
+)
 from mirrorly.repo import RepoError, VolumeInfo, init_repo, load_repo
+from mirrorly.retention import build_retention_plan
 from mirrorly.scan import detect_changes, scan_source, to_long_path
-from mirrorly.snapshot import write_snapshot
+from mirrorly.snapshot import SNAPSHOT_ORDINAL_MAX, SnapshotError, write_snapshot
 from mirrorly.verify import verify_snapshot
 
 # ---------------------------------------------------------------------------
@@ -94,7 +103,7 @@ def snap_ids(monkeypatch):
     """快照 id 序列（避免同秒 id 碰撞）。"""
     counter = {"n": 0}
 
-    def next_id(now=None):
+    def next_id(now=None, *, ordinal=0):
         counter["n"] += 1
         return f"2026-09-13_0000{counter['n']:02d}"
 
@@ -114,6 +123,25 @@ def backed_up(ws, snap_ids):
 
 def _repo(ws):
     return load_repo(ws["target"])
+
+
+def _freeze_snapshot_clock(monkeypatch, when: datetime, *, manifests: bool = False) -> None:
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return when.replace(tzinfo=None)
+            aware = when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+            return aware.astimezone(tz)
+
+    monkeypatch.setattr(cli, "datetime", FrozenDateTime)
+    if manifests:
+        monkeypatch.setattr(manifest_mod, "datetime", FrozenDateTime)
+
+
+def _freeze_snapshot_uuids(monkeypatch, values: list[str]) -> None:
+    sequence = iter(UUID(hex=value) for value in values)
+    monkeypatch.setattr(snapshot_mod.uuid, "uuid4", lambda: next(sequence))
 
 
 def _assert_repo_writer_idle(repo) -> None:
@@ -812,81 +840,309 @@ def _make_incomplete_snapshot(ws, snap_id: str = "2026-09-13_000000") -> str:
 
 
 class TestSnapshotIdCollision:
-    def test_collision_gets_suffix_and_preserves_existing(self, ws, monkeypatch) -> None:
+    def test_collision_mints_fresh_uuid_and_preserves_existing(self, ws, monkeypatch) -> None:
         _write(ws["src"] / "a.txt", b"alpha")
         assert _init(ws) == 0
-        # 强制 id 生成器连续返回同一个 id（模拟秒级碰撞）
-        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
-        assert _run(ws, "backup", "--yes") == 0
         repo = _repo(ws)
-        first_manifest = repo.path / "manifests" / "2026-09-13_100000.json"
+        prefix = "2026-09-13_100000"
+        _freeze_snapshot_clock(monkeypatch, datetime(2026, 9, 13, 10, 0, 0))
+        first_uuid = UUID("11111111-1111-4111-8111-111111111111")
+        collision_uuid = UUID("22222222-2222-4222-8222-222222222222")
+        fresh_uuid = UUID("33333333-3333-4333-8333-333333333333")
+        uuids = iter((first_uuid, collision_uuid, fresh_uuid))
+        collision = f"{prefix}-u000001-{collision_uuid.hex}"
+
+        def next_uuid():
+            value = next(uuids)
+            if value == collision_uuid:
+                # high-water scan 后、完整 candidate 检查前出现外部 artifact，
+                # 稳定复现 full-id collision；retry 必须留在同一 ordinal。
+                (repo.path / "snapshots" / collision).mkdir()
+            return value
+
+        monkeypatch.setattr(snapshot_mod.uuid, "uuid4", next_uuid)
+        occupied = f"{prefix}-u000000-{first_uuid.hex}"
+        fresh = f"{prefix}-u000001-{fresh_uuid.hex}"
+        assert _run(ws, "backup", "--yes") == 0
+        first_manifest = repo.path / "manifests" / f"{occupied}.json"
         first_manifest_bytes = first_manifest.read_bytes()
-        first_snap_file = repo.path / "snapshots" / "2026-09-13_100000" / "a.txt"
+        first_snap_file = repo.path / "snapshots" / occupied / "a.txt"
         first_snap_bytes = first_snap_file.read_bytes()
 
-        # 第二次备份强制撞到同一个已有 complete id
+        # 第二次备份的 u000001 candidate 撞到外部 artifact 后，只 retry UUID；
+        # 不推进到 u000002，也不覆盖已有 lifecycle。
         _write(ws["src"] / "a.txt", b"alpha-v2")
         assert _run(ws, "backup", "--yes") == 0
 
         # 既有快照零污染：manifest 字节、目录内容、complete 状态全部不变
         assert first_manifest.read_bytes() == first_manifest_bytes
         assert first_snap_file.read_bytes() == first_snap_bytes
-        assert load_manifest(repo, "2026-09-13_100000").status == "complete"
+        assert load_manifest(repo, occupied).status == "complete"
 
-        # 新备份获得唯一后缀 id 并正常完成
-        ids = [s.snapshot_id for s in list_manifests(repo)]
-        assert "2026-09-13_100000-01" in ids
-        assert load_manifest(repo, "2026-09-13_100000-01").status == "complete"
+        ids = {s.snapshot_id for s in list_manifests(repo)}
+        assert ids == {occupied, fresh}
+        assert (repo.path / "snapshots" / collision).is_dir()
+        assert load_manifest(repo, fresh).status == "complete"
+        assert (repo.path / "snapshots" / fresh / "a.txt").read_bytes() == b"alpha-v2"
+
+    def test_retention_does_not_rebind_deleted_lifecycle_id(self, ws, monkeypatch) -> None:
+        _write(ws["src"] / "base.txt", b"base")
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        cfg = load_task_config(ws["config"] / "config.d" / "default.toml")
+        write_task_config(replace(cfg, keep_last=2, keep_monthly=1), ws["config"])
+
+        prefix = "2026-09-13_100000"
+        _freeze_snapshot_clock(monkeypatch, datetime(2026, 9, 13, 10, 0, 0))
+        uuid_hexes = [
+            "ffffffffffff4fffbfffffffffffffff",
+            "8888888888884888a888888888888888",
+            "00000000000040008000000000000000",
+            "11111111111141119111111111111111",
+        ]
+        _freeze_snapshot_uuids(monkeypatch, uuid_hexes)
+        lifecycle_ids = [
+            f"{prefix}-u{ordinal:06d}-{uuid_hex}" for ordinal, uuid_hex in enumerate(uuid_hexes)
+        ]
+
+        report_ids: list[str] = []
+        first_report: Path | None = None
+        for i, expected_id in enumerate(lifecycle_ids):
+            _write(ws["src"] / f"v{i}.txt", f"version-{i}".encode())
+            before_reports = set((repo.path / "logs").glob("backup-*.json"))
+            assert _run(ws, "backup", "--yes") == 0
+            new_reports = set((repo.path / "logs").glob("backup-*.json")) - before_reports
+            assert len(new_reports) == 1
+            report_path = new_reports.pop()
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            assert payload["snapshot_id"] == expected_id
+            report_ids.append(payload["snapshot_id"])
+            if i == 0:
+                first_report = report_path
+            if i == 2:
+                assert not (repo.path / "manifests" / f"{lifecycle_ids[0]}.json").exists()
+                assert not (repo.path / "snapshots" / lifecycle_ids[0]).exists()
+
+        assert len(set(lifecycle_ids)) == 4
+        assert report_ids == lifecycle_ids
+        assert len(set(report_ids)) == 4
+        assert first_report is not None and first_report.is_file()
         assert (
-            repo.path / "snapshots" / "2026-09-13_100000-01" / "a.txt"
-        ).read_bytes() == b"alpha-v2"
+            json.loads(first_report.read_text(encoding="utf-8"))["snapshot_id"] == lifecycle_ids[0]
+        )
 
-    def test_collision_chain_skips_taken_suffixes(self, ws, monkeypatch) -> None:
+        remaining = {s.snapshot_id for s in list_manifests(repo)}
+        assert remaining == set(lifecycle_ids[-2:])
+        assert lifecycle_ids[3] != lifecycle_ids[0]
+        assert "-u000003-" in lifecycle_ids[3]  # A 的 u000000 hole 不得复用
+        for sid in remaining:
+            verification = verify_snapshot(repo, sid)
+            assert verification.ok
+            assert verification.unhashed_entries == 0
+
+        # A 的持久报告仍在，但 A 已被 retention 删除；旧 selector 必须 not-found，
+        # 不能静默作用于 D generation。
+        assert _run(ws, "verify", "--snapshot", lifecycle_ids[0]) == 1
+        destination = ws["src"].parent / "old-a-restore"
+        assert (
+            _run(
+                ws,
+                "restore",
+                "--snapshot",
+                lifecycle_ids[0],
+                "--to",
+                str(destination),
+                "--yes",
+            )
+            == 1
+        )
+        assert not destination.exists()
+        assert (repo.path / "snapshots" / lifecycle_ids[3] / "v3.txt").read_bytes() == b"version-3"
+
+    def test_legacy_id_accepted_by_verify_restore_and_retention(self, ws, monkeypatch) -> None:
         _write(ws["src"] / "a.txt", b"alpha")
         assert _init(ws) == 0
-        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
+        repo = _repo(ws)
+        cfg = load_task_config(ws["config"] / "config.d" / "default.toml")
+        write_task_config(replace(cfg, keep_last=1, keep_monthly=1), ws["config"])
+        legacy = "2026-09-13_100000-01"
+        current = "2026-09-13_100000-u000000-eeeeeeeeeeee4eee8eeeeeeeeeeeeeee"
+        candidates = iter((legacy, current))
+        monkeypatch.setattr(
+            cli,
+            "generate_snapshot_id",
+            lambda now=None, *, ordinal=0: next(candidates),
+        )
         assert _run(ws, "backup", "--yes") == 0
-        assert _run(ws, "backup", "--yes") == 0
-        assert _run(ws, "backup", "--yes") == 0
-        ids = {s.snapshot_id for s in list_manifests(_repo(ws))}
-        assert ids == {
-            "2026-09-13_100000",
-            "2026-09-13_100000-01",
-            "2026-09-13_100000-02",
-        }
-
-    def test_suffixed_id_accepted_by_verify_and_restore(self, ws, monkeypatch) -> None:
-        _write(ws["src"] / "a.txt", b"alpha")
-        assert _init(ws) == 0
-        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
-        assert _run(ws, "backup", "--yes") == 0
-        assert _run(ws, "backup", "--yes") == 0
-        suffixed = "2026-09-13_100000-01"
-        # 后缀 id 必须兼容 verify / restore 的 snapshot-id 校验
-        assert _run(ws, "verify", "--snapshot", suffixed) == 0
+        assert load_manifest(repo, legacy).status == "complete"
+        assert _run(ws, "verify", "--snapshot", legacy) == 0
         dest = ws["src"].parent / "out"
-        assert _run(ws, "restore", "--snapshot", suffixed, "--to", str(dest), "--yes") == 0
+        assert _run(ws, "restore", "--snapshot", legacy, "--to", str(dest), "--yes") == 0
         assert (dest / "a.txt").read_bytes() == b"alpha"
+
+        _write(ws["src"] / "a.txt", b"alpha-v2")
+        assert _run(ws, "backup", "--yes") == 0
+        assert [s.snapshot_id for s in list_manifests(repo)] == [current]
+        assert not (repo.path / "manifests" / f"{legacy}.json").exists()
+        assert not (repo.path / "snapshots" / legacy).exists()
 
     def test_unallocatable_id_fails_with_zero_writes(self, ws, monkeypatch) -> None:
         _write(ws["src"] / "a.txt", b"alpha")
         assert _init(ws) == 0
         repo = _repo(ws)
-        # 占满基准 id 与全部 99 个后缀候选（complete manifest，内容合法）
-        from mirrorly.manifest import create_manifest, mark_complete, write_manifest
+        occupied = "2026-09-13_100000-u000000-ffffffffffff4fff8fffffffffffffff"
+        monkeypatch.setattr(
+            cli,
+            "generate_snapshot_id",
+            lambda now=None, *, ordinal=0: occupied,
+        )
+        assert _run(ws, "backup", "--yes") == 0
+        before_manifest = (repo.path / "manifests" / f"{occupied}.json").read_bytes()
+        before_file = (repo.path / "snapshots" / occupied / "a.txt").read_bytes()
+        before_reports = sorted((repo.path / "logs").glob("backup-*.json"))
 
-        for n in range(100):
-            sid = "2026-09-13_100000" if n == 0 else f"2026-09-13_100000-{n:02d}"
-            write_manifest(
-                repo,
-                mark_complete(create_manifest(sid, str(ws["src"]), repo.hash_algorithm, {})),
-            )
-        before = sorted(os.listdir(to_long_path(repo.path / "manifests")))
-        monkeypatch.setattr(cli, "generate_snapshot_id", lambda now=None: "2026-09-13_100000")
+        _write(ws["src"] / "a.txt", b"alpha-v2")
         assert _run(ws, "backup", "--yes") == 1  # 安全失败
-        # 零写入：manifest 集合不变、没有新快照目录
-        assert sorted(os.listdir(to_long_path(repo.path / "manifests"))) == before
-        assert sorted(os.listdir(to_long_path(repo.path / "snapshots"))) == []
+        assert (repo.path / "manifests" / f"{occupied}.json").read_bytes() == before_manifest
+        assert (repo.path / "snapshots" / occupied / "a.txt").read_bytes() == before_file
+        assert sorted((repo.path / "logs").glob("backup-*.json")) == before_reports
+        assert [s.snapshot_id for s in list_manifests(repo)] == [occupied]
+
+    def test_ordinal_high_water_includes_incomplete_orphan_and_temp(self, ws, monkeypatch) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        prefix = "2026-09-13_100000"
+        _freeze_snapshot_clock(monkeypatch, datetime(2026, 9, 13, 10, 0, 0))
+
+        current = scan_source(ws["src"], ()).entries
+        incomplete = f"{prefix}-u000003-33333333333343338333333333333333"
+        write_manifest(
+            repo,
+            create_manifest(incomplete, str(ws["src"]), repo.hash_algorithm, current),
+        )
+        orphan = f"{prefix}-u000005-55555555555545559555555555555555"
+        (repo.path / "snapshots" / orphan).mkdir()
+        staged = f"{prefix}-u000007-77777777777747779777777777777777"
+        (repo.path / "manifests.tmp" / f"{staged}.json.tmp").write_text("partial")
+
+        next_uuid = "8888888888884888a888888888888888"
+        _freeze_snapshot_uuids(monkeypatch, [next_uuid])
+        allocated = cli._new_snapshot_id(repo)
+        assert allocated == f"{prefix}-u000008-{next_uuid}"
+        assert not cli._snapshot_id_free(repo, staged)
+
+    def test_ordinal_exhaustion_fails_closed(self, ws, monkeypatch) -> None:
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        prefix = "2026-09-13_100000"
+        _freeze_snapshot_clock(monkeypatch, datetime(2026, 9, 13, 10, 0, 0))
+        occupied = f"{prefix}-u{SNAPSHOT_ORDINAL_MAX:06d}-ffffffffffff4fffbfffffffffffffff"
+        (repo.path / "snapshots" / occupied).mkdir()
+
+        def unexpected_uuid():
+            pytest.fail("ordinal exhaustion must fail before minting a UUID")
+
+        monkeypatch.setattr(snapshot_mod.uuid, "uuid4", unexpected_uuid)
+        with pytest.raises(SnapshotError, match="ordinal 已达到上限"):
+            cli._new_snapshot_id(repo)
+
+    def test_legacy_ids_sort_before_new_ordinals_for_equal_created_at(self, ws) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        current = scan_source(ws["src"], ()).entries
+        digest = hash_file(ws["src"] / "a.txt", repo.hash_algorithm)
+        prefix = "2026-09-13_100000"
+        ids = [
+            prefix,
+            f"{prefix}-01",
+            f"{prefix}-02",
+            f"{prefix}-u000000-ffffffffffff4fffbfffffffffffffff",
+            f"{prefix}-u000001-00000000000040008000000000000000",
+        ]
+        created_at = "2026-09-13T10:00:00.000000+00:00"
+        for snapshot_id in ids:
+            snapshot_dir = repo.path / "snapshots" / snapshot_id
+            snapshot_dir.mkdir()
+            (snapshot_dir / "a.txt").write_bytes(b"alpha")
+            manifest = create_manifest(
+                snapshot_id,
+                str(ws["src"]),
+                repo.hash_algorithm,
+                current,
+                hashes={"a.txt": digest},
+            )
+            write_manifest(repo, mark_complete(replace(manifest, created_at=created_at)))
+
+        assert cli._latest_complete(repo).snapshot_id == ids[-1]
+        plan = build_retention_plan(repo, keep_last=2, keep_monthly=0)
+        assert plan.keep == tuple(ids[-2:])
+        assert plan.delete == tuple(ids[:-2])
+
+    def test_equal_created_at_uses_latest_baseline_and_preserves_source(
+        self, ws, monkeypatch, capsys
+    ) -> None:
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        fixed = datetime(2026, 9, 13, 10, 0, 0)
+        _freeze_snapshot_clock(monkeypatch, fixed, manifests=True)
+        uuid_hexes = [
+            "ffffffffffff4fffbfffffffffffffff",
+            "8888888888884888a888888888888888",
+            "00000000000040008000000000000000",
+            "11111111111141119111111111111111",
+        ]
+        _freeze_snapshot_uuids(monkeypatch, uuid_hexes)
+        prefix = "2026-09-13_100000"
+        ids = [f"{prefix}-u{ordinal:06d}-{uuid_hex}" for ordinal, uuid_hex in enumerate(uuid_hexes)]
+        fixed_mtime = 1_700_000_000_000_000_000
+
+        for content, mtime in (
+            (b"A", fixed_mtime),
+            (b"B", fixed_mtime + 1_000_000_000),
+            (b"C", fixed_mtime),
+        ):
+            _write(ws["src"] / "data.txt", content)
+            os.utime(ws["src"] / "data.txt", ns=(mtime, mtime))
+            assert (ws["src"] / "data.txt").stat().st_mtime_ns == mtime
+            assert _run(ws, "backup", "--yes") == 0
+
+        assert len({load_manifest(repo, sid).created_at for sid in ids[:3]}) == 1
+        assert cli._latest_complete(repo).snapshot_id == ids[2]
+        plan = build_retention_plan(repo, keep_last=2, keep_monthly=0)
+        assert plan.keep == (ids[1], ids[2])
+        assert plan.delete == (ids[0],)
+
+        capsys.readouterr()
+        assert _run(ws, "verify", "--json") == 0
+        verify_payload = json.loads(capsys.readouterr().out)
+        assert [entry["snapshot_id"] for entry in verify_payload["snapshots"]] == [ids[2]]
+
+        destination = ws["src"].parent / "latest-restore"
+        assert _run(ws, "restore", "--to", str(destination), "--yes") == 0
+        assert (destination / "data.txt").read_bytes() == b"C"
+
+        # 当前 source 与 logical latest C 相同；A 与 source size/mtime 相同但
+        # bytes 不同。下一次真实 backup 必须以 C 为 baseline，不能 hardlink A。
+        assert _run(ws, "backup", "--yes") == 0
+        a_file = repo.path / "snapshots" / ids[0] / "data.txt"
+        c_file = repo.path / "snapshots" / ids[2] / "data.txt"
+        d_file = repo.path / "snapshots" / ids[3] / "data.txt"
+        assert d_file.read_bytes() == b"C"
+        assert os.path.samefile(d_file, c_file)
+        assert not os.path.samefile(d_file, a_file)
+
+        report_path = next((repo.path / "logs").glob(f"backup-{ids[3]}-*.json"))
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["linked"] == ["data.txt"]
+        assert report["copied"] == []
+        final_manifest = load_manifest(repo, ids[3], require_complete=True)
+        final_entry = next(entry for entry in final_manifest.entries if entry.path == "data.txt")
+        assert final_entry.sha == hash_file(c_file, repo.hash_algorithm)
+        verification = verify_snapshot(repo, ids[3])
+        assert verification.ok
+        assert verification.unhashed_entries == 0
 
 
 class TestB1SnapshotImmutability:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -63,7 +64,14 @@ from .repo import (
 from .restore import RestoreError, apply_restore, plan_restore
 from .retention import RetentionError, apply_retention_plan, build_retention_plan
 from .scan import PreviousEntry, detect_changes, scan_source
-from .snapshot import SnapshotError, generate_snapshot_id, write_snapshot
+from .snapshot import (
+    SNAPSHOT_ORDINAL_MAX,
+    SNAPSHOT_ORDINAL_WIDTH,
+    SnapshotError,
+    generate_snapshot_id,
+    generate_snapshot_prefix,
+    write_snapshot,
+)
 from .verify import verify_snapshot
 
 # ---------------------------------------------------------------------------
@@ -405,27 +413,64 @@ class _RepoWriterLock(_ExclusiveFileLock):
 
 
 def _snapshot_id_free(repo: RepoInfo, snapshot_id: str) -> bool:
-    """快照 id 未被占用（数据目录与 manifest 均不存在）。"""
+    """快照 id 未被当前正式或 staging artifact 占用。"""
     return (
         not (repo.path / "snapshots" / snapshot_id).exists()
         and not (repo.path / "manifests" / f"{snapshot_id}.json").exists()
+        and not (repo.path / "manifests.tmp" / f"{snapshot_id}.json.tmp").exists()
     )
 
 
-def _new_snapshot_id(repo: RepoInfo) -> str:
-    """分配唯一快照 id：秒级时间型 id 冲突时追加 ``-01``/``-02`` canonical 后缀。
+_NEW_SNAPSHOT_ID_RE = re.compile(
+    rf"(?P<prefix>\d{{4}}-\d{{2}}-\d{{2}}_\d{{6}})"
+    rf"-u(?P<ordinal>\d{{{SNAPSHOT_ORDINAL_WIDTH}}})-[0-9a-f]{{32}}"
+)
 
-    保证任何 id collision 下既有快照目录/manifest 字节/complete 状态不被
-    触碰——先选定空闲 id，再落盘 incomplete manifest；后缀形式
-    ``2026-09-13_133000-01`` 满足 Restore 的单组件 canonical 校验。
-    在任务锁内调用，同任务并发已由锁排除。
+
+def _snapshot_namespace_ids(repo: RepoInfo):
+    """枚举会占据 snapshot lifecycle namespace 的当前 artifact id。"""
+    for path in (repo.path / "manifests").glob("*.json"):
+        yield path.stem
+    for path in (repo.path / "snapshots").iterdir():
+        yield path.name
+    tmp_suffix = ".json.tmp"
+    for path in (repo.path / "manifests.tmp").glob(f"*{tmp_suffix}"):
+        yield path.name[: -len(tmp_suffix)]
+
+
+def _next_snapshot_ordinal(repo: RepoInfo, prefix: str) -> int:
+    """返回同 prefix 当前 namespace 的 high-water ordinal + 1。"""
+    high_water = -1
+    for snapshot_id in _snapshot_namespace_ids(repo):
+        match = _NEW_SNAPSHOT_ID_RE.fullmatch(snapshot_id)
+        if match is not None and match.group("prefix") == prefix:
+            high_water = max(high_water, int(match.group("ordinal")))
+    if high_water >= SNAPSHOT_ORDINAL_MAX:
+        raise SnapshotError(
+            f"无法分配快照 id：时间前缀 {prefix} 的 ordinal 已达到上限 {SNAPSHOT_ORDINAL_MAX}"
+        )
+    return high_water + 1
+
+
+def _new_snapshot_id(repo: RepoInfo) -> str:
+    """为新生命周期分配有序 ordinal + UUIDv4 id。
+
+    ordinal 取同 timestamp prefix 当前正式/残留 namespace 的 high-water + 1，
+    不填 retention/discard 留下的空洞。极端 UUID collision 只重新 mint UUID，
+    不推进 ordinal。先选定空闲 id，再落盘 incomplete manifest，任何当前
+    collision 下既有 artifact 均不被触碰。
     """
-    base = generate_snapshot_id()
-    for n in range(100):
-        candidate = base if n == 0 else f"{base}-{n:02d}"
+    now = datetime.now()
+    prefix = generate_snapshot_prefix(now)
+    ordinal = _next_snapshot_ordinal(repo, prefix)
+    for _ in range(100):
+        candidate = generate_snapshot_id(now, ordinal=ordinal)
         if _snapshot_id_free(repo, candidate):
             return candidate
-    raise SnapshotError(f"无法分配唯一快照 id：基准 {base} 的 100 个候选均已被占用")
+    raise SnapshotError(
+        f"无法分配唯一快照 id：ordinal u{ordinal:0{SNAPSHOT_ORDINAL_WIDTH}d} 的"
+        "连续 100 个 UUID candidate 均已被占用"
+    )
 
 
 def _write_report(repo: RepoInfo, name: str, data: dict) -> Path:

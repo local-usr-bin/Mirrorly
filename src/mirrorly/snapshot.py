@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import os
+import re
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -58,9 +60,29 @@ class SnapshotResult:
     hashes: dict[str, str] = field(default_factory=dict)
 
 
-def generate_snapshot_id(now: datetime | None = None) -> str:
-    """生成快照 id（本地时间，格式 YYYY-MM-DD_HHMMSS）。"""
+SNAPSHOT_ORDINAL_WIDTH = 6
+SNAPSHOT_ORDINAL_MAX = 10**SNAPSHOT_ORDINAL_WIDTH - 1
+_SNAPSHOT_PREFIX_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{6}")
+
+
+def generate_snapshot_prefix(now: datetime | None = None) -> str:
+    """生成便于人工阅读的本地时间前缀（YYYY-MM-DD_HHMMSS）。"""
     return (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
+
+
+def generate_snapshot_id(now: datetime | None = None, *, ordinal: int = 0) -> str:
+    """为一次新快照生命周期 mint 时间前缀、ordinal 与完整 UUIDv4 的 id。
+
+    ordinal 是同一 timestamp prefix 下的定宽顺序号；UUID 使用 32 位
+    lowercase hex，仅含文件名安全 ASCII。当前 namespace 的 high-water
+    计算与极端 UUID collision retry 由 CLI allocator 负责。
+    """
+    if not 0 <= ordinal <= SNAPSHOT_ORDINAL_MAX:
+        raise SnapshotError(f"快照 ordinal 超出范围: {ordinal}（允许 0..{SNAPSHOT_ORDINAL_MAX}）")
+    prefix = generate_snapshot_prefix(now)
+    if _SNAPSHOT_PREFIX_RE.fullmatch(prefix) is None:  # pragma: no cover - 内部生成防御
+        raise SnapshotError(f"非法快照时间前缀: {prefix!r}")
+    return f"{prefix}-u{ordinal:0{SNAPSHOT_ORDINAL_WIDTH}d}-{uuid.uuid4().hex}"
 
 
 def write_snapshot(
