@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +35,10 @@ STATUS_COMPLETE = "complete"
 
 class ManifestError(Exception):
     """清单读写/校验相关错误。"""
+
+
+class ManifestOrderingError(ManifestError):
+    """清单生命周期顺序不明确或违反唯一性约束。"""
 
 
 @dataclass(frozen=True)
@@ -203,7 +207,84 @@ def list_manifests(repo: RepoInfo) -> list[ManifestSummary]:
                 format_version=version,
             )
         )
+    _validate_unique_lifecycle_sequences(out)
     return out
+
+
+def latest_sequenced_complete(
+    summaries: Sequence[ManifestSummary],
+) -> ManifestSummary | None:
+    """返回 sequence 最大的 v2 complete；legacy 不参与生命周期竞争。"""
+    _validate_unique_lifecycle_sequences(summaries)
+    complete = [
+        summary
+        for summary in summaries
+        if summary.status == STATUS_COMPLETE and summary.lifecycle_seq is not None
+    ]
+    if not complete:
+        return None
+    return max(complete, key=lambda summary: summary.lifecycle_seq)
+
+
+def select_default_complete(
+    summaries: Sequence[ManifestSummary],
+) -> ManifestSummary | None:
+    """选择默认 complete，无法确定 legacy latest 时 fail closed。
+
+    一旦存在 sequenced complete，所有 legacy complete 都视为更早的历史；
+    legacy-only 仓库仅在恰有一个 complete 时可无歧义地默认选择。
+    """
+    latest = latest_sequenced_complete(summaries)
+    if latest is not None:
+        return latest
+    legacy = [
+        summary
+        for summary in summaries
+        if summary.status == STATUS_COMPLETE and summary.lifecycle_seq is None
+    ]
+    if len(legacy) <= 1:
+        return legacy[0] if legacy else None
+    raise ManifestOrderingError(
+        "legacy 仓库包含多个 complete 快照，无法可靠判断 latest；"
+        "请显式指定 --snapshot，或使用 verify --all"
+    )
+
+
+def newest_eligible_incomplete(
+    summaries: Sequence[ManifestSummary],
+) -> ManifestSummary | None:
+    """返回 latest complete 之后 sequence 最大的 v2 incomplete。
+
+    legacy incomplete 不自动选择；sequence 不大于 latest complete 的 v2
+    incomplete 是 stale/superseded residue，也不参与自动续传。
+    """
+    latest_complete = latest_sequenced_complete(summaries)
+    complete_seq = -1 if latest_complete is None else latest_complete.lifecycle_seq
+    eligible = [
+        summary
+        for summary in summaries
+        if summary.status == STATUS_INCOMPLETE
+        and summary.lifecycle_seq is not None
+        and summary.lifecycle_seq > complete_seq
+    ]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda summary: summary.lifecycle_seq)
+
+
+def _validate_unique_lifecycle_sequences(summaries: Sequence[ManifestSummary]) -> None:
+    owners: dict[int, str] = {}
+    for summary in summaries:
+        sequence = summary.lifecycle_seq
+        if sequence is None:
+            continue
+        previous = owners.get(sequence)
+        if previous is not None:
+            raise ManifestOrderingError(
+                f"manifest lifecycle_seq 重复: {sequence} "
+                f"同时属于 {previous!r} 与 {summary.snapshot_id!r}"
+            )
+        owners[sequence] = summary.snapshot_id
 
 
 def _to_json(manifest: Manifest) -> str:

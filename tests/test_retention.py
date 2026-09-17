@@ -10,6 +10,7 @@ import json
 import os
 from dataclasses import asdict, replace
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -114,6 +115,39 @@ def _make_snapshot(
         (d / "marker.txt").write_bytes(b"x")
 
 
+def _sequenced_id(sequence: int) -> str:
+    return f"2026-09-17_120000-s{sequence:020d}-{UUID(int=sequence + 1, version=4).hex}"
+
+
+def _make_sequenced_snapshot(
+    repo,
+    sequence: int,
+    created_at: str,
+    *,
+    status: str = STATUS_COMPLETE,
+    with_dir: bool = True,
+    with_manifest: bool = True,
+) -> str:
+    snapshot_id = _sequenced_id(sequence)
+    if with_manifest:
+        manifest = _create_manifest(
+            snapshot_id,
+            "C:/source",
+            repo.hash_algorithm,
+            {},
+            lifecycle_seq=sequence,
+        )
+        manifest = replace(manifest, created_at=created_at)
+        if status == STATUS_COMPLETE:
+            manifest = mark_complete(manifest)
+        _write_manifest(repo, manifest)
+    if with_dir:
+        directory = repo.path / "snapshots" / snapshot_id
+        Path(to_long_path(directory)).mkdir(parents=True, exist_ok=True)
+        (directory / "marker.txt").write_bytes(b"x")
+    return snapshot_id
+
+
 def _iso(day: str) -> str:
     return f"{day}T12:00:00+00:00"
 
@@ -121,106 +155,115 @@ def _iso(day: str) -> str:
 class TestKeepLast:
     def test_keep_last_deletes_oldest(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        for i in range(1, 6):
-            _make_snapshot(repo, f"snap{i}", _iso(f"2026-09-0{i}"))
+        ids = [_make_sequenced_snapshot(repo, i - 1, _iso(f"2026-09-0{i}")) for i in range(1, 6)]
 
         plan = build_retention_plan(repo, keep_last=3)
 
-        assert plan.keep == ("snap3", "snap4", "snap5")
-        assert plan.delete == ("snap1", "snap2")
+        assert plan.keep == tuple(ids[2:])
+        assert plan.delete == tuple(ids[:2])
         apply_retention_plan(repo, plan)
         remaining = sorted(p.name for p in (repo.path / "snapshots").iterdir())
-        assert remaining == ["snap3", "snap4", "snap5"]
+        assert remaining == sorted(ids[2:])
 
     def test_keep_last_zero_keeps_nothing_by_itself(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        for i in range(1, 4):
-            _make_snapshot(repo, f"snap{i}", _iso(f"2026-09-0{i}"))
+        ids = [_make_sequenced_snapshot(repo, i - 1, _iso(f"2026-09-0{i}")) for i in range(1, 4)]
 
         plan = build_retention_plan(repo, keep_last=0)
 
         assert plan.keep == ()
-        assert plan.delete == ("snap1", "snap2", "snap3")
+        assert plan.delete == tuple(ids)
 
     def test_no_policy_raises(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
         with pytest.raises(RetentionError, match="至少"):
             build_retention_plan(repo)
 
-    def test_sorting_uses_created_at_not_dir_mtime(self, tmp_path) -> None:
+    def test_sorting_uses_sequence_not_wall_clock_or_dir_mtime(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "old", _iso("2026-09-01"))
-        _make_snapshot(repo, "new", _iso("2026-09-02"))
-        # 人为触碰 old 的目录 mtime 使其"看起来更新"
-        os.utime(repo.path / "snapshots" / "old", None)
+        old = _make_sequenced_snapshot(repo, 0, _iso("2026-09-30"))
+        new = _make_sequenced_snapshot(repo, 1, _iso("2026-09-01"))
+        # wall clock 回拨且目录 mtime 反向，均不能压过 lifecycle sequence。
+        os.utime(repo.path / "snapshots" / old, None)
 
         plan = build_retention_plan(repo, keep_last=1)
 
-        assert plan.keep == ("new",)
-        assert plan.delete == ("old",)
+        assert plan.keep == (new,)
+        assert plan.delete == (old,)
 
 
 class TestKeepMonthly:
     def test_monthly_picks_latest_of_each_month(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "jul-early", _iso("2026-07-05"))
-        _make_snapshot(repo, "jul-late", _iso("2026-07-25"))
-        _make_snapshot(repo, "aug-mid", _iso("2026-08-15"))
-        _make_snapshot(repo, "sep-early", _iso("2026-09-02"))
-        _make_snapshot(repo, "sep-late", _iso("2026-09-10"))
+        jul_early = _make_sequenced_snapshot(repo, 0, _iso("2026-07-05"))
+        jul_late = _make_sequenced_snapshot(repo, 1, _iso("2026-07-25"))
+        aug_mid = _make_sequenced_snapshot(repo, 2, _iso("2026-08-15"))
+        sep_early = _make_sequenced_snapshot(repo, 3, _iso("2026-09-20"))
+        # 同月 wall clock 回拨；sequence=4 才是该月 lifecycle newest。
+        sep_late = _make_sequenced_snapshot(repo, 4, _iso("2026-09-01"))
 
         plan = build_retention_plan(repo, keep_monthly=3)
 
         # 当前为 2026-09：回溯 9/8/7 三个月，每月取该月最新 complete
-        assert plan.keep == ("jul-late", "aug-mid", "sep-late")
-        assert plan.delete == ("jul-early", "sep-early")
+        assert plan.keep == (jul_late, aug_mid, sep_late)
+        assert plan.delete == (jul_early, sep_early)
 
     def test_monthly_skips_months_without_snapshots(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "may", _iso("2026-05-10"))
-        _make_snapshot(repo, "sep", _iso("2026-09-10"))
+        may = _make_sequenced_snapshot(repo, 0, _iso("2026-05-10"))
+        sep = _make_sequenced_snapshot(repo, 1, _iso("2026-09-10"))
 
         plan = build_retention_plan(repo, keep_monthly=12)
 
-        assert plan.keep == ("may", "sep")
+        assert plan.keep == (may, sep)
         assert plan.delete == ()
 
 
 class TestCombinedPolicy:
     def test_union_of_keep_last_and_monthly(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "jun", _iso("2026-06-15"))
-        _make_snapshot(repo, "aug", _iso("2026-08-15"))
-        _make_snapshot(repo, "sep-a", _iso("2026-09-01"))
-        _make_snapshot(repo, "sep-b", _iso("2026-09-05"))
-        _make_snapshot(repo, "sep-c", _iso("2026-09-09"))
+        jun = _make_sequenced_snapshot(repo, 0, _iso("2026-06-15"))
+        aug = _make_sequenced_snapshot(repo, 1, _iso("2026-08-15"))
+        sep_a = _make_sequenced_snapshot(repo, 2, _iso("2026-09-01"))
+        sep_b = _make_sequenced_snapshot(repo, 3, _iso("2026-09-05"))
+        sep_c = _make_sequenced_snapshot(repo, 4, _iso("2026-09-09"))
 
         # keep_last=2 → sep-b, sep-c；keep_monthly=4 → 9/8/7/6 月代表
         plan = build_retention_plan(repo, keep_last=2, keep_monthly=4)
 
-        assert plan.keep == ("jun", "aug", "sep-b", "sep-c")
-        assert plan.delete == ("sep-a",)
+        assert plan.keep == (jun, aug, sep_b, sep_c)
+        assert plan.delete == (sep_a,)
+
+    def test_legacy_complete_is_always_protected(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "legacy-a", _iso("2026-09-30"))
+        _make_snapshot(repo, "legacy-b", _iso("2026-09-01"))
+        sequenced = _make_sequenced_snapshot(repo, 0, _iso("2026-09-15"))
+
+        plan = build_retention_plan(repo, keep_last=0, keep_monthly=0)
+
+        assert plan.keep == ("legacy-a", "legacy-b")
+        assert plan.delete == (sequenced,)
 
 
 class TestSafetyBoundaries:
     def test_dry_run_deletes_nothing(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        for i in range(1, 4):
-            _make_snapshot(repo, f"snap{i}", _iso(f"2026-09-0{i}"))
+        ids = [_make_sequenced_snapshot(repo, i - 1, _iso(f"2026-09-0{i}")) for i in range(1, 4)]
         plan = build_retention_plan(repo, keep_last=1)
-        assert plan.delete == ("snap1", "snap2")
+        assert plan.delete == tuple(ids[:2])
 
         result = apply_retention_plan(repo, plan, dry_run=True)
 
         assert result == ()
-        for i in range(1, 4):
-            assert (repo.path / "snapshots" / f"snap{i}").is_dir()
-            assert (repo.path / "manifests" / f"snap{i}.json").is_file()
+        for snapshot_id in ids:
+            assert (repo.path / "snapshots" / snapshot_id).is_dir()
+            assert (repo.path / "manifests" / f"{snapshot_id}.json").is_file()
 
     def test_incomplete_never_deleted(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
         for i in range(1, 4):
-            _make_snapshot(repo, f"snap{i}", _iso(f"2026-09-0{i}"))
+            _make_sequenced_snapshot(repo, i - 1, _iso(f"2026-09-0{i}"))
         _make_snapshot(repo, "incomplete-one", _iso("2026-08-01"), status=STATUS_INCOMPLETE)
 
         plan = build_retention_plan(repo, keep_last=1)
@@ -232,8 +275,8 @@ class TestSafetyBoundaries:
 
     def test_orphan_dir_never_deleted(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "snap1", _iso("2026-09-01"))
-        _make_snapshot(repo, "snap2", _iso("2026-09-02"))
+        _make_sequenced_snapshot(repo, 0, _iso("2026-09-01"))
+        _make_sequenced_snapshot(repo, 1, _iso("2026-09-02"))
         _make_snapshot(repo, "ghost", _iso("2026-09-03"), with_manifest=False)
 
         plan = build_retention_plan(repo, keep_last=1)
@@ -259,8 +302,8 @@ class TestSafetyBoundaries:
 
     def test_delete_failure_reported_explicitly(self, tmp_path, monkeypatch) -> None:
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "snap1", _iso("2026-09-01"))
-        _make_snapshot(repo, "snap2", _iso("2026-09-02"))
+        first = _make_sequenced_snapshot(repo, 0, _iso("2026-09-01"))
+        _make_sequenced_snapshot(repo, 1, _iso("2026-09-02"))
         plan = build_retention_plan(repo, keep_last=1)
 
         import shutil
@@ -269,22 +312,21 @@ class TestSafetyBoundaries:
             raise OSError("disk error")
 
         monkeypatch.setattr(shutil, "rmtree", boom)
-        with pytest.raises(RetentionError, match="snap1"):
+        with pytest.raises(RetentionError, match=first):
             apply_retention_plan(repo, plan)
 
 
 class TestApplyAndSync:
     def test_manifest_and_dir_deleted_in_sync(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        for i in range(1, 5):
-            _make_snapshot(repo, f"snap{i}", _iso(f"2026-09-0{i}"))
+        ids = [_make_sequenced_snapshot(repo, i - 1, _iso(f"2026-09-0{i}")) for i in range(1, 5)]
         plan = build_retention_plan(repo, keep_last=2)
         deleted = apply_retention_plan(repo, plan)
 
-        assert deleted == ("snap1", "snap2")
+        assert deleted == tuple(ids[:2])
         manifest_ids = sorted(s.snapshot_id for s in list_manifests(repo))
         dir_ids = sorted(p.name for p in (repo.path / "snapshots").iterdir())
-        assert manifest_ids == dir_ids == ["snap3", "snap4"]
+        assert manifest_ids == dir_ids == sorted(ids[2:])
 
     def test_empty_repo_noop(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
@@ -292,24 +334,25 @@ class TestApplyAndSync:
         assert plan.keep == () and plan.delete == ()
         assert apply_retention_plan(repo, plan) == ()
 
-    def test_unicode_snapshot_id(self, tmp_path) -> None:
+    def test_unicode_legacy_snapshot_id_is_protected(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
         _make_snapshot(repo, "快照-八月", _iso("2026-08-15"))
-        _make_snapshot(repo, "快照-九月", _iso("2026-09-10"))
+        current = _make_sequenced_snapshot(repo, 0, _iso("2026-09-10"))
 
-        plan = build_retention_plan(repo, keep_last=1)
-        assert plan.delete == ("快照-八月",)
+        plan = build_retention_plan(repo, keep_last=0)
+        assert plan.keep == ("快照-八月",)
+        assert plan.delete == (current,)
         apply_retention_plan(repo, plan)
 
-        assert not (repo.path / "snapshots" / "快照-八月").exists()
-        assert (repo.path / "snapshots" / "快照-九月").is_dir()
+        assert (repo.path / "snapshots" / "快照-八月").is_dir()
+        assert not (repo.path / "snapshots" / current).exists()
 
     def test_long_path_content_deleted(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "snap1", _iso("2026-09-01"))
-        _make_snapshot(repo, "snap2", _iso("2026-09-02"))
+        first = _make_sequenced_snapshot(repo, 0, _iso("2026-09-01"))
+        _make_sequenced_snapshot(repo, 1, _iso("2026-09-02"))
         # 在 snap1 内构造 >260 字符的深层文件
-        deep = repo.path / "snapshots" / "snap1"
+        deep = repo.path / "snapshots" / first
         for i in range(12):
             deep = deep / f"深层目录-{i:02d}-这是一个很长的目录名"
         lp = to_long_path(deep / "deep.txt")
@@ -320,15 +363,15 @@ class TestApplyAndSync:
         plan = build_retention_plan(repo, keep_last=1)
         apply_retention_plan(repo, plan)
 
-        assert not (repo.path / "snapshots" / "snap1").exists()
+        assert not (repo.path / "snapshots" / first).exists()
 
     def test_hardlinked_data_survives_snapshot_deletion(self, tmp_path) -> None:
         """硬链接语义：删除旧快照目录后，被新快照链接的文件数据仍在。"""
         repo = _init_repo(tmp_path / "target")
-        _make_snapshot(repo, "snap1", _iso("2026-09-01"))
-        _make_snapshot(repo, "snap2", _iso("2026-09-02"))
-        shared = repo.path / "snapshots" / "snap1" / "marker.txt"
-        link_in_snap2 = repo.path / "snapshots" / "snap2" / "marker.txt"
+        first = _make_sequenced_snapshot(repo, 0, _iso("2026-09-01"))
+        second = _make_sequenced_snapshot(repo, 1, _iso("2026-09-02"))
+        shared = repo.path / "snapshots" / first / "marker.txt"
+        link_in_snap2 = repo.path / "snapshots" / second / "marker.txt"
         link_in_snap2.unlink()  # 用指向 snap1 同一 inode 的硬链接替换独立副本
         os.link(to_long_path(shared), to_long_path(link_in_snap2))
         assert os.stat(to_long_path(shared)).st_nlink == 2
@@ -449,14 +492,13 @@ class TestDeletionSafetyHardening:
     def test_normal_deletion_still_in_sync_after_hardening(self, tmp_path) -> None:
         """正常路径：snapshot + manifest 同步消失（加固不改变成功语义）。"""
         repo = _init_repo(tmp_path / "target")
-        for i in range(1, 4):
-            _make_snapshot(repo, f"snap{i}", _iso(f"2026-09-0{i}"))
+        ids = [_make_sequenced_snapshot(repo, i - 1, _iso(f"2026-09-0{i}")) for i in range(1, 4)]
         plan = build_retention_plan(repo, keep_last=1)
 
         deleted = apply_retention_plan(repo, plan)
 
-        assert set(deleted) == {"snap1", "snap2"}
-        assert not (repo.path / "snapshots" / "snap1").exists()
-        assert not (repo.path / "manifests" / "snap1.json").exists()
-        assert (repo.path / "snapshots" / "snap3").is_dir()
-        assert (repo.path / "manifests" / "snap3.json").is_file()
+        assert set(deleted) == set(ids[:2])
+        assert not (repo.path / "snapshots" / ids[0]).exists()
+        assert not (repo.path / "manifests" / f"{ids[0]}.json").exists()
+        assert (repo.path / "snapshots" / ids[2]).is_dir()
+        assert (repo.path / "manifests" / f"{ids[2]}.json").is_file()

@@ -217,6 +217,19 @@ def _tamper_repo_json(ws, **changes) -> None:
     repo_json.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
+def _set_manifest_created_at(repo, snapshot_id: str, created_at: str) -> None:
+    path = repo.path / "manifests" / f"{snapshot_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["created_at"] = created_at
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _downgrade_repo_to_v1(ws) -> None:
+    repo = _repo(ws)
+    _tamper_repo_json(ws, format_version=1)
+    (repo.path / "lifecycle.json").unlink()
+
+
 def _answer(monkeypatch, text: str) -> None:
     monkeypatch.setattr("builtins.input", lambda prompt="": text)
 
@@ -1087,16 +1100,17 @@ class TestSnapshotIdCollision:
             lambda now=None, *, lifecycle_seq: current,
         )
         assert load_manifest(repo, legacy).status == "complete"
+        assert _run(ws, "verify") == 0  # single legacy complete is unambiguous
         assert _run(ws, "verify", "--snapshot", legacy) == 0
         dest = ws["src"].parent / "out"
-        assert _run(ws, "restore", "--snapshot", legacy, "--to", str(dest), "--yes") == 0
+        assert _run(ws, "restore", "--to", str(dest), "--yes") == 0
         assert (dest / "a.txt").read_bytes() == b"alpha"
 
         _write(ws["src"] / "a.txt", b"alpha-v2")
         assert _run(ws, "backup", "--yes") == 0
-        assert [s.snapshot_id for s in list_manifests(repo)] == [current]
-        assert not (repo.path / "manifests" / f"{legacy}.json").exists()
-        assert not (repo.path / "snapshots" / legacy).exists()
+        assert {s.snapshot_id for s in list_manifests(repo)} == {legacy, current}
+        assert (repo.path / "manifests" / f"{legacy}.json").is_file()
+        assert (repo.path / "snapshots" / legacy).is_dir()
 
     def test_unallocatable_id_fails_with_zero_writes(self, ws, monkeypatch) -> None:
         _write(ws["src"] / "a.txt", b"alpha")
@@ -1153,8 +1167,8 @@ class TestSnapshotIdCollision:
 
         assert cli._latest_complete(repo).snapshot_id == ids[-1]
         plan = build_retention_plan(repo, keep_last=2, keep_monthly=0)
-        assert plan.keep == tuple(ids[-2:])
-        assert plan.delete == tuple(ids[:-2])
+        assert plan.keep == (*ids[:3], *ids[-2:])
+        assert plan.delete == ()
 
     def test_equal_created_at_uses_latest_baseline_and_preserves_source(
         self, ws, monkeypatch, capsys
@@ -1223,6 +1237,251 @@ class TestSnapshotIdCollision:
         assert verification.unhashed_entries == 0
 
 
+class TestAuthoritativeLifecycleOrdering:
+    def test_wall_clock_rollback_uses_sequence_for_all_safety_consumers(
+        self, ws, snap_ids, capsys
+    ) -> None:
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        fixed_mtime = 1_700_000_000_000_000_000
+
+        def backup(content: bytes, *, mtime: int, full_hash: bool = False) -> str:
+            _write(ws["src"] / "data.txt", content)
+            os.utime(ws["src"] / "data.txt", ns=(mtime, mtime))
+            argv = ["backup", "--yes"]
+            if full_hash:
+                argv.append("--full-hash")
+            assert _run(ws, *argv) == 0
+            return max(
+                (summary for summary in list_manifests(repo) if summary.lifecycle_seq is not None),
+                key=lambda summary: summary.lifecycle_seq,
+            ).snapshot_id
+
+        a_id = backup(b"A", mtime=fixed_mtime - 1_000_000_000)
+        _set_manifest_created_at(repo, a_id, "2026-09-17T12:00:00+00:00")
+        b_id = backup(b"B", mtime=fixed_mtime)
+        _set_manifest_created_at(repo, b_id, "2026-09-17T12:10:00+00:00")
+        # B/source 的 size 与 mtime 相同但 bytes 不同；--full-hash 确保 C
+        # 在构造测试历史时真实重物化，而不是先触发待修 P0。
+        c_id = backup(b"C", mtime=fixed_mtime, full_hash=True)
+        _set_manifest_created_at(repo, c_id, "2026-09-17T11:50:00+00:00")
+
+        a = load_manifest(repo, a_id, require_complete=True)
+        b = load_manifest(repo, b_id, require_complete=True)
+        c = load_manifest(repo, c_id, require_complete=True)
+        assert [a.lifecycle_seq, b.lifecycle_seq, c.lifecycle_seq] == [0, 1, 2]
+        assert cli._latest_complete(repo).snapshot_id == c_id
+
+        keep_last = build_retention_plan(repo, keep_last=2, keep_monthly=0)
+        assert keep_last.keep == (b_id, c_id)
+        assert keep_last.delete == (a_id,)
+        monthly = build_retention_plan(repo, keep_last=0, keep_monthly=1)
+        assert monthly.keep == (c_id,)
+        assert monthly.delete == (a_id, b_id)
+
+        capsys.readouterr()
+        assert _run(ws, "verify", "--json") == 0
+        verify_payload = json.loads(capsys.readouterr().out)
+        assert [item["snapshot_id"] for item in verify_payload["snapshots"]] == [c_id]
+
+        latest_dest = ws["src"].parent / "rollback-latest"
+        assert _run(ws, "restore", "--to", str(latest_dest), "--yes") == 0
+        assert (latest_dest / "data.txt").read_bytes() == b"C"
+        explicit_dest = ws["src"].parent / "rollback-explicit-b"
+        assert (
+            _run(
+                ws,
+                "restore",
+                "--snapshot",
+                b_id,
+                "--to",
+                str(explicit_dest),
+                "--yes",
+            )
+            == 0
+        )
+        assert (explicit_dest / "data.txt").read_bytes() == b"B"
+
+        # D 的真实 backup pipeline 必须选择 C。若错误选择 wall-clock 最大的
+        # B，metadata unchanged 会 hardlink stale B 且 full verify 仍可能通过。
+        d_id = backup(b"C", mtime=fixed_mtime)
+        b_file = repo.path / "snapshots" / b_id / "data.txt"
+        c_file = repo.path / "snapshots" / c_id / "data.txt"
+        d_file = repo.path / "snapshots" / d_id / "data.txt"
+        assert b_file.read_bytes() == b"B"
+        assert c_file.read_bytes() == d_file.read_bytes() == (ws["src"] / "data.txt").read_bytes()
+        assert os.path.samefile(d_file, c_file)
+        assert not os.path.samefile(d_file, b_file)
+
+        report_path = next((repo.path / "logs").glob(f"backup-{d_id}-*.json"))
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["linked"] == ["data.txt"]
+        assert report["copied"] == []
+        d = load_manifest(repo, d_id, require_complete=True)
+        entry = next(item for item in d.entries if item.path == "data.txt")
+        assert entry.sha == hash_file(ws["src"] / "data.txt", repo.hash_algorithm)
+        verification = verify_snapshot(repo, d_id)
+        assert verification.ok
+        assert verification.unhashed_entries == 0
+
+    @pytest.mark.parametrize("verify_writes", [True, False])
+    def test_legacy_bootstrap_full_rematerializes_and_dry_run_matches(
+        self, ws, snap_ids, capsys, verify_writes
+    ) -> None:
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        fixed_mtime = 1_700_000_000_000_000_000
+        legacy_ids = ("2026-09-17_121000", "2026-09-17_115000-01")
+
+        def legacy(snapshot_id: str, content: bytes, created_at: str) -> Path:
+            _write(ws["src"] / "data.txt", content)
+            os.utime(ws["src"] / "data.txt", ns=(fixed_mtime, fixed_mtime))
+            current = scan_source(ws["src"], ()).entries
+            digest = hash_file(ws["src"] / "data.txt", repo.hash_algorithm)
+            directory = repo.path / "snapshots" / snapshot_id
+            directory.mkdir()
+            target = directory / "data.txt"
+            target.write_bytes(content)
+            os.utime(target, ns=(fixed_mtime, fixed_mtime))
+            manifest = create_manifest(
+                snapshot_id,
+                str(ws["src"]),
+                repo.hash_algorithm,
+                current,
+                hashes={"data.txt": digest},
+            )
+            write_manifest(repo, mark_complete(replace(manifest, created_at=created_at)))
+            return target
+
+        legacy_a = legacy(legacy_ids[0], b"AAAA", "2026-09-17T12:10:00+00:00")
+        legacy_b = legacy(legacy_ids[1], b"BBBB", "2026-09-17T11:50:00+00:00")
+        _write(ws["src"] / "data.txt", b"CCCC")
+        os.utime(ws["src"] / "data.txt", ns=(fixed_mtime, fixed_mtime))
+
+        # Multiple legacy complete 没有 authoritative latest；默认 selector
+        # fail closed，但 explicit selector 与 verify --all 继续兼容。
+        assert _run(ws, "verify") == 1
+        assert _run(ws, "verify", "--all") == 0
+        assert _run(ws, "verify", "--snapshot", legacy_ids[1]) == 0
+        legacy_dest = ws["src"].parent / f"legacy-explicit-{verify_writes}"
+        assert (
+            _run(
+                ws,
+                "restore",
+                "--snapshot",
+                legacy_ids[1],
+                "--to",
+                str(legacy_dest),
+                "--yes",
+            )
+            == 0
+        )
+        assert (legacy_dest / "data.txt").read_bytes() == b"BBBB"
+        assert _run(ws, "restore", "--to", str(ws["src"].parent / "ambiguous"), "--yes") == 1
+
+        _downgrade_repo_to_v1(ws)
+        cfg = load_task_config(ws["config"] / "config.d" / "default.toml")
+        write_task_config(replace(cfg, verify_on_write=verify_writes), ws["config"])
+
+        capsys.readouterr()
+        assert _run(ws, "backup", "--dry-run", "--json") == 0
+        dry_run = json.loads(capsys.readouterr().out)
+        assert dry_run["changes"]["added"] == ["data.txt"]
+        assert dry_run["changes"]["modified"] == []
+        assert json.loads((repo.path / "repo.json").read_text("utf-8"))["format_version"] == 1
+        assert not (repo.path / "lifecycle.json").exists()
+
+        assert _run(ws, "backup", "--yes") == 0
+        migrated = _repo(ws)
+        assert migrated.format_version == 2
+        summaries = list_manifests(migrated)
+        sequenced = next(summary for summary in summaries if summary.lifecycle_seq is not None)
+        assert sequenced.lifecycle_seq == 0
+        assert {
+            summary.snapshot_id for summary in summaries if summary.lifecycle_seq is None
+        } == set(legacy_ids)
+        final_file = migrated.path / "snapshots" / sequenced.snapshot_id / "data.txt"
+        assert final_file.read_bytes() == b"CCCC"
+        assert not os.path.samefile(final_file, legacy_a)
+        assert not os.path.samefile(final_file, legacy_b)
+        report_path = next((migrated.path / "logs").glob(f"backup-{sequenced.snapshot_id}-*.json"))
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["linked"] == []
+        assert report["copied"] == ["data.txt"]
+        manifest = load_manifest(migrated, sequenced.snapshot_id, require_complete=True)
+        entry = next(item for item in manifest.entries if item.path == "data.txt")
+        if verify_writes:
+            assert entry.sha == hash_file(final_file, migrated.hash_algorithm)
+        else:
+            assert entry.sha is None
+        verification = verify_snapshot(migrated, sequenced.snapshot_id)
+        assert verification.ok
+        assert verification.unhashed_entries == (0 if verify_writes else 1)
+        assert cli._latest_complete(migrated).snapshot_id == sequenced.snapshot_id
+        plan = build_retention_plan(migrated, keep_last=1, keep_monthly=0)
+        assert set(legacy_ids) <= set(plan.keep)
+
+    def test_resume_selection_uses_sequence_and_ignores_stale_and_legacy(
+        self, ws, monkeypatch
+    ) -> None:
+        from mirrorly.recovery import ResumeBaseline
+
+        assert _init(ws) == 0
+        repo = _repo(ws)
+        current = scan_source(ws["src"], ()).entries
+
+        def add_v2(sequence: int, status: str, created_at: str) -> str:
+            snapshot_id = (
+                f"2026-09-17_120000-s{sequence:020d}-{UUID(int=sequence + 100, version=4).hex}"
+            )
+            assert reserve_lifecycle_sequence(repo) == sequence
+            manifest = create_manifest(
+                snapshot_id,
+                str(ws["src"]),
+                repo.hash_algorithm,
+                current,
+                lifecycle_seq=sequence,
+            )
+            manifest = replace(manifest, created_at=created_at)
+            if status == "complete":
+                manifest = mark_complete(manifest)
+            write_manifest(repo, manifest)
+            (repo.path / "snapshots" / snapshot_id).mkdir()
+            return snapshot_id
+
+        old_wall_new = add_v2(0, "incomplete", "2099-01-01T00:00:00+00:00")
+        lifecycle_new = add_v2(1, "incomplete", "2000-01-01T00:00:00+00:00")
+        legacy = create_manifest("legacy-incomplete", str(ws["src"]), repo.hash_algorithm, current)
+        write_manifest(repo, replace(legacy, created_at="2100-01-01T00:00:00+00:00"))
+
+        selected: list[str] = []
+
+        def fake_resume(repo_, snapshot_id, **_kwargs):
+            selected.append(snapshot_id)
+            return ResumeBaseline(
+                snapshot_id=snapshot_id,
+                snapshot_path=repo_.path / "snapshots" / snapshot_id,
+                previous={},
+                previous_dirs=frozenset(),
+            )
+
+        monkeypatch.setattr(cli, "build_resume_baseline", fake_resume)
+        args = SimpleNamespace(dry_run=False, yes=True)
+        cfg = load_task_config(ws["config"] / "config.d" / "default.toml")
+
+        baseline = cli._select_baseline(args, cfg, repo)
+        assert baseline.resumed_from == lifecycle_new
+        assert selected == [lifecycle_new]
+        assert old_wall_new != lifecycle_new
+
+        complete = add_v2(2, "complete", "1999-01-01T00:00:00+00:00")
+        selected.clear()
+        baseline = cli._select_baseline(args, cfg, repo)
+        assert selected == []
+        assert baseline.resumed_from is None
+        assert baseline.previous_snapshot_dir == repo.path / "snapshots" / complete
+
+
 class TestB1SnapshotImmutability:
     """Gate B1-1 回归：后续 backup 不得修改/删除历史 complete snapshot 中
     文件名以 .mrtmp 结尾的用户数据（temp residue ownership 按 manifest 判定）。"""
@@ -1259,26 +1518,37 @@ class TestB12ResumeHashCoverage:
     快照不得因 PRE_FILE 复用而静默 sha=None（full verify false negative）；
     crash 后被损坏的 recovered 副本不得被重新哈希认证为正确备份数据。"""
 
+    _INCOMPLETE_ID = "2026-09-13_000000-s00000000000000000000-dddddddddddd4ddd8ddddddddddddddd"
+
     def _make_interrupted(self, ws, post_files, verify_writes=True):
         """用 production 写路径构造真实中断现场：incomplete manifest（物化前
         落盘，全 entry sha=None）+ 部分物化的快照目录（post_files 模拟中断
         时未来得及复制的文件，删除后处于正常中断态）。"""
         repo = _repo(ws)
+        lifecycle_seq = reserve_lifecycle_sequence(repo)
+        assert lifecycle_seq == 0
         current = scan_source(ws["src"], ()).entries
         changes = detect_changes(ws["src"], current, None)
         write_manifest(
-            repo, create_manifest("snap-inc", str(ws["src"]), repo.hash_algorithm, current)
+            repo,
+            create_manifest(
+                self._INCOMPLETE_ID,
+                str(ws["src"]),
+                repo.hash_algorithm,
+                current,
+                lifecycle_seq=lifecycle_seq,
+            ),
         )
         write_snapshot(
             ws["src"],
             repo,
             current,
             changes,
-            snapshot_id="snap-inc",
+            snapshot_id=self._INCOMPLETE_ID,
             verify_writes=verify_writes,
         )
         for rel in post_files:
-            (repo.path / "snapshots" / "snap-inc" / rel).unlink()
+            (repo.path / "snapshots" / self._INCOMPLETE_ID / rel).unlink()
         return repo
 
     def _final_manifest(self, repo):
@@ -1304,7 +1574,7 @@ class TestB12ResumeHashCoverage:
         assert _run(ws, "backup", "--yes") == 0
 
         m = self._final_manifest(repo)
-        assert m.snapshot_id != "snap-inc"
+        assert m.snapshot_id != self._INCOMPLETE_ID
         entries = {e.path: e for e in m.entries if not e.is_dir}
         # Test A：全部文件 entry 获得有效哈希覆盖，无 sha=None 静默降级
         assert set(entries) == {"pre0.txt", "pre1.txt", "post0.txt"}
@@ -1316,12 +1586,12 @@ class TestB12ResumeHashCoverage:
         )
         # 复用优化保留：内容相等 → 硬链接复用而非重拷
         rep = self._backup_report(repo, m.snapshot_id)
-        assert rep["resumed_from"] == "snap-inc"
+        assert rep["resumed_from"] == self._INCOMPLETE_ID
         assert sorted(rep["linked"]) == ["pre0.txt", "pre1.txt"]
         assert rep["copied"] == ["post0.txt"]
         assert rep["resume_untrusted"] == []
         # 旧 incomplete 已善后；final 内容与源一致
-        assert not (repo.path / "snapshots" / "snap-inc").exists()
+        assert not (repo.path / "snapshots" / self._INCOMPLETE_ID).exists()
         assert (repo.path / "snapshots" / m.snapshot_id / "pre0.txt").read_bytes() == b"pre-zero"
 
         # Test E：对本应有哈希覆盖的文件做同尺寸损坏，full verify 必须检出
@@ -1337,7 +1607,7 @@ class TestB12ResumeHashCoverage:
         assert _init(ws) == 0
         repo = self._make_interrupted(ws, ["post0.txt"])
         # crash 后 / resume 前：同尺寸损坏 incomplete 快照中的 pre0
-        victim = repo.path / "snapshots" / "snap-inc" / "pre0.txt"
+        victim = repo.path / "snapshots" / self._INCOMPLETE_ID / "pre0.txt"
         original = victim.read_bytes()
         corrupted = bytes([original[0] ^ 0xFF]) + original[1:]
         assert corrupted != original and len(corrupted) == len(original)
@@ -1376,11 +1646,20 @@ class TestB12ResumeHashCoverage:
         )
         assert _init(ws) == 0
         repo = _repo(ws)
+        lifecycle_seq = reserve_lifecycle_sequence(repo)
+        incomplete_id = f"2026-09-13_000000-s{lifecycle_seq:020d}-dddddddddddd4ddd8ddddddddddddddd"
         current = scan_source(ws["src"], ()).entries
         write_manifest(
-            repo, create_manifest("snap-inc", str(ws["src"]), repo.hash_algorithm, current)
+            repo,
+            create_manifest(
+                incomplete_id,
+                str(ws["src"]),
+                repo.hash_algorithm,
+                current,
+                lifecycle_seq=lifecycle_seq,
+            ),
         )
-        recovered = repo.path / "snapshots" / "snap-inc" / "pre0.txt"
+        recovered = repo.path / "snapshots" / incomplete_id / "pre0.txt"
         recovered.parent.mkdir(parents=True)
         recovered.write_bytes((ws["src"] / "pre0.txt").read_bytes())
         wrong_mtime = current["pre0.txt"].mtime_ns + 10_000_000
@@ -1433,10 +1712,19 @@ class TestB12ResumeHashCoverage:
             ns=(expected_mtime, expected_mtime),
         )
         current = scan_source(ws["src"], ()).entries
+        lifecycle_seq = reserve_lifecycle_sequence(repo)
+        incomplete_id = f"2026-09-13_000000-s{lifecycle_seq:020d}-dddddddddddd4ddd8ddddddddddddddd"
         write_manifest(
-            repo, create_manifest("snap-inc", str(ws["src"]), repo.hash_algorithm, current)
+            repo,
+            create_manifest(
+                incomplete_id,
+                str(ws["src"]),
+                repo.hash_algorithm,
+                current,
+                lifecycle_seq=lifecycle_seq,
+            ),
         )
-        recovered = repo.path / "snapshots" / "snap-inc" / "shared.txt"
+        recovered = repo.path / "snapshots" / incomplete_id / "shared.txt"
         recovered.parent.mkdir(parents=True)
         os.link(to_long_path(old_file), to_long_path(recovered))
         old_before_resume = os.stat(to_long_path(old_file))
@@ -1609,9 +1897,11 @@ class TestB12ResumeHashCoverage:
         assert _run(ws, "backup", "--yes") == 1
         # 新快照保持 incomplete（可再次续传），不产生新的 complete manifest
         summaries = list_manifests(repo)
-        assert {s.snapshot_id for s in summaries if s.snapshot_id == "snap-inc"} == {"snap-inc"}
-        failed = next(s for s in summaries if s.snapshot_id != "snap-inc")
-        assert failed.snapshot_id.startswith("2026-09-13_000001-s00000000000000000000-")
+        assert {s.snapshot_id for s in summaries if s.snapshot_id == self._INCOMPLETE_ID} == {
+            self._INCOMPLETE_ID
+        }
+        failed = next(s for s in summaries if s.snapshot_id != self._INCOMPLETE_ID)
+        assert failed.snapshot_id.startswith("2026-09-13_000001-s00000000000000000001-")
         assert all(s.status == "incomplete" for s in summaries)
 
 
@@ -1811,7 +2101,7 @@ class TestBackupLockScope:
         def forbidden(*a, **k):
             raise AssertionError("锁被占用时不应触发 recovery/扫描")
 
-        monkeypatch.setattr(cli, "scan_recovery", forbidden)
+        monkeypatch.setattr(cli, "list_manifests", forbidden)
         monkeypatch.setattr(cli, "scan_source", forbidden)
         assert _run(ws, "backup", "--yes") == 6
 
@@ -1838,7 +2128,7 @@ class TestBackupLockScope:
         def forbidden(*a, **k):
             raise AssertionError("仓库写锁被占用时不应触发 recovery/扫描")
 
-        monkeypatch.setattr(cli, "scan_recovery", forbidden)
+        monkeypatch.setattr(cli, "list_manifests", forbidden)
         monkeypatch.setattr(cli, "scan_source", forbidden)
         assert _run(ws, "backup", "--yes") == 6
         assert writer_lock.is_file()

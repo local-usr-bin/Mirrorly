@@ -44,12 +44,15 @@ from .manifest import (
     ManifestError,
     ManifestSummary,
     create_manifest,
+    latest_sequenced_complete,
     list_manifests,
     load_manifest,
     mark_complete,
+    newest_eligible_incomplete,
+    select_default_complete,
     write_manifest,
 )
-from .recovery import RecoveryError, build_resume_baseline, clean_tmp_residue, scan_recovery
+from .recovery import RecoveryError, build_resume_baseline, clean_tmp_residue
 from .repo import (
     HARDLINK_FILESYSTEMS,
     REPO_DIR_NAME,
@@ -343,10 +346,8 @@ def _resolve_repo(cfg: TaskConfig) -> RepoInfo:
 
 
 def _latest_complete(repo: RepoInfo) -> ManifestSummary | None:
-    complete = [s for s in list_manifests(repo) if s.status == STATUS_COMPLETE]
-    if not complete:
-        return None
-    return max(complete, key=lambda s: (s.created_at, s.snapshot_id))
+    """选择默认 complete；multiple-legacy ambiguity 由 manifest helper 拒绝。"""
+    return select_default_complete(list_manifests(repo))
 
 
 class _ExclusiveFileLock:
@@ -587,10 +588,10 @@ class _Baseline:
 
 
 def _select_baseline(args: argparse.Namespace, cfg: TaskConfig, repo: RepoInfo) -> _Baseline:
-    """选择变更检测基线：发现 incomplete 时提示续传（TR-5），否则用最近 complete。"""
-    recovery = scan_recovery(repo)
-    if recovery.incomplete:
-        latest_inc = max(recovery.incomplete, key=lambda s: (s.created_at, s.snapshot_id))
+    """按 durable sequence 选择续传/complete 基线；legacy 不自动复用。"""
+    summaries = list_manifests(repo)
+    latest_inc = newest_eligible_incomplete(summaries)
+    if latest_inc is not None:
         if args.dry_run:
             _info(args, f"检测到中断的备份 {latest_inc.snapshot_id}（正式执行时将提示续传）")
         elif _ask(
@@ -636,7 +637,9 @@ def _select_baseline(args: argparse.Namespace, cfg: TaskConfig, repo: RepoInfo) 
         else:
             _info(args, "不续传，从头开始新备份（incomplete 快照保留不动）")
 
-    latest = _latest_complete(repo)
+    # 自动 backup baseline 只允许 sequenced complete。迁移后的 legacy-only
+    # repo 必须先全量物化一个 v2 complete，不能猜测 legacy latest 并复用。
+    latest = latest_sequenced_complete(summaries)
     if latest is None:
         return _Baseline({}, (), None, {}, None)
     manifest = load_manifest(repo, latest.snapshot_id, require_complete=True)

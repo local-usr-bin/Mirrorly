@@ -8,7 +8,8 @@
 - 只删除 status=complete 的快照；incomplete / 孤儿目录 / 无 manifest
   的目录一律不触碰；
 - 计划完全基于 list_manifests()（不扫描 snapshots/ 目录做决策）；
-- 排序依据 manifest created_at 字段，不依赖目录 mtime；
+- v2 生命周期排序只依据 manifest lifecycle_seq，不依赖 wall clock 或目录 mtime；
+- legacy v1 complete 的真实顺序无法可靠重建，自动保留策略一律保护；
 - 执行阶段不假设 RetentionPlan 来自 build_retention_plan：先统一对每个
   待删快照重新加载 manifest 并校验 status=complete（复用
   load_manifest(require_complete=True)），任一非法即整体拒绝，零删除；
@@ -38,7 +39,7 @@ class RetentionError(Exception):
 
 @dataclass(frozen=True)
 class RetentionPlan:
-    """保留计划：keep/delete 均为快照 id，按 created_at 升序。"""
+    """保留计划：legacy 先列出，v2 keep/delete 按 lifecycle_seq 升序。"""
 
     keep: tuple[str, ...] = ()
     delete: tuple[str, ...] = ()
@@ -70,10 +71,12 @@ def build_retention_plan(
 ) -> RetentionPlan:
     """基于 complete manifest 计算保留计划（只读，不删除任何内容）。
 
-    - keep_last：保留最近 N 个 complete 快照（按 manifest created_at 排序，
-      N=0 表示该规则不保留任何快照）；
+    - keep_last：保留 lifecycle_seq 最大的 N 个 v2 complete 快照
+      （N=0 表示该规则不保留任何 v2 快照）；
     - keep_monthly：从当前月份向过去回溯 N 个月，每月保留该月最新的
-      complete 快照（无快照的月份跳过）；
+      v2 complete（月份由 created_at 决定，同月 newest 由 lifecycle_seq
+      决定；无快照的月份跳过）；
+    - legacy v1 complete 的真实生命周期顺序不可靠，始终自动保护；
     - 两者同时指定时保留集合为 union；都不指定则报错。
     """
     if keep_last is None and keep_monthly is None:
@@ -83,18 +86,22 @@ def build_retention_plan(
     if keep_monthly is not None and keep_monthly < 0:
         raise RetentionError(f"keep_monthly 不能为负: {keep_monthly}")
 
-    complete = sorted(
-        (s for s in list_manifests(repo) if s.status == STATUS_COMPLETE),
-        key=lambda s: (s.created_at, s.snapshot_id),
+    summaries = list_manifests(repo)
+    complete = [s for s in summaries if s.status == STATUS_COMPLETE]
+    legacy = sorted((s for s in complete if s.lifecycle_seq is None), key=lambda s: s.snapshot_id)
+    sequenced = sorted(
+        (s for s in complete if s.lifecycle_seq is not None),
+        key=lambda s: s.lifecycle_seq,
     )
 
-    keep: set[str] = set()
+    keep: set[str] = {s.snapshot_id for s in legacy}
     if keep_last:
-        keep.update(s.snapshot_id for s in complete[-keep_last:])
+        keep.update(s.snapshot_id for s in sequenced[-keep_last:])
     if keep_monthly:
-        # 每月代表：该月 created_at 最新的 complete（列表升序，后者覆盖前者）
+        # calendar month 仍是 wall-clock 语义；同月 lifecycle newest 则由
+        # sequence 升序遍历、后者覆盖前者确定。
         by_month: dict[tuple[int, int], str] = {}
-        for s in complete:
+        for s in sequenced:
             dt = datetime.fromisoformat(s.created_at)
             by_month[(dt.year, dt.month)] = s.snapshot_id
         now = datetime.now(UTC)
@@ -104,8 +111,8 @@ def build_retention_plan(
                 keep.add(rep)
 
     return RetentionPlan(
-        keep=tuple(s.snapshot_id for s in complete if s.snapshot_id in keep),
-        delete=tuple(s.snapshot_id for s in complete if s.snapshot_id not in keep),
+        keep=tuple(s.snapshot_id for s in (*legacy, *sequenced) if s.snapshot_id in keep),
+        delete=tuple(s.snapshot_id for s in sequenced if s.snapshot_id not in keep),
     )
 
 

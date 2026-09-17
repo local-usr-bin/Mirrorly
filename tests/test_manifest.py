@@ -11,9 +11,15 @@ from mirrorly.manifest import (
     FORMAT_VERSION,
     LEGACY_FORMAT_VERSION,
     ManifestError,
+    ManifestOrderingError,
+    ManifestStats,
+    ManifestSummary,
+    latest_sequenced_complete,
     list_manifests,
     load_manifest,
     mark_complete,
+    newest_eligible_incomplete,
+    select_default_complete,
     write_manifest,
 )
 from mirrorly.manifest import create_manifest as _create_manifest
@@ -273,6 +279,74 @@ class TestSerialization:
         src, current = _scan(tmp_path)
         with pytest.raises(ManifestError):
             create_manifest("", str(src), "blake3", current)
+
+
+def _summary(snapshot_id: str, status: str, sequence: int | None) -> ManifestSummary:
+    return ManifestSummary(
+        snapshot_id=snapshot_id,
+        status=status,
+        created_at="2026-09-17T12:00:00+00:00",
+        stats=ManifestStats(),
+        lifecycle_seq=sequence,
+        format_version=FORMAT_VERSION if sequence is not None else LEGACY_FORMAT_VERSION,
+    )
+
+
+class TestLifecycleOrdering:
+    def test_sequenced_complete_is_authoritative_over_newer_wall_clock(self) -> None:
+        summaries = [
+            replace(_summary("a", "complete", 10), created_at="2026-09-17T12:10:00+00:00"),
+            replace(_summary("b", "complete", 11), created_at="2026-09-17T11:50:00+00:00"),
+            replace(_summary("legacy", "complete", None), created_at="2099-01-01T00:00:00+00:00"),
+        ]
+
+        assert latest_sequenced_complete(summaries).snapshot_id == "b"
+        assert select_default_complete(summaries).snapshot_id == "b"
+
+    def test_multiple_legacy_default_is_ambiguous(self) -> None:
+        summaries = [_summary("legacy-a", "complete", None), _summary("legacy-b", "complete", None)]
+
+        with pytest.raises(ManifestOrderingError, match="显式指定 --snapshot"):
+            select_default_complete(summaries)
+        assert latest_sequenced_complete(summaries) is None
+
+    def test_single_legacy_default_remains_compatible(self) -> None:
+        legacy = _summary("legacy", "complete", None)
+        assert select_default_complete([legacy]) == legacy
+
+    def test_newest_eligible_incomplete_uses_sequence_and_ignores_stale(self) -> None:
+        summaries = [
+            _summary("complete", "complete", 12),
+            replace(
+                _summary("inc-wall-new", "incomplete", 10), created_at="2099-01-01T00:00:00+00:00"
+            ),
+            _summary("inc-stale", "incomplete", 11),
+            replace(
+                _summary("inc-latest", "incomplete", 14), created_at="2000-01-01T00:00:00+00:00"
+            ),
+            _summary("legacy-inc", "incomplete", None),
+        ]
+
+        assert newest_eligible_incomplete(summaries).snapshot_id == "inc-latest"
+
+    def test_duplicate_sequence_fails_closed(self) -> None:
+        summaries = [_summary("a", "complete", 7), _summary("b", "incomplete", 7)]
+
+        with pytest.raises(ManifestOrderingError, match="lifecycle_seq 重复"):
+            latest_sequenced_complete(summaries)
+
+    def test_list_manifests_rejects_duplicate_sequence(self, tmp_path) -> None:
+        repo = _repo(tmp_path)
+        src, current = _scan(tmp_path)
+        other_id = "2026-09-17_120002-s00000000000000000000-33333333333343338333333333333333"
+        write_manifest(repo, create_manifest(_V2_ID_0, str(src), "blake3", current))
+        write_manifest(
+            repo,
+            create_manifest(other_id, str(src), "blake3", current, lifecycle_seq=0),
+        )
+
+        with pytest.raises(ManifestOrderingError, match="lifecycle_seq 重复"):
+            list_manifests(repo)
 
 
 class TestScale:
