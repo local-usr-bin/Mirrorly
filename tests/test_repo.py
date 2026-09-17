@@ -5,6 +5,7 @@ import json
 import pytest
 
 from mirrorly import repo
+from mirrorly.lifecycle import lifecycle_state_path
 from mirrorly.repo import RepoError, VolumeInfo
 
 NTFS_VOLUME = VolumeInfo(label="BackupDisk", serial="A1B2C3D4", filesystem="NTFS")
@@ -25,6 +26,7 @@ class TestInitOnNtfs:
         repo_dir = tmp_path / repo.REPO_DIR_NAME
         for sub in ("snapshots", "manifests", "manifests.tmp", "locks", "logs"):
             assert (repo_dir / sub).is_dir(), f"缺少目录 {sub}"
+        assert lifecycle_state_path(info).is_file()
         assert info.path == repo_dir
 
     def test_repo_json_fields(self, tmp_path) -> None:
@@ -38,6 +40,12 @@ class TestInitOnNtfs:
         assert data["volume"]["filesystem"] == "NTFS"
         assert data["filesystem_policy"] == "strict"
         assert data["hardlinks"] is True
+        lifecycle = json.loads(lifecycle_state_path(repo.load_repo(tmp_path)).read_text("utf-8"))
+        assert lifecycle == {
+            "format_version": 1,
+            "repo_id": data["repo_id"],
+            "next_sequence": 0,
+        }
 
     def test_repo_json_written_atomically_no_tmp_left(self, tmp_path) -> None:
         repo.init_repo(tmp_path, volume_info_provider=_ntfs_provider)

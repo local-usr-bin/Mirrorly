@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .hashing import hash_file
+from .lifecycle import LIFECYCLE_SEQUENCE_WIDTH, MAX_LIFECYCLE_SEQUENCE
 from .repo import RepoInfo
 from .scan import ChangeSet, ScannedEntry, to_long_path
 
@@ -60,8 +61,6 @@ class SnapshotResult:
     hashes: dict[str, str] = field(default_factory=dict)
 
 
-SNAPSHOT_ORDINAL_WIDTH = 6
-SNAPSHOT_ORDINAL_MAX = 10**SNAPSHOT_ORDINAL_WIDTH - 1
 _SNAPSHOT_PREFIX_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{6}")
 
 
@@ -70,19 +69,20 @@ def generate_snapshot_prefix(now: datetime | None = None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
 
 
-def generate_snapshot_id(now: datetime | None = None, *, ordinal: int = 0) -> str:
-    """为一次新快照生命周期 mint 时间前缀、ordinal 与完整 UUIDv4 的 id。
+def generate_snapshot_id(now: datetime | None = None, *, lifecycle_seq: int) -> str:
+    """Mint a readable physical-attempt id with durable sequence and UUIDv4.
 
-    ordinal 是同一 timestamp prefix 下的定宽顺序号；UUID 使用 32 位
-    lowercase hex，仅含文件名安全 ASCII。当前 namespace 的 high-water
-    计算与极端 UUID collision retry 由 CLI allocator 负责。
+    ``lifecycle_seq`` is diagnostic redundancy; manifest ``lifecycle_seq`` is
+    the authoritative assigned order. UUID uses all 128 bits as lowercase hex.
     """
-    if not 0 <= ordinal <= SNAPSHOT_ORDINAL_MAX:
-        raise SnapshotError(f"快照 ordinal 超出范围: {ordinal}（允许 0..{SNAPSHOT_ORDINAL_MAX}）")
+    if isinstance(lifecycle_seq, bool) or not isinstance(lifecycle_seq, int):
+        raise SnapshotError("lifecycle sequence 必须是整数")
+    if not 0 <= lifecycle_seq <= MAX_LIFECYCLE_SEQUENCE:
+        raise SnapshotError(f"lifecycle sequence 超出 uint64: {lifecycle_seq!r}")
     prefix = generate_snapshot_prefix(now)
     if _SNAPSHOT_PREFIX_RE.fullmatch(prefix) is None:  # pragma: no cover - 内部生成防御
         raise SnapshotError(f"非法快照时间前缀: {prefix!r}")
-    return f"{prefix}-u{ordinal:0{SNAPSHOT_ORDINAL_WIDTH}d}-{uuid.uuid4().hex}"
+    return f"{prefix}-s{lifecycle_seq:0{LIFECYCLE_SEQUENCE_WIDTH}d}-{uuid.uuid4().hex}"
 
 
 def write_snapshot(
@@ -106,7 +106,8 @@ def write_snapshot(
       SnapshotError；默认 False 保持 T-03 行为不变。
     """
     source = Path(source)
-    snapshot_id = snapshot_id or generate_snapshot_id()
+    if snapshot_id is None:
+        raise SnapshotError("write_snapshot 必须由 repository allocator 提供 snapshot_id")
     snap_dir = repo.path / "snapshots" / snapshot_id
     if snap_dir.exists():
         raise SnapshotError(f"快照 id 已存在: {snapshot_id}（拒绝覆盖半成品或历史快照）")

@@ -213,6 +213,7 @@ class TestMainLifecycle:
             "manifests.tmp",
             "locks",
             "logs",
+            "lifecycle.json",
             "repo.json",
         }
         assert list((repo / "snapshots").iterdir()) == []

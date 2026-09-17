@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,12 +17,13 @@ import pytest
 from mirrorly import snapshot as snapshot_mod
 from mirrorly.hashing import hash_file
 from mirrorly.manifest import (
-    create_manifest,
+    LEGACY_FORMAT_VERSION,
     list_manifests,
     load_manifest,
     mark_complete,
-    write_manifest,
 )
+from mirrorly.manifest import create_manifest as _create_manifest
+from mirrorly.manifest import write_manifest as _write_manifest
 from mirrorly.recovery import (
     RecoveryError,
     build_resume_baseline,
@@ -34,6 +36,54 @@ from mirrorly.scan import detect_changes, scan_source, to_long_path
 from mirrorly.snapshot import write_snapshot
 
 _NTFS = VolumeInfo(label="BackupDisk", serial="A1B2C3D4", filesystem="NTFS")
+
+
+def create_manifest(*args, **kwargs):
+    if "lifecycle_seq" in kwargs:
+        return _create_manifest(*args, **kwargs)
+    snapshot_id = args[0]
+    placeholder = "2000-01-01_000000-s00000000000000000000-00000000000040008000000000000000"
+    manifest = _create_manifest(placeholder, *args[1:], lifecycle_seq=0, **kwargs)
+    return replace(
+        manifest,
+        snapshot_id=snapshot_id,
+        lifecycle_seq=None,
+        format_version=LEGACY_FORMAT_VERSION,
+    )
+
+
+def _write_legacy_manifest(repo, manifest):
+    """Write raw v1 JSON for loader/recovery compatibility tests only."""
+
+    assert manifest.format_version == LEGACY_FORMAT_VERSION
+    data = {
+        "format_version": LEGACY_FORMAT_VERSION,
+        "snapshot_id": manifest.snapshot_id,
+        "created_at": manifest.created_at,
+        "source_root": manifest.source_root,
+        "hash_algorithm": manifest.hash_algorithm,
+        "status": manifest.status,
+        "stats": asdict(manifest.stats),
+        "entries": [
+            {
+                "path": entry.path,
+                "type": "dir" if entry.is_dir else "file",
+                "size": entry.size,
+                "mtime_ns": entry.mtime_ns,
+                "sha": entry.sha,
+            }
+            for entry in manifest.entries
+        ],
+    }
+    path = repo.path / "manifests" / f"{manifest.snapshot_id}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def write_manifest(repo, manifest):
+    if manifest.format_version == LEGACY_FORMAT_VERSION:
+        return _write_legacy_manifest(repo, manifest)
+    return _write_manifest(repo, manifest)
 
 
 def _ntfs_provider(_path):

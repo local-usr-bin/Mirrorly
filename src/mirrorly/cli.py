@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,6 +38,7 @@ from .config import (
     validate_task_name,
     write_task_config,
 )
+from .lifecycle import reserve_lifecycle_sequence
 from .manifest import (
     STATUS_COMPLETE,
     ManifestError,
@@ -60,16 +60,14 @@ from .repo import (
     get_volume_info,
     init_repo,
     load_repo,
+    migrate_repo_to_v2,
 )
 from .restore import RestoreError, apply_restore, plan_restore
 from .retention import RetentionError, apply_retention_plan, build_retention_plan
 from .scan import PreviousEntry, detect_changes, scan_source
 from .snapshot import (
-    SNAPSHOT_ORDINAL_MAX,
-    SNAPSHOT_ORDINAL_WIDTH,
     SnapshotError,
     generate_snapshot_id,
-    generate_snapshot_prefix,
     write_snapshot,
 )
 from .verify import verify_snapshot
@@ -421,55 +419,16 @@ def _snapshot_id_free(repo: RepoInfo, snapshot_id: str) -> bool:
     )
 
 
-_NEW_SNAPSHOT_ID_RE = re.compile(
-    rf"(?P<prefix>\d{{4}}-\d{{2}}-\d{{2}}_\d{{6}})"
-    rf"-u(?P<ordinal>\d{{{SNAPSHOT_ORDINAL_WIDTH}}})-[0-9a-f]{{32}}"
-)
+def _new_snapshot_id(repo: RepoInfo, lifecycle_seq: int) -> str:
+    """Mint a UUID identity carrying an already-durable attempt sequence."""
 
-
-def _snapshot_namespace_ids(repo: RepoInfo):
-    """枚举会占据 snapshot lifecycle namespace 的当前 artifact id。"""
-    for path in (repo.path / "manifests").glob("*.json"):
-        yield path.stem
-    for path in (repo.path / "snapshots").iterdir():
-        yield path.name
-    tmp_suffix = ".json.tmp"
-    for path in (repo.path / "manifests.tmp").glob(f"*{tmp_suffix}"):
-        yield path.name[: -len(tmp_suffix)]
-
-
-def _next_snapshot_ordinal(repo: RepoInfo, prefix: str) -> int:
-    """返回同 prefix 当前 namespace 的 high-water ordinal + 1。"""
-    high_water = -1
-    for snapshot_id in _snapshot_namespace_ids(repo):
-        match = _NEW_SNAPSHOT_ID_RE.fullmatch(snapshot_id)
-        if match is not None and match.group("prefix") == prefix:
-            high_water = max(high_water, int(match.group("ordinal")))
-    if high_water >= SNAPSHOT_ORDINAL_MAX:
-        raise SnapshotError(
-            f"无法分配快照 id：时间前缀 {prefix} 的 ordinal 已达到上限 {SNAPSHOT_ORDINAL_MAX}"
-        )
-    return high_water + 1
-
-
-def _new_snapshot_id(repo: RepoInfo) -> str:
-    """为新生命周期分配有序 ordinal + UUIDv4 id。
-
-    ordinal 取同 timestamp prefix 当前正式/残留 namespace 的 high-water + 1，
-    不填 retention/discard 留下的空洞。极端 UUID collision 只重新 mint UUID，
-    不推进 ordinal。先选定空闲 id，再落盘 incomplete manifest，任何当前
-    collision 下既有 artifact 均不被触碰。
-    """
     now = datetime.now()
-    prefix = generate_snapshot_prefix(now)
-    ordinal = _next_snapshot_ordinal(repo, prefix)
     for _ in range(100):
-        candidate = generate_snapshot_id(now, ordinal=ordinal)
+        candidate = generate_snapshot_id(now, lifecycle_seq=lifecycle_seq)
         if _snapshot_id_free(repo, candidate):
             return candidate
     raise SnapshotError(
-        f"无法分配唯一快照 id：ordinal u{ordinal:0{SNAPSHOT_ORDINAL_WIDTH}d} 的"
-        "连续 100 个 UUID candidate 均已被占用"
+        f"无法分配唯一快照 id：sequence {lifecycle_seq} 的连续 100 个 UUID candidate 均已被占用"
     )
 
 
@@ -742,6 +701,7 @@ def cmd_backup(args: argparse.Namespace) -> int:
     # lock 则是跨 task 的 mutation safety boundary；两者覆盖 recovery/incomplete
     # 基线选择、源扫描、变更检测、快照/manifest 写入、续传善后、retention 与报告。
     with _TaskLock(repo, cfg.name), _RepoWriterLock(repo):
+        repo = migrate_repo_to_v2(repo)
         started = time.monotonic()
         baseline = _select_baseline(args, cfg, repo)
         scan, current, changes = _scan_and_detect(args, cfg, baseline)
@@ -749,12 +709,21 @@ def cmd_backup(args: argparse.Namespace) -> int:
         clean_tmp_residue(repo)
         # 先分配唯一空闲 id，再落盘 incomplete manifest——任何 id collision 下
         # 既有快照目录 / manifest 字节 / complete 状态都不被触碰
-        snapshot_id = _new_snapshot_id(repo)
+        lifecycle_seq = reserve_lifecycle_sequence(repo)
+        snapshot_id = _new_snapshot_id(repo, lifecycle_seq)
         source_root = str(Path(cfg.source).resolve())
 
         # manifest 状态机：incomplete 落盘 → 物化 → complete 原子提交
         write_manifest(
-            repo, create_manifest(snapshot_id, source_root, repo.hash_algorithm, current)
+            repo,
+            create_manifest(
+                snapshot_id,
+                source_root,
+                repo.hash_algorithm,
+                current,
+                lifecycle_seq=lifecycle_seq,
+                resumed_from_snapshot_id=baseline.resumed_from,
+            ),
         )
         result = write_snapshot(
             cfg.source,
@@ -773,7 +742,13 @@ def cmd_backup(args: argparse.Namespace) -> int:
             rel: baseline.carried_shas[rel] for rel in result.linked if rel in baseline.carried_shas
         } | result.hashes
         final_manifest = create_manifest(
-            snapshot_id, source_root, repo.hash_algorithm, final_current, hashes=merged_hashes
+            snapshot_id,
+            source_root,
+            repo.hash_algorithm,
+            final_current,
+            hashes=merged_hashes,
+            lifecycle_seq=lifecycle_seq,
+            resumed_from_snapshot_id=baseline.resumed_from,
         )
         # 全局 defense-in-depth：当前 verify_on_write=True 的 complete 快照
         # 不允许存在无可信哈希的普通文件条目。skipped/deleted 文件已不在

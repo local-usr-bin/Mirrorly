@@ -22,10 +22,13 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .lifecycle import MAX_LIFECYCLE_SEQUENCE, LifecycleStateError, parse_snapshot_sequence
 from .repo import RepoInfo
 from .scan import ScannedEntry
 
-FORMAT_VERSION = 1
+LEGACY_FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+SUPPORTED_FORMAT_VERSIONS = (LEGACY_FORMAT_VERSION, FORMAT_VERSION)
 STATUS_INCOMPLETE = "incomplete"
 STATUS_COMPLETE = "complete"
 
@@ -62,7 +65,10 @@ class Manifest:
     hash_algorithm: str
     status: str
     stats: ManifestStats
+    lifecycle_seq: int | None
+    resumed_from_snapshot_id: str | None = None
     entries: tuple[ManifestEntry, ...] = field(default_factory=tuple)
+    format_version: int = FORMAT_VERSION
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,9 @@ class ManifestSummary:
     status: str
     created_at: str
     stats: ManifestStats
+    lifecycle_seq: int | None
+    resumed_from_snapshot_id: str | None = None
+    format_version: int = FORMAT_VERSION
 
 
 def create_manifest(
@@ -81,6 +90,9 @@ def create_manifest(
     hash_algorithm: str,
     current: Mapping[str, ScannedEntry],
     hashes: Mapping[str, str] | None = None,
+    *,
+    lifecycle_seq: int,
+    resumed_from_snapshot_id: str | None = None,
 ) -> Manifest:
     """从扫描结果构建 incomplete 状态的清单。
 
@@ -89,6 +101,8 @@ def create_manifest(
     """
     if not snapshot_id:
         raise ManifestError("snapshot_id 不能为空")
+    value = _validate_lifecycle_seq(lifecycle_seq)
+    _validate_snapshot_sequence_match(snapshot_id, value)
     hashes = hashes or {}
     entries = tuple(
         ManifestEntry(
@@ -112,6 +126,8 @@ def create_manifest(
             dirs=len(entries) - len(files),
             total_bytes=sum(e.size for e in files),
         ),
+        lifecycle_seq=lifecycle_seq,
+        resumed_from_snapshot_id=resumed_from_snapshot_id,
         entries=entries,
     )
 
@@ -126,6 +142,7 @@ def write_manifest(repo: RepoInfo, manifest: Manifest) -> Path:
 
     流程：写 manifests.tmp/<id>.json.tmp → flush + fsync → 关闭 → os.replace。
     """
+    _validate_manifest(manifest)
     final = repo.path / "manifests" / f"{manifest.snapshot_id}.json"
     tmp = repo.path / "manifests.tmp" / f"{manifest.snapshot_id}.json.tmp"
     try:
@@ -149,9 +166,9 @@ def load_manifest(repo: RepoInfo, snapshot_id: str, *, require_complete: bool = 
     if not path.exists():
         raise ManifestError(f"清单不存在: {snapshot_id}")
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("format_version") != FORMAT_VERSION:
+    if data.get("format_version") not in SUPPORTED_FORMAT_VERSIONS:
         raise ManifestError(
-            f"清单格式版本不兼容: {data.get('format_version')}（支持 {FORMAT_VERSION}）"
+            f"清单格式版本不兼容: {data.get('format_version')}（支持 {SUPPORTED_FORMAT_VERSIONS}）"
         )
     if require_complete and data["status"] != STATUS_COMPLETE:
         raise ManifestError(f"清单状态为 {data['status']}，不是完整备份: {snapshot_id}")
@@ -164,6 +181,12 @@ def list_manifests(repo: RepoInfo) -> list[ManifestSummary]:
     manifests_dir = repo.path / "manifests"
     for f in sorted(manifests_dir.glob("*.json")):
         data = json.loads(f.read_text(encoding="utf-8"))
+        version = data.get("format_version")
+        if version not in SUPPORTED_FORMAT_VERSIONS:
+            raise ManifestError(
+                f"清单格式版本不兼容: {version!r}（支持 {SUPPORTED_FORMAT_VERSIONS}）"
+            )
+        lifecycle_seq = _lifecycle_seq_from_data(data)
         stats = data.get("stats", {})
         out.append(
             ManifestSummary(
@@ -175,6 +198,9 @@ def list_manifests(repo: RepoInfo) -> list[ManifestSummary]:
                     dirs=stats.get("dirs", 0),
                     total_bytes=stats.get("total_bytes", 0),
                 ),
+                lifecycle_seq=lifecycle_seq,
+                resumed_from_snapshot_id=data.get("resumed_from_snapshot_id"),
+                format_version=version,
             )
         )
     return out
@@ -186,8 +212,8 @@ def _to_json(manifest: Manifest) -> str:
 
 
 def _to_dict(manifest: Manifest) -> dict:
-    return {
-        "format_version": FORMAT_VERSION,
+    data = {
+        "format_version": manifest.format_version,
         "snapshot_id": manifest.snapshot_id,
         "created_at": manifest.created_at,
         "source_root": manifest.source_root,
@@ -207,9 +233,18 @@ def _to_dict(manifest: Manifest) -> dict:
             for e in manifest.entries
         ],
     }
+    if manifest.format_version == FORMAT_VERSION:
+        data["lifecycle_seq"] = manifest.lifecycle_seq
+        if manifest.resumed_from_snapshot_id is not None:
+            data["resumed_from_snapshot_id"] = manifest.resumed_from_snapshot_id
+    return data
 
 
 def _from_dict(data: dict) -> Manifest:
+    version = data.get("format_version")
+    if version not in SUPPORTED_FORMAT_VERSIONS:
+        raise ManifestError(f"清单格式版本不兼容: {version!r}（支持 {SUPPORTED_FORMAT_VERSIONS}）")
+    lifecycle_seq = _lifecycle_seq_from_data(data)
     stats = data.get("stats", {})
     entries = tuple(
         ManifestEntry(
@@ -232,5 +267,46 @@ def _from_dict(data: dict) -> Manifest:
             dirs=stats.get("dirs", 0),
             total_bytes=stats.get("total_bytes", 0),
         ),
+        lifecycle_seq=lifecycle_seq,
+        resumed_from_snapshot_id=data.get("resumed_from_snapshot_id"),
         entries=entries,
+        format_version=version,
     )
+
+
+def _validate_lifecycle_seq(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ManifestError("manifest lifecycle_seq 必须是整数")
+    if not 0 <= value <= MAX_LIFECYCLE_SEQUENCE:
+        raise ManifestError(f"manifest lifecycle_seq 超出 uint64: {value!r}")
+    return value
+
+
+def _validate_snapshot_sequence_match(snapshot_id: str, lifecycle_seq: int) -> None:
+    try:
+        encoded = parse_snapshot_sequence(snapshot_id)
+    except LifecycleStateError as exc:
+        raise ManifestError(str(exc)) from exc
+    if encoded is None:
+        raise ManifestError(f"manifest v2 snapshot id 未携带 lifecycle sequence: {snapshot_id!r}")
+    if encoded != lifecycle_seq:
+        raise ManifestError(
+            f"snapshot id sequence {encoded} 与 manifest lifecycle_seq {lifecycle_seq} 不一致"
+        )
+
+
+def _lifecycle_seq_from_data(data: dict) -> int | None:
+    if data.get("format_version") == LEGACY_FORMAT_VERSION:
+        return None
+    value = _validate_lifecycle_seq(data.get("lifecycle_seq"))
+    _validate_snapshot_sequence_match(data.get("snapshot_id", ""), value)
+    return value
+
+
+def _validate_manifest(manifest: Manifest) -> None:
+    if manifest.format_version != FORMAT_VERSION:
+        raise ManifestError(
+            f"production writer 只允许写入 manifest v2，拒绝 format: {manifest.format_version}"
+        )
+    value = _validate_lifecycle_seq(manifest.lifecycle_seq)
+    _validate_snapshot_sequence_match(manifest.snapshot_id, value)

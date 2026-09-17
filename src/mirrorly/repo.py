@@ -27,11 +27,14 @@ from pathlib import Path
 
 from . import __version__
 from . import volume as _volume
+from .durable import write_json_durable
 from .hashing import default_algorithm
 
 REPO_DIR_NAME = "MirrorlyRepo"
 REPO_INFO_FILE = "repo.json"
-FORMAT_VERSION = 1
+LEGACY_FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+SUPPORTED_FORMAT_VERSIONS = (LEGACY_FORMAT_VERSION, FORMAT_VERSION)
 SUBDIRS = ("snapshots", "manifests", "manifests.tmp", "locks", "logs")
 
 #: v1 正式支持硬链接的文件系统（ADR-005）
@@ -176,6 +179,12 @@ def init_repo(
         filesystem_policy=filesystem_policy,
         hardlinks=hardlinks,
     )
+    # repo format v2 capability gate：state 必须先 durable 存在，随后才发布
+    # 声明其 mandatory 的 repo.json。若第二步失败，只留下 v1-style「无 repo.json」
+    # 的未初始化目录，不会形成 v2 + missing state。
+    from .lifecycle import initialize_lifecycle_state
+
+    initialize_lifecycle_state(info)
     _write_json_atomic(repo_dir / REPO_INFO_FILE, _repo_to_dict(info))
     return info
 
@@ -185,13 +194,17 @@ def load_repo(target_root: str | Path) -> RepoInfo:
     info_file = Path(target_root) / REPO_DIR_NAME / REPO_INFO_FILE
     if not info_file.exists():
         raise RepoError(f"未找到仓库（repo.json 不存在）: {info_file}")
-    data = json.loads(info_file.read_text(encoding="utf-8"))
-    if data["format_version"] != FORMAT_VERSION:
+    try:
+        data = json.loads(info_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RepoFormatError(f"repo.json 无法读取或已损坏: {info_file}（{exc}）") from exc
+    if data.get("format_version") not in SUPPORTED_FORMAT_VERSIONS:
         raise RepoFormatError(
-            f"仓库格式版本不兼容: {data['format_version']}（本工具支持 {FORMAT_VERSION}）"
+            f"仓库格式版本不兼容: {data.get('format_version')}"
+            f"（本工具支持 {SUPPORTED_FORMAT_VERSIONS}）"
         )
     vol = data["volume"]
-    return RepoInfo(
+    info = RepoInfo(
         path=info_file.parent,
         format_version=data["format_version"],
         repo_id=data["repo_id"],
@@ -207,6 +220,53 @@ def load_repo(target_root: str | Path) -> RepoInfo:
         filesystem_policy=data["filesystem_policy"],
         hardlinks=data["hardlinks"],
     )
+    if info.format_version == FORMAT_VERSION:
+        # v2 capability gate：state 不是 optional feature。任何缺失、损坏、
+        # repo_id 不匹配或可检测 rollback 都在进入业务路径前 fail closed。
+        from .lifecycle import load_lifecycle_state
+
+        load_lifecycle_state(info)
+    return info
+
+
+def migrate_repo_to_v2(repo: RepoInfo) -> RepoInfo:
+    """Under the repo writer lock, establish mandatory lifecycle sequencing.
+
+    Frozen crash states:
+    - v1 + no state: initialize state(next=0), then publish repo v2;
+    - v1 + valid state(next=0): finish an interrupted migration;
+    - v1 + contradictory/non-initial state: fail closed;
+    - v2: validate mandatory state and return unchanged.
+    """
+
+    from .lifecycle import (
+        LifecycleStateError,
+        initialize_lifecycle_state,
+        lifecycle_state_path,
+        load_lifecycle_state,
+    )
+
+    if repo.format_version == FORMAT_VERSION:
+        load_lifecycle_state(repo)
+        return repo
+    if repo.format_version != LEGACY_FORMAT_VERSION:
+        raise RepoFormatError(f"不能 migration 的 repository format: {repo.format_version}")
+
+    state_path = lifecycle_state_path(repo)
+    if state_path.exists():
+        state = load_lifecycle_state(repo)
+        if state.next_sequence != 0:
+            raise LifecycleStateError(
+                "v1 repository 携带 non-initial lifecycle state，拒绝猜测 migration 状态"
+            )
+    else:
+        initialize_lifecycle_state(repo)
+
+    upgraded = replace(repo, format_version=FORMAT_VERSION, tool_version=__version__)
+    _write_json_atomic(repo.path / REPO_INFO_FILE, _repo_to_dict(upgraded))
+    # Re-read through the public gate: a successful migration is observable only
+    # after both repo.json v2 and its mandatory state validate together.
+    return load_repo(repo.path.parent)
 
 
 def _repo_to_dict(info: RepoInfo) -> dict:
@@ -230,10 +290,9 @@ def _repo_to_dict(info: RepoInfo) -> dict:
 
 
 def _write_json_atomic(path: Path, data: dict) -> None:
-    """先写临时文件再原子改名（TR-5 设计纪律：不产生半个 JSON）。"""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    """Durable JSON publication used by repo capability transitions."""
+
+    write_json_durable(path, data)
 
 
 def _default_confirm(message: str) -> bool:

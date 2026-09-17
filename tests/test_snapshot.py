@@ -264,8 +264,8 @@ class TestHelpers:
 
         fixed_uuid = UUID("12345678-1234-4abc-8def-1234567890ab")
         monkeypatch.setattr("mirrorly.snapshot.uuid.uuid4", lambda: fixed_uuid)
-        sid = generate_snapshot_id(datetime(2026, 9, 13, 1, 2, 3), ordinal=42)
-        assert sid == "2026-09-13_010203-u000042-1234567812344abc8def1234567890ab"
+        sid = generate_snapshot_id(datetime(2026, 9, 13, 1, 2, 3), lifecycle_seq=42)
+        assert sid == "2026-09-13_010203-s00000000000000000042-1234567812344abc8def1234567890ab"
         suffix = sid.rsplit("-", 1)[1]
         assert len(suffix) == 32
         assert suffix == suffix.lower()
