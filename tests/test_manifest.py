@@ -10,8 +10,10 @@ from mirrorly.lifecycle import parse_snapshot_sequence
 from mirrorly.manifest import (
     FORMAT_VERSION,
     LEGACY_FORMAT_VERSION,
+    ManifestEntry,
     ManifestError,
     ManifestOrderingError,
+    ManifestPathError,
     ManifestStats,
     ManifestSummary,
     latest_sequenced_complete,
@@ -279,6 +281,118 @@ class TestSerialization:
         src, current = _scan(tmp_path)
         with pytest.raises(ManifestError):
             create_manifest("", str(src), "blake3", current)
+
+
+class TestCanonicalEntryPaths:
+    @pytest.mark.parametrize("format_version", [LEGACY_FORMAT_VERSION, FORMAT_VERSION])
+    def test_load_lone_surrogate_raises_manifest_path_error(self, tmp_path, format_version) -> None:
+        repo = _repo(tmp_path)
+        src, current = _scan(tmp_path)
+        manifest = create_manifest(_V2_ID_0, str(src), "blake3", current)
+        if format_version == LEGACY_FORMAT_VERSION:
+            manifest = replace(manifest, format_version=format_version, lifecycle_seq=None)
+            path = _write_legacy_manifest(repo, manifest)
+        else:
+            path = write_manifest(repo, manifest)
+        data = json.loads(path.read_text("utf-8"))
+        data["entries"][0]["path"] = "\ud800.txt"
+        path.write_text(json.dumps(data, ensure_ascii=True), encoding="ascii")
+        assert json.loads(path.read_text("ascii"))["entries"][0]["path"] == "\ud800.txt"
+
+        with pytest.raises(ManifestPathError):
+            load_manifest(repo, manifest.snapshot_id)
+
+    @pytest.mark.parametrize("existing_final", [False, True])
+    def test_write_lone_surrogate_rejected_before_publication(
+        self, tmp_path, existing_final
+    ) -> None:
+        repo = _repo(tmp_path)
+        src, current = _scan(tmp_path)
+        manifest = create_manifest(_V2_ID_0, str(src), "blake3", current)
+        final = repo.path / "manifests" / f"{manifest.snapshot_id}.json"
+        if existing_final:
+            write_manifest(repo, manifest)
+            before = final.read_bytes()
+        invalid = ManifestEntry("\ud800.txt", 1, 1, None, False)
+
+        with pytest.raises(ManifestPathError):
+            write_manifest(repo, replace(manifest, entries=(invalid,)))
+
+        if existing_final:
+            assert final.read_bytes() == before
+        else:
+            assert not final.exists()
+        assert not (repo.path / "manifests.tmp" / f"{manifest.snapshot_id}.json.tmp").exists()
+
+    @pytest.mark.parametrize(
+        "invalid_path",
+        [
+            "",
+            "/absolute.txt",
+            "C:/absolute.txt",
+            "a//b.txt",
+            "a/./b.txt",
+            "a/../b.txt",
+            "..",
+            "a\\b.txt",
+            "name. ",
+            "a<b.txt",
+            "CON.txt",
+            "a" * 256,
+            "😀" * 128,
+        ],
+    )
+    def test_load_and_list_reject_noncanonical_entry(self, tmp_path, invalid_path) -> None:
+        repo = _repo(tmp_path)
+        src, current = _scan(tmp_path)
+        write_manifest(repo, create_manifest(_V2_ID_0, str(src), "blake3", current))
+        path = repo.path / "manifests" / f"{_V2_ID_0}.json"
+        data = json.loads(path.read_text("utf-8"))
+        data["entries"][0]["path"] = invalid_path
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", "utf-8")
+
+        with pytest.raises(ManifestPathError):
+            load_manifest(repo, _V2_ID_0)
+        with pytest.raises(ManifestPathError):
+            list_manifests(repo)
+
+    @pytest.mark.parametrize("paths", [("a.txt", "a.txt"), ("A.txt", "a.txt")])
+    def test_load_rejects_duplicate_or_case_colliding_entries(self, tmp_path, paths) -> None:
+        repo = _repo(tmp_path)
+        src, current = _scan(tmp_path)
+        write_manifest(repo, create_manifest(_V2_ID_0, str(src), "blake3", current))
+        path = repo.path / "manifests" / f"{_V2_ID_0}.json"
+        data = json.loads(path.read_text("utf-8"))
+        template = data["entries"][0]
+        data["entries"] = [{**template, "path": value} for value in paths]
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", "utf-8")
+
+        with pytest.raises(ManifestPathError):
+            load_manifest(repo, _V2_ID_0)
+
+    def test_writer_rejects_before_publication(self, tmp_path) -> None:
+        repo = _repo(tmp_path)
+        src, current = _scan(tmp_path)
+        manifest = create_manifest(_V2_ID_0, str(src), "blake3", current)
+        invalid = ManifestEntry("../outside.txt", 1, 1, None, False)
+
+        with pytest.raises(ManifestPathError, match=r"\.\."):
+            write_manifest(repo, replace(manifest, entries=(invalid,)))
+
+        assert not (repo.path / "manifests" / f"{_V2_ID_0}.json").exists()
+        assert not (repo.path / "manifests.tmp" / f"{_V2_ID_0}.json.tmp").exists()
+
+    def test_valid_nested_path_roundtrip_and_bytes_stable(self, tmp_path) -> None:
+        repo = _repo(tmp_path)
+        src, current = _scan(tmp_path)
+        manifest = create_manifest(_V2_ID_0, str(src), "blake3", current)
+        path = write_manifest(repo, manifest)
+        before = path.read_bytes()
+
+        loaded = load_manifest(repo, _V2_ID_0)
+        assert {entry.path for entry in loaded.entries} >= {"sub", "sub/b.txt"}
+        write_manifest(repo, loaded)
+        assert path.read_bytes() == before
 
 
 def _summary(snapshot_id: str, status: str, sequence: int | None) -> ManifestSummary:

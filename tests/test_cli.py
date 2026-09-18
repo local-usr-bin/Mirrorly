@@ -107,6 +107,13 @@ def write_manifest(repo, manifest):
     return _write_manifest(repo, manifest)
 
 
+def _tamper_entry_path_raw(repo, snapshot_id: str, path_value: str) -> None:
+    path = repo.path / "manifests" / f"{snapshot_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["entries"][0]["path"] = path_value
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _write(path: Path, data: bytes = b"x") -> None:
     Path(to_long_path(path.parent)).mkdir(parents=True, exist_ok=True)
     with open(to_long_path(path), "wb") as f:
@@ -1480,6 +1487,29 @@ class TestAuthoritativeLifecycleOrdering:
         assert selected == []
         assert baseline.resumed_from is None
         assert baseline.previous_snapshot_dir == repo.path / "snapshots" / complete
+
+
+class TestManifestPathBoundary:
+    def test_backup_rejects_invalid_baseline_before_repository_mutation(
+        self, backed_up, capsys
+    ) -> None:
+        ws = backed_up
+        repo = _repo(ws)
+        snapshot_id = list_manifests(repo)[0].snapshot_id
+        before_state = load_lifecycle_state(repo)
+        before_snapshots = sorted(path.name for path in (repo.path / "snapshots").iterdir())
+        before_reports = sorted(path.name for path in (repo.path / "logs").iterdir())
+        _tamper_entry_path_raw(repo, snapshot_id, "../outside.txt")
+        manifest_path = repo.path / "manifests" / f"{snapshot_id}.json"
+        tampered_bytes = manifest_path.read_bytes()
+
+        capsys.readouterr()
+        assert _run(ws, "backup", "--yes") == 1
+        assert "manifest 条目路径" in capsys.readouterr().err
+        assert load_lifecycle_state(repo) == before_state
+        assert sorted(path.name for path in (repo.path / "snapshots").iterdir()) == before_snapshots
+        assert sorted(path.name for path in (repo.path / "logs").iterdir()) == before_reports
+        assert manifest_path.read_bytes() == tampered_bytes
 
 
 class TestB1SnapshotImmutability:

@@ -95,6 +95,23 @@ def write_manifest(repo, manifest):
     return _write_manifest(repo, manifest)
 
 
+def _write_manifest_entries_raw(repo, snapshot_id: str, entries) -> None:
+    """Test-only tampering helper; production write_manifest rejects these entries."""
+    path = repo.path / "manifests" / f"{snapshot_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["entries"] = [
+        {
+            "path": entry.path,
+            "type": "dir" if entry.is_dir else "file",
+            "size": entry.size,
+            "mtime_ns": entry.mtime_ns,
+            "sha": entry.sha,
+        }
+        for entry in entries
+    ]
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _ntfs_provider(_path):
     return _NTFS
 
@@ -371,7 +388,7 @@ class TestPlanAndDestinationBoundary:
         _make_snapshot(repo, "s1", {"a.txt": b"a"})
         m = load_manifest(repo, "s1", require_complete=True)
         evil = replace(m.entries[0], path="../evil.txt")
-        write_manifest(repo, replace(m, entries=(evil,)))
+        _write_manifest_entries_raw(repo, "s1", (evil,))
         with pytest.raises(RestoreError, match="manifest 条目路径"):
             plan_restore(repo, "s1", tmp_path / "out")
 
@@ -853,13 +870,32 @@ class TestMtimeBeforeReplace:
 
 
 class TestManifestWideValidation:
+    @pytest.mark.parametrize("operation", ["plan", "apply"])
+    def test_lone_surrogate_raises_restore_error(self, tmp_path, operation) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"safe.txt": b"safe"})
+        destination = tmp_path / "out"
+        plan = plan_restore(repo, "s1", destination)
+        path = repo.path / "manifests" / "s1.json"
+        data = json.loads(path.read_text("utf-8"))
+        data["entries"][0]["path"] = "\ud800.txt"
+        path.write_text(json.dumps(data, ensure_ascii=True), encoding="ascii")
+
+        with pytest.raises(RestoreError, match="manifest 条目路径"):
+            if operation == "plan":
+                plan_restore(repo, "s1", destination)
+            else:
+                apply_restore(repo, plan)
+
+        assert not destination.exists()
+
     def test_evil_unselected_entry_rejected(self, tmp_path) -> None:
         # manifest 含未选中的 ../evil：即使只恢复 safe selector 也必须整体拒绝
         repo = _init_repo(tmp_path / "target")
         _make_snapshot(repo, "s1", {"safe.txt": b"safe", "other.txt": b"o"})
         m = load_manifest(repo, "s1", require_complete=True)
         evil = replace(m.entries[0], path="../evil.txt")
-        write_manifest(repo, replace(m, entries=(*m.entries, evil)))
+        _write_manifest_entries_raw(repo, "s1", (*m.entries, evil))
         with pytest.raises(RestoreError, match="manifest 条目路径"):
             plan_restore(repo, "s1", tmp_path / "out", paths=("safe.txt",))
         assert not (tmp_path / "evil.txt").exists()
@@ -870,7 +906,7 @@ class TestManifestWideValidation:
         _make_snapshot(repo, "s1", {"a.txt": b"a", "b.txt": b"b"})
         m = load_manifest(repo, "s1", require_complete=True)
         dup = replace(m.entries[0], size=999)  # 同路径不同内容
-        write_manifest(repo, replace(m, entries=(*m.entries, dup)))
+        _write_manifest_entries_raw(repo, "s1", (*m.entries, dup))
         with pytest.raises(RestoreError, match="重复"):
             plan_restore(repo, "s1", tmp_path / "out")
 
@@ -1011,7 +1047,7 @@ class TestBackslashRejection:
         _make_snapshot(repo, "s1", {"safe.txt": b"safe"})
         m = load_manifest(repo, "s1", require_complete=True)
         tampered = replace(m.entries[0], path=evil)
-        write_manifest(repo, replace(m, entries=(*m.entries, tampered)))
+        _write_manifest_entries_raw(repo, "s1", (*m.entries, tampered))
         with pytest.raises(RestoreError, match="manifest 条目路径"):
             plan_restore(repo, "s1", tmp_path / "out", paths=("safe.txt",))
         assert not (tmp_path / "out").exists()
@@ -1063,7 +1099,7 @@ class TestCaseInsensitiveCollision:
         _make_snapshot(repo, "s1", {"x.txt": b"x"})
         m = load_manifest(repo, "s1", require_complete=True)
         forged = tuple(replace(m.entries[0], path=p) for p in paths)
-        write_manifest(repo, replace(m, entries=forged))
+        _write_manifest_entries_raw(repo, "s1", forged)
         with pytest.raises(RestoreError, match="大小写冲突"):
             plan_restore(repo, "s1", tmp_path / "out")
 

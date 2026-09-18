@@ -18,6 +18,7 @@ from mirrorly import verify as verify_mod
 from mirrorly.hashing import hash_file
 from mirrorly.manifest import (
     LEGACY_FORMAT_VERSION,
+    ManifestPathError,
     mark_complete,
 )
 from mirrorly.manifest import create_manifest as _create_manifest
@@ -79,6 +80,13 @@ def write_manifest(repo, manifest):
     return _write_manifest(repo, manifest)
 
 
+def _tamper_entry_path_raw(repo, snapshot_id: str, path_value: str) -> None:
+    path = repo.path / "manifests" / f"{snapshot_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["entries"][0]["path"] = path_value
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _ntfs_provider(_path):
     return _NTFS
 
@@ -132,6 +140,24 @@ class TestVerifySnapshot:
         assert report.checked_files == 2 and report.checked_dirs == 1
         assert report.hashed_files == 2 and report.unhashed_entries == 0
         assert report.issues == () and report.extras == ()
+
+    @pytest.mark.parametrize("invalid_path", ["C:/outside.txt", "../outside.txt"])
+    def test_invalid_manifest_path_rejected_before_snapshot_access(
+        self, tmp_path, monkeypatch, invalid_path
+    ) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "a.txt", b"aaa", mtime_ns=1000)
+        _make_backup(repo, src, "snap1")
+        _tamper_entry_path_raw(repo, "snap1", invalid_path)
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("invalid entry reached snapshot filesystem access")
+
+        monkeypatch.setattr(verify_mod, "to_long_path", forbidden)
+        monkeypatch.setattr(verify_mod, "hash_file", forbidden)
+        with pytest.raises(ManifestPathError):
+            verify_snapshot(repo, "snap1")
 
     def test_byte_tampering_detected_as_corrupt(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")

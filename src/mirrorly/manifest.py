@@ -20,7 +20,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .lifecycle import MAX_LIFECYCLE_SEQUENCE, LifecycleStateError, parse_snapshot_sequence
 from .repo import RepoInfo
@@ -32,9 +32,37 @@ SUPPORTED_FORMAT_VERSIONS = (LEGACY_FORMAT_VERSION, FORMAT_VERSION)
 STATUS_INCOMPLETE = "incomplete"
 STATUS_COMPLETE = "complete"
 
+# Windows 单 path component 上限（NTFS/exFAT 均为 255 个 UTF-16 code unit）
+MAX_COMPONENT_UTF16 = 255
+
+# Windows 保留设备名（大小写不敏感；含上位数字形式，含带扩展名形式）
+_RESERVED_DEVICE_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
+    }
+)
+
+# Windows 文件名禁止字符（另加所有 < 0x20 的控制字符）
+_FORBIDDEN_CHARS = frozenset('<>:"|?*')
+
 
 class ManifestError(Exception):
     """清单读写/校验相关错误。"""
+
+
+class ManifestPathError(ManifestError):
+    """Manifest 条目路径不符合 canonical snapshot-relative 规则。"""
 
 
 class ManifestOrderingError(ManifestError):
@@ -77,7 +105,7 @@ class Manifest:
 
 @dataclass(frozen=True)
 class ManifestSummary:
-    """list 用的轻量摘要（不加载全量条目）。"""
+    """list 用的轻量摘要（从完整解析并校验过条目路径的 manifest 提取）。"""
 
     snapshot_id: str
     status: str
@@ -86,6 +114,69 @@ class ManifestSummary:
     lifecycle_seq: int | None
     resumed_from_snapshot_id: str | None = None
     format_version: int = FORMAT_VERSION
+
+
+def _utf16_units(value: str) -> int:
+    """按 Windows 底层长度语义计 UTF-16 code unit 数（非 BMP 字符算 2）。"""
+    return len(value.encode("utf-16-le")) // 2
+
+
+def validate_canonical_entry_path(path: str, *, what: str = "manifest 条目路径") -> PurePosixPath:
+    """校验 canonical snapshot-relative POSIX 路径，不访问或改写文件系统。
+
+    规则源自 Restore 已冻结的 manifest-entry lexical contract。输入不会被
+    normalize：反斜杠、空段、``.``/``..``、绝对/盘符路径、Windows 特殊
+    名称或不可 canonical 表示的 component 均直接 fail closed。
+    """
+    if not isinstance(path, str) or not path:
+        raise ManifestPathError(f"{what}不能为空")
+    if "\\" in path:
+        raise ManifestPathError(f"{what}不允许反斜杠（须为 POSIX 风格相对路径）: {path!r}")
+    if path.startswith("/"):
+        raise ManifestPathError(f"{what}必须是相对路径: {path!r}")
+    if len(path) > 1 and path[1] == ":":
+        raise ManifestPathError(f"{what}不允许盘符绝对路径: {path!r}")
+    parts = path.split("/")
+    for part in parts:
+        if not part:
+            raise ManifestPathError(f"{what}含空路径段: {path!r}")
+        if part in (".", ".."):
+            raise ManifestPathError(f"{what}不允许 . / .. 路径段: {path!r}")
+        if part != part.rstrip(" ."):
+            raise ManifestPathError(f"{what}的路径段不允许尾随点或空格: {path!r}")
+        if any(ord(char) < 0x20 or char in _FORBIDDEN_CHARS for char in part):
+            raise ManifestPathError(f"{what}含 Windows 禁止字符: {path!r}")
+        stem = part.split(".", 1)[0].upper()
+        if stem in _RESERVED_DEVICE_NAMES:
+            raise ManifestPathError(f"{what}含保留设备名: {path!r}")
+        try:
+            units = _utf16_units(part)
+        except UnicodeEncodeError as exc:
+            raise ManifestPathError(f"{what}含无法编码为 UTF-16 的字符: {path!r}") from exc
+        if units > MAX_COMPONENT_UTF16:
+            raise ManifestPathError(
+                f"{what}的路径段超过 {MAX_COMPONENT_UTF16} 个 UTF-16 code unit: {path!r}"
+            )
+    return PurePosixPath(path)
+
+
+def validate_manifest_entry_paths(entries: Sequence[ManifestEntry]) -> None:
+    """全量验证 manifest 路径，并拒绝精确重复和 Windows 大小写冲突。"""
+    seen_exact: set[str] = set()
+    seen_folded: set[str] = set()
+    for entry in entries:
+        validate_canonical_entry_path(entry.path)
+        if entry.path in seen_exact:
+            raise ManifestPathError(
+                f"manifest 含重复条目路径（拒绝重复执行/字典折叠）: {entry.path!r}"
+            )
+        folded = entry.path.casefold()
+        if folded in seen_folded:
+            raise ManifestPathError(
+                f"manifest 含 Windows 大小写冲突条目路径（fail closed，拒绝执行）: {entry.path!r}"
+            )
+        seen_exact.add(entry.path)
+        seen_folded.add(folded)
 
 
 def create_manifest(
@@ -185,26 +276,16 @@ def list_manifests(repo: RepoInfo) -> list[ManifestSummary]:
     manifests_dir = repo.path / "manifests"
     for f in sorted(manifests_dir.glob("*.json")):
         data = json.loads(f.read_text(encoding="utf-8"))
-        version = data.get("format_version")
-        if version not in SUPPORTED_FORMAT_VERSIONS:
-            raise ManifestError(
-                f"清单格式版本不兼容: {version!r}（支持 {SUPPORTED_FORMAT_VERSIONS}）"
-            )
-        lifecycle_seq = _lifecycle_seq_from_data(data)
-        stats = data.get("stats", {})
+        manifest = _from_dict(data)
         out.append(
             ManifestSummary(
-                snapshot_id=data["snapshot_id"],
-                status=data["status"],
-                created_at=data["created_at"],
-                stats=ManifestStats(
-                    files=stats.get("files", 0),
-                    dirs=stats.get("dirs", 0),
-                    total_bytes=stats.get("total_bytes", 0),
-                ),
-                lifecycle_seq=lifecycle_seq,
-                resumed_from_snapshot_id=data.get("resumed_from_snapshot_id"),
-                format_version=version,
+                snapshot_id=manifest.snapshot_id,
+                status=manifest.status,
+                created_at=manifest.created_at,
+                stats=manifest.stats,
+                lifecycle_seq=manifest.lifecycle_seq,
+                resumed_from_snapshot_id=manifest.resumed_from_snapshot_id,
+                format_version=manifest.format_version,
             )
         )
     _validate_unique_lifecycle_sequences(out)
@@ -337,7 +418,7 @@ def _from_dict(data: dict) -> Manifest:
         )
         for e in data["entries"]
     )
-    return Manifest(
+    manifest = Manifest(
         snapshot_id=data["snapshot_id"],
         created_at=data["created_at"],
         source_root=data["source_root"],
@@ -353,6 +434,8 @@ def _from_dict(data: dict) -> Manifest:
         entries=entries,
         format_version=version,
     )
+    validate_manifest_entry_paths(manifest.entries)
+    return manifest
 
 
 def _validate_lifecycle_seq(value: object) -> int:
@@ -391,3 +474,4 @@ def _validate_manifest(manifest: Manifest) -> None:
         )
     value = _validate_lifecycle_seq(manifest.lifecycle_seq)
     _validate_snapshot_sequence_match(manifest.snapshot_id, value)
+    validate_manifest_entry_paths(manifest.entries)

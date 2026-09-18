@@ -85,6 +85,21 @@ def write_manifest(repo, manifest):
     return _write_manifest(repo, manifest)
 
 
+def _add_invalid_entry_raw(repo, snapshot_id: str) -> None:
+    path = repo.path / "manifests" / f"{snapshot_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["entries"] = [
+        {
+            "path": "../outside.txt",
+            "type": "file",
+            "size": 1,
+            "mtime_ns": 1,
+            "sha": None,
+        }
+    ]
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _ntfs_provider(_path):
     return _NTFS
 
@@ -247,6 +262,21 @@ class TestCombinedPolicy:
 
 
 class TestSafetyBoundaries:
+    def test_invalid_manifest_path_blocks_planning_and_deletion(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        snapshot_id = _make_sequenced_snapshot(repo, 0, _iso("2026-09-01"))
+        _add_invalid_entry_raw(repo, snapshot_id)
+        manifest_path = repo.path / "manifests" / f"{snapshot_id}.json"
+        snapshot_dir = repo.path / "snapshots" / snapshot_id
+
+        with pytest.raises(ManifestError, match="manifest 条目路径"):
+            build_retention_plan(repo, keep_last=0)
+        with pytest.raises(RetentionError, match="manifest 校验失败"):
+            apply_retention_plan(repo, RetentionPlan(delete=(snapshot_id,)))
+
+        assert manifest_path.exists()
+        assert snapshot_dir.exists()
+
     def test_dry_run_deletes_nothing(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")
         ids = [_make_sequenced_snapshot(repo, i - 1, _iso(f"2026-09-0{i}")) for i in range(1, 4)]

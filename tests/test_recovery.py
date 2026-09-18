@@ -86,6 +86,13 @@ def write_manifest(repo, manifest):
     return _write_manifest(repo, manifest)
 
 
+def _tamper_entry_path_raw(repo, snapshot_id: str, path_value: str) -> None:
+    path = repo.path / "manifests" / f"{snapshot_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["entries"][0]["path"] = path_value
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _ntfs_provider(_path):
     return _NTFS
 
@@ -457,6 +464,18 @@ class TestBuildResumeBaseline:
         assert sorted(baseline.previous) == ["file0.txt", "file1.txt"]
         assert sorted(baseline.missing) == ["file2.txt", "sub/nested.txt"]
         assert "sub" in baseline.previous_dirs
+
+    def test_invalid_manifest_path_rejected_before_recovered_tree_access(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        src = tmp_path / "src"
+        _write(src / "a.txt", b"content")
+        current = scan_source(src, ()).entries
+        write_manifest(repo, create_manifest("snap1", str(src), repo.hash_algorithm, current))
+        _tamper_entry_path_raw(repo, "snap1", "../outside.txt")
+
+        # No snapshot directory exists: path validation must win before recovered-tree probing.
+        with pytest.raises(RecoveryError, match="manifest 条目路径"):
+            build_resume_baseline(repo, "snap1")
 
     def test_rejects_complete_manifest(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")

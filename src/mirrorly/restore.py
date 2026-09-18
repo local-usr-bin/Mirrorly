@@ -83,40 +83,23 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from .hashing import hash_file
-from .manifest import Manifest, ManifestEntry, load_manifest
+from .manifest import (
+    Manifest,
+    ManifestEntry,
+    ManifestPathError,
+    load_manifest,
+    validate_canonical_entry_path,
+    validate_manifest_entry_paths,
+)
 from .repo import RepoInfo
 from .scan import to_long_path
 
 #: 覆盖策略取值（CLI_SPEC：--overwrite never|older|always，默认 never）
 OVERWRITE_POLICIES = ("never", "older", "always")
 
-#: Windows 单 path component 上限（NTFS/exFAT 均为 255 个 UTF-16 code unit）
-MAX_COMPONENT_UTF16 = 255
-
 #: 临时文件前后缀：短固定前缀 + mkstemp 随机串，不含 final filename（防溢出）
 _TMP_PREFIX = ".mirrorly-restore-"
 _TMP_SUFFIX = ".mrtmp"
-
-#: Windows 保留设备名（大小写不敏感；含上位数字形式，含带扩展名形式）
-_RESERVED_DEVICE_NAMES = frozenset(
-    {
-        "CON",
-        "PRN",
-        "AUX",
-        "NUL",
-        *(f"COM{i}" for i in range(1, 10)),
-        *(f"LPT{i}" for i in range(1, 10)),
-        "COM¹",
-        "COM²",
-        "COM³",
-        "LPT¹",
-        "LPT²",
-        "LPT³",
-    }
-)
-
-#: Windows 文件名禁止字符（另加所有 < 0x20 的控制字符）
-_FORBIDDEN_CHARS = frozenset('<>:"|?*')
 
 #: 动作破坏性等级（no-upgrade 对账用）：数值越大破坏性越强
 ACTION_SKIP = "skip"
@@ -187,47 +170,12 @@ class RestoreResult:
 # ---------------------------------------------------------------------------
 
 
-def _utf16_units(s: str) -> int:
-    """按 Windows 底层长度语义计 UTF-16 code unit 数（非 BMP 字符算 2）。"""
-    return len(s.encode("utf-16-le")) // 2
-
-
 def validate_canonical_rel_path(rel: str, *, what: str = "路径") -> PurePosixPath:
-    """校验 snapshot-relative 字面路径的 canonical 合法性，非法抛 RestoreError。
-
-    规则：POSIX 风格相对路径；无空段/``.``/``..`` 段；非绝对路径；无控制
-    字符与 Windows 禁止字符；无尾随点/空格；无保留设备名（含带扩展名形式）；
-    每个 component 不超过 255 个 UTF-16 code unit。
-    """
-    if not rel:
-        raise RestoreError(f"{what}不能为空")
-    if "\\" in rel:
-        # canonical snapshot-relative POSIX path：反斜杠属异常，fail closed
-        # （用户 --path 输入的 Windows 反斜杠由 normalize_selector 先行归一，
-        #  不经过本拒绝路径）
-        raise RestoreError(f"{what}不允许反斜杠（须为 POSIX 风格相对路径）: {rel!r}")
-    if rel.startswith("/"):
-        raise RestoreError(f"{what}必须是相对路径: {rel!r}")
-    if len(rel) > 1 and rel[1] == ":":
-        raise RestoreError(f"{what}不允许盘符绝对路径: {rel!r}")
-    parts = rel.split("/")
-    for part in parts:
-        if not part:
-            raise RestoreError(f"{what}含空路径段: {rel!r}")
-        if part in (".", ".."):
-            raise RestoreError(f"{what}不允许 . / .. 路径段: {rel!r}")
-        if part != part.rstrip(" ."):
-            raise RestoreError(f"{what}的路径段不允许尾随点或空格: {rel!r}")
-        if any(ord(c) < 0x20 or c in _FORBIDDEN_CHARS for c in part):
-            raise RestoreError(f"{what}含 Windows 禁止字符: {rel!r}")
-        stem = part.split(".", 1)[0].upper()
-        if stem in _RESERVED_DEVICE_NAMES:
-            raise RestoreError(f"{what}含保留设备名: {rel!r}")
-        if _utf16_units(part) > MAX_COMPONENT_UTF16:
-            raise RestoreError(
-                f"{what}的路径段超过 {MAX_COMPONENT_UTF16} 个 UTF-16 code unit: {rel!r}"
-            )
-    return PurePosixPath(rel)
+    """Restore outward-error wrapper around the shared lexical path policy."""
+    try:
+        return validate_canonical_entry_path(rel, what=what)
+    except ManifestPathError as exc:
+        raise RestoreError(str(exc)) from exc
 
 
 def normalize_selector(raw: str) -> str:
@@ -254,26 +202,19 @@ def _validate_snapshot_id(snapshot_id: str) -> None:
 
 
 def _validate_manifest_paths(manifest: Manifest) -> None:
-    """全量校验 manifest 条目路径（selector 过滤之前调用）。
+    """Restore outward-error wrapper; shared manifest code owns the rules."""
+    try:
+        validate_manifest_entry_paths(manifest.entries)
+    except ManifestPathError as exc:
+        raise RestoreError(str(exc)) from exc
 
-    任一非法路径（含未被 selector 选中的条目）→ RestoreError 整体拒绝；
-    重复路径同样拒绝（manifest 层不检测重复，防字典折叠/同路径重复执行）。
-    """
-    seen_exact: set[str] = set()
-    seen_folded: set[str] = set()
-    for e in manifest.entries:
-        validate_canonical_rel_path(e.path, what="manifest 条目路径")
-        if e.path in seen_exact:
-            raise RestoreError(f"manifest 含重复条目路径（拒绝重复执行/字典折叠）: {e.path!r}")
-        # Windows case-insensitive collision 防护（fail closed）：casefold 后
-        # 冲突即拒绝——不模拟 NTFS 内核级名字规则，保守而可解释
-        folded = e.path.casefold()
-        if folded in seen_folded:
-            raise RestoreError(
-                f"manifest 含 Windows 大小写冲突条目路径（fail closed，拒绝执行）: {e.path!r}"
-            )
-        seen_exact.add(e.path)
-        seen_folded.add(folded)
+
+def _load_restore_manifest(repo: RepoInfo, snapshot_id: str) -> Manifest:
+    """Load a complete manifest while preserving Restore's path-error contract."""
+    try:
+        return load_manifest(repo, snapshot_id, require_complete=True)
+    except ManifestPathError as exc:
+        raise RestoreError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +496,7 @@ def plan_restore(
     destination = Path(os.path.abspath(str(destination)))
     selectors = tuple(normalize_selector(p) for p in paths)
 
-    manifest = load_manifest(repo, snapshot_id, require_complete=True)
+    manifest = _load_restore_manifest(repo, snapshot_id)
     _validate_manifest_paths(manifest)
     snap_dir = repo.path / "snapshots" / snapshot_id
     if not snap_dir.is_dir():
@@ -610,7 +551,7 @@ def apply_restore(repo: RepoInfo, plan: RestorePlan) -> RestoreResult:
             raise RestoreError(f"plan 含非法动作: {e.action!r}")
 
     # 1. 事实源复核：manifest 状态 + 全量路径校验 + 指纹
-    manifest = load_manifest(repo, plan.snapshot_id, require_complete=True)
+    manifest = _load_restore_manifest(repo, plan.snapshot_id)
     _validate_manifest_paths(manifest)
     if _manifest_digest(repo, plan.snapshot_id) != plan.manifest_digest:
         raise RestoreError(
