@@ -6,7 +6,7 @@
 ## 0. 总则
 
 - 入口：`mirrorly <command> [options]`（`python -m mirrorly` 等价）。
-- 全局选项：`--config <path>`（配置目录，默认 `./.mirrorly`）、`--task <name>`（指定任务；现有配置恰有一个任务时可省略，多个时必填）、`--quiet / --verbose`、`--no-color`、`--json`；可放在子命令前或后。`mirrorly --version` 显示 package version（当前 `0.0.1`，不等于历史 tag 名）。
+- 全局选项：`--config <path>`（配置目录，默认 `./.mirrorly`）、`--task <name>`（指定任务；现有配置恰有一个任务时可省略，多个时必填）、`--quiet / --verbose`、`--no-color`、`--json`；可放在子命令前或后。`mirrorly --version` 显示当前 source/CLI version `0.1.0.dev0`（首次正式编号 CLI `0.1.0` 之前的 development state，不等于历史 MVP tag 名）。
 - Restore 覆盖须显式确认或 `--yes`；重复 init 已有仓库始终拒绝，`--yes` 不授权重建它。
 - 输出约定：人读输出到 stdout；`--json` 时输出机器可读 JSON（为 GUI 预留）；错误信息到 stderr。
 - `--json` 的人读提示走 stderr，stdout 保持单一 JSON 文档；若需要确认却未给 `--yes`，拒绝交互并返回 6。

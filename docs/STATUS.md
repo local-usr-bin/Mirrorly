@@ -1,19 +1,20 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-19（公开前文档同步；对应生产基线 `1fb0cdedd19591be663051e85e1abf677673539d`）
+> 最后更新：2026-09-19（公开前 package metadata 同步；基于已提交基线 `d92c9cb0ee0c057777bc8a2f2caed20cc7be39f8`）
 
 ## 当前阶段
 
-**Pre-Public Final Gate：主要生产代码加固和 living documentation 同步已完成；下一步为 package metadata 同步与最终公开前审计。** `main` 与 `origin/main` 在本次同步开始时均为 `1fb0cde`（Harden report publication on long paths）。当前为 CLI 源码阶段，GUI、内置调度、云备份、双向同步均未实现；不把历史 MVP 验收或本次文档同步视为所有后续审计均通过。
+**Pre-Public Final Gate：主要生产代码加固、living documentation 与 package metadata 同步已完成；最终公开前审计尚待完成，Final Gate 尚未通过。** `main` 与 `origin/main` 在本次 metadata 同步开始时均为 `d92c9cb`（Sync pre-public documentation）。当前为 CLI 源码阶段，GUI、内置调度、云备份、双向同步均未实现；本次同步不创建 release/tag，不改变 GitHub visibility。
 
 ### 当前验证记录与历史验收分开记录
 
 | 范围 | 已完成验证结果 | 说明 |
 | --- | --- | --- |
-| 当前生产基线 `1fb0cde` | **569 passed / 4 skipped** | 本次同步记录已批准的 regression 结果，未重跑测试 |
+| 本次 metadata 同步工作树（source `0.1.0.dev0`） | **570 passed / 4 skipped** | 本次完整回归；新增 1 个源码版本一致性测试 |
+| 上一生产基线 `1fb0cde` | **569 passed / 4 skipped** | 保留此前已批准的 regression 记录 |
 | 当前 Windows E2E | **13 passed** | `tests/test_e2e.py` |
-| 当前静态/格式检查 | Ruff check PASS；format check：44 files already formatted | 已完成记录，不是本轮重新执行 |
+| 当前静态/格式检查 | Ruff check PASS；format check：44 files already formatted | 本次 metadata 同步重新执行；`git diff --check` 通过 |
 | 冻结 MVP acceptance | **452 passed / 4 skipped / 0 failed**；T-10 E2E **13 passed** | 不以当前数字覆盖历史验收 |
 
 当前 4 个 skip 为 Windows 文件 symlink 创建权限 / Developer Mode 环境限制，不能描述为文件 reparse 验证 PASS。历史目录 junction 的通过记录与文件 symlink 的 skip 分开保留。冻结 tag `v0.1.0-mvp` 指向提交 `999ceb88c7d4c73c3062eb1927fd1c513d9e0234`（验收文档提交）；历史验收所记录的生产 HEAD 仍为 `60ed124`。
@@ -138,11 +139,11 @@
 
 - Living/current：`README.md`、本文件、`CLI_SPEC.md`；`DEVELOPMENT_LOG.md` 只追加新记录，原有日期条目保留。
 - 历史设计/验收：`PRD.md` v0.2、`ARCHITECTURE.md` ADR-001~013、`DESIGN_DECISIONS.md` v1.0、`TECH_RISKS.md` v1.0、`MVP_TASKS.md`、`MVP_ACCEPTANCE.md`。它们记载当时需求、设计与验收，不将每一项设想自动视为当前已实现保证；当前格式、锁、排序和校验以本文件及源码为准。`UI_DIRECTION.md` 是后续 GUI 设计约束，不代表 GUI 已实现。
-- Developer instructions：repo-root `AGENTS.md`。另外 `LICENSE` 为 MIT；`pyproject.toml` / `environment.yml` 是安装与环境配置，不在本轮改写。
+- Developer instructions：repo-root `AGENTS.md`。另外 `LICENSE` 为 MIT；`pyproject.toml` / `environment.yml` 是安装与环境配置，本次仅同步 `pyproject.toml` 的版本、描述与成熟度，`environment.yml` 保持不变。
 - 远程 push 与历史 MVP tag 已存在，不再列为待创建。是否发布新的 GitHub release 是独立任务；本次不创建 release 或移动 tag。
 - 待独立处理/评估：CP-KILL-A1（early incomplete 已落盘但 tree 尚未建立时，接受 resume 会拒绝目录缺失）；post-commit discard/retention 失败的状态说明和残留恢复；MVP_ACCEPTANCE §11 的卷兼容/诊断 hardening。Report long-path P2 已提交，不继续列为开放修复。
 - 上一 Control Metadata / Path Containment 综合审计仍是 **AUDIT INCOMPLETE / SAFETY-BLOCKED**；未完成项保持 **NOT TESTED — blocked by Codex cyber safety control**。Shared lexical boundary 的实现与回归不等于 duplicate JSON keys、numeric/parser ambiguity、filename/payload identity、结构冲突及 alias/reparse 等完整动态 matrix 已通过。
-- Package metadata 仍为 `0.0.1`、Pre-Alpha、`Private :: Do Not Upload`，description 仍含 synchronization；`src/mirrorly/__init__.py` 的包 docstring 也仍写初始化/占位状态。发布元数据及包说明需独立同步，本轮不修改 packaging 或 production 文件。GUI、调度及其他产品扩展另起阶段。
+- 当前 source/package version 为 **`0.1.0.dev0`**，Development Status 为 **Alpha**：表示首次正式编号 CLI `0.1.0` 之前的 development state，不宣称 final release。`pyproject.toml` 与 `mirrorly.__version__` 保持手工双源，由 smoke regression 检查一致；description 和包 docstring 已同步为 Windows 单向文件夹备份定位。历史 `v0.1.0-mvp` 只是 Git MVP milestone，当时 package metadata 为 `0.0.1`，不是已发布的 Python package `0.1.0`。**`Private :: Do Not Upload` 有意保留**，用于阻止 PyPI 上传，表示当前不发布 PyPI，不要求 GitHub repository 必须 Private。是否进入 `0.1.0` final / `v0.1.0` release 在 Final Gate 后另行决定；GUI 未来阶段不在此绑定版本。
 
 ## 风险与注意事项
 

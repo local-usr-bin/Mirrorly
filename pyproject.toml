@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mirrorly"
-version = "0.0.1"
-description = "Mirrorly - Personal backup and synchronization tool"
+version = "0.1.0.dev0"
+description = "Mirrorly - A simple and safe folder mirror backup assistant for Windows"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -14,7 +14,7 @@ authors = [
     { name = "Mirrorly Developers" },
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3.12",
     "Private :: Do Not Upload",

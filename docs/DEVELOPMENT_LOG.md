@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-19 Pre-Public package metadata 同步（基线 d92c9cb）
+
+- 本次开始时 `HEAD = main = origin/main = d92c9cb0ee0c057777bc8a2f2caed20cc7be39f8`，working tree/index clean。仅同步 metadata、包说明、smoke regression 和相关 living docs，不改业务逻辑或 repo/manifest 格式。
+- 按已确认决定，`pyproject.toml` 与 `mirrorly.__version__` 同步为 **`0.1.0.dev0`**，Development Status 改为 **Alpha**；description 与包 docstring 改为当前 Windows 单向文件夹备份 CLI 定位，GUI 尚未实现。其余依赖、license、entry point 与构建配置不变。
+- `0.1.0.dev0` 表示首次正式编号 CLI `0.1.0` 之前的 development state；历史 `v0.1.0-mvp` 是 Git milestone，当时 package metadata 实际为 `0.0.1`，不代表曾发布 Python package `0.1.0`。冻结 tag 和历史验收记录不改写，GUI 后续版本不在此决定。
+- **`Private :: Do Not Upload` 原样保留**：当前不发布 PyPI，此 classifier 不要求 GitHub repository 必须 Private。Final Pre-Public Gate 尚未通过；本次不创建 release/tag、不改变仓库 visibility、不安装或构建/上传 package。
+- `tests/test_smoke.py` 保留精确 runtime version 检查，新增 stdlib `tomllib` 读取源码 `pyproject.toml` 的一致性断言；不依赖 editable-install distribution metadata，不引入动态版本机制。
+- 实际验证：targeted **5 passed**；full regression **570 passed / 4 skipped**；独立 Windows E2E **13 passed**；Ruff check PASS、format check **44 files already formatted**、`git diff --check` 通过。4 skip 均为现有 Windows 文件 symlink 创建权限限制；pytest 使用 system Temp basetemp，禁用不可写的可选 cache，未修改权限。
+- `python -B -m mirrorly --version` 与现有 `mirrorly.exe --version` 均为 `mirrorly 0.1.0.dev0`；tomllib/setuptools metadata validation、requirements/version parsing、package discovery 通过。现有 installed distribution metadata 仍为 `0.0.1`，如实记录，未执行 reinstall。
+
+---
+
 ## 2026-09-19 Pre-Public 文档同步（生产基线 1fb0cde）
 
 - 本次开始时 `HEAD = main = origin/main = 1fb0cdedd19591be663051e85e1abf677673539d`，working tree/index clean。此条只同步当前源码、测试与 Git 历史，不修改生产代码/tests，不重新运行回归。
