@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-09-19 Pre-Public 文档同步（生产基线 1fb0cde）
+
+- 本次开始时 `HEAD = main = origin/main = 1fb0cdedd19591be663051e85e1abf677673539d`，working tree/index clean。此条只同步当前源码、测试与 Git 历史，不修改生产代码/tests，不重新运行回归。
+- README 从初始化/同步规划改为已实现的 Windows 单向快照备份 CLI，补安装、backup/verify/restore 示例、NTFS/hardlink 边界、legacy 升级、校验覆盖与 MIT 入口。
+- STATUS 增加当前格式/锁/sequence/ordering/identity/校验/publication/path-validation/report 状态及源码、测试入口；原 T-01~T-10 明确归为历史记录。CLI_SPEC 同步已批准的实际命令行为与错误语义；冻结 MVP v1.0 仍可从历史 tag 查阅。
+- 已提交加固核对：`2977497` temp ownership、`f44795c` resumed hash coverage、`196ce9f` AGENTS、`3313566` False→True hash guard、`b22e87b` staging metadata、`438d92f` repo writer lock、`c5259b3` UUID identity、`0b224c5` durable sequence foundation、`6ae831a` authoritative ordering consumer migration、`aef6648` shared lexical manifest boundary、`1fb0cde` report long-path 与 post-commit error semantics。
+- 当前实现为 repo v2 + mandatory lifecycle state、新写 manifest v2 + `lifecycle_seq`；v1 只兼容读取，不倒填 sequence。每次 fresh/resume physical attempt 都 reserve 新 sequence；旧 timestamp slot / prefix-local ordinal 已不是当前 allocator。Safety ordering 使用 sequence，日历分组仍使用 wall clock。
+- 已完成验证记录（本次未重跑）：当前基线 **569 passed / 4 skipped**；Windows E2E **13 passed**；Ruff check PASS，format check **44 files already formatted**。4 skip 是 Windows file-symlink privilege / Developer Mode 限制，不记为 PASS。
+- 历史材料不改写：**MVP ACCEPTED — PASS WITH ENVIRONMENTAL SKIPS**；MVP **452 passed / 4 skipped / 0 failed**，T-10 E2E **13 passed**。Tag `v0.1.0-mvp` 仍指向 `999ceb88c7d4c73c3062eb1927fd1c513d9e0234`；验收时生产 HEAD `60ed124` 与文档提交/tag target 是不同概念。
+- 尚未完成的 metadata/path 综合动态审计不因 shared lexical validator 上线而变成 PASS；未知项和环境限制仍如实保留。CP-KILL-A1、post-commit residue/retention diagnostics、package metadata 等后续事项不在本次实现范围；不新增 GUI 或其他产品功能。
+
+---
+
 ## 2026-09-13（十八）MVP 最终验收盖章
 
 - 产品负责人最终裁定：**MVP ACCEPTED — PASS WITH ENVIRONMENTAL SKIPS**。

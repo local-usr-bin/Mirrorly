@@ -1,9 +1,84 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-13（MVP 最终验收盖章：PASS WITH ENVIRONMENTAL SKIPS，final accepted HEAD = 60ed124）
+> 最后更新：2026-09-19（公开前文档同步；对应生产基线 `1fb0cdedd19591be663051e85e1abf677673539d`）
 
 ## 当前阶段
+
+**Pre-Public Final Gate：主要生产代码加固和 living documentation 同步已完成；下一步为 package metadata 同步与最终公开前审计。** `main` 与 `origin/main` 在本次同步开始时均为 `1fb0cde`（Harden report publication on long paths）。当前为 CLI 源码阶段，GUI、内置调度、云备份、双向同步均未实现；不把历史 MVP 验收或本次文档同步视为所有后续审计均通过。
+
+### 当前验证记录与历史验收分开记录
+
+| 范围 | 已完成验证结果 | 说明 |
+| --- | --- | --- |
+| 当前生产基线 `1fb0cde` | **569 passed / 4 skipped** | 本次同步记录已批准的 regression 结果，未重跑测试 |
+| 当前 Windows E2E | **13 passed** | `tests/test_e2e.py` |
+| 当前静态/格式检查 | Ruff check PASS；format check：44 files already formatted | 已完成记录，不是本轮重新执行 |
+| 冻结 MVP acceptance | **452 passed / 4 skipped / 0 failed**；T-10 E2E **13 passed** | 不以当前数字覆盖历史验收 |
+
+当前 4 个 skip 为 Windows 文件 symlink 创建权限 / Developer Mode 环境限制，不能描述为文件 reparse 验证 PASS。历史目录 junction 的通过记录与文件 symlink 的 skip 分开保留。冻结 tag `v0.1.0-mvp` 指向提交 `999ceb88c7d4c73c3062eb1927fd1c513d9e0234`（验收文档提交）；历史验收所记录的生产 HEAD 仍为 `60ed124`。
+
+## 当前实现与边界（以源码和 committed tests 为准）
+
+### 仓库写入、格式与身份
+
+- 正式 backup 按 **task lock → repo writer lock** 顺序获取跨进程锁；仓库写锁为 `locks/repo-writer/active.lock`，覆盖迁移、基线选择、扫描/写入、complete publication、续传善后、retention 和 report。不同 task 指向同一 repo 也互斥；不同 repo 独立。退出只释放自己创建的 lockfile，`locks/repo-writer/` 命名空间保留。锁存在即 fail closed（exit 6），无 PID 猜测、自动 stale 删除或超时夺锁。Dry-run 不取锁、不迁移、不 reserve sequence；verify/restore/list 不进入 backup writer 临界区。
+- 新仓库 `repo.json` 为 **format v2**，必须有 `lifecycle.json`：`format_version=1`、匹配的 `repo_id`、`next_sequence`。每个 fresh/resume physical attempt 在锁内 durable reserve 一个新的 uint64 sequence；先持久发布 `next_sequence=N+1` 再向调用方返回 N。Gap 允许，retention/discard 不回退 high-water；状态缺失、损坏、与可见 artifacts 矛盾或耗尽时 fail closed，不自动修正。
+- Windows durable state/capability publication 使用同目录 temp、`flush()`、`os.fsync()`（Windows CRT `_commit()`）、`MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`。这项持久化协议属于 repo/lifecycle 控制状态，不意味着所有文件写入都具有相同协议。
+- 新 manifest 只写 **v2**，必需 `lifecycle_seq`；合法 v1 只保留读取兼容。ID 格式为 `YYYY-MM-DD_HHMMSS-s<20位sequence>-<32位小写UUIDv4 hex>`：本地时间便于阅读，完整 UUIDv4 提供 lifecycle identity，ID 中 sequence 是诊断冗余，必须与 manifest 一致。分配时检查正式/staging namespace，冲突重 mint UUID，不扫描旧 timestamp 空槽；legacy ID 不重命名。
+- v1 仓库在正式 backup 锁内升级：先写 initial state（next=0），再 durable 发布 repo v2；中断后 v1 + 有效 initial state 可继续升级，矛盾状态拒绝。现有 v1 manifests 不重写、不猜 sequence；只支持 repo v1 的旧程序会拒绝 v2。
+
+证据：[cli.py](../src/mirrorly/cli.py) `_TaskLock` / `_RepoWriterLock` / `cmd_backup`；[repo.py](../src/mirrorly/repo.py)、[lifecycle.py](../src/mirrorly/lifecycle.py)、[durable.py](../src/mirrorly/durable.py)；`tests/test_cli.py::TestBackupLockScope`、`tests/test_lifecycle.py`、`tests/test_repo.py`、`tests/test_snapshot.py::TestHelpers`。
+
+### Authoritative lifecycle ordering 与 legacy
+
+| Consumer | 当前规则 |
+| --- | --- |
+| latest complete / 默认 verify、restore | 有 v2 complete 时取最大 `lifecycle_seq`；无 v2 时唯一 legacy complete 可默认选择，多个 legacy complete 则要求 `--snapshot`（verify 也可用 `--all`） |
+| 自动 backup baseline / dry-run 预览 | 只取最新 sequenced complete；无此 complete 时用空基线，首次 sequenced backup 全量物化当前源，不从 legacy unchanged 文件硬链接或结转哈希 |
+| 自动 incomplete selection | 只考虑 sequence 大于最新 sequenced complete 的 v2 incomplete，取最大 sequence；无 sequenced complete 时取最大 v2 incomplete；legacy/stale incomplete 保留但不自动选 |
+| 接受 resume | 旧 incomplete 是只读基线；新 physical attempt 使用新 ID、新 sequence。拒绝 resume 则用 latest sequenced complete 或空基线，旧 incomplete 保留 |
+| retention `keep_last` | 保留 sequence 最大的 N 个 v2 complete；legacy complete 全部自动保护，实际数量可超过 N |
+| retention `keep_monthly` | 从当前 UTC 月回溯配置月份数；`created_at` 决定所属年月，同月代表取最大 sequence 的 v2 complete；与 keep-last 取并集 |
+
+重复 v2 sequence 不作时间/ID tie-break，直接拒绝。`created_at` 仍用于显示、审计及日历分组，snapshot prefix 是本地 wall clock；二者都不作为生命周期先后依据。时钟错误造成的月份标签偏差不在该修复范围。`list` 仍按 manifest 文件名列出，展示顺序不等于 authoritative latest。
+
+证据：[manifest.py](../src/mirrorly/manifest.py) `latest_sequenced_complete` / `select_default_complete` / `newest_eligible_incomplete`；[retention.py](../src/mirrorly/retention.py) `build_retention_plan`；`tests/test_cli.py::TestAuthoritativeLifecycleOrdering`、`tests/test_manifest.py`、`tests/test_retention.py`。
+
+### 内容、校验与 publication
+
+- `[verify] on_write=true` 时，正常无哈希 incomplete 中准备复用的文件须与当前源作内容等价认证；不可信/认证未完成的副本重新物化。False→True 时，无可信 sha 的基线文件也重新复制并校验，不能仅给旧副本补算哈希。True-mode complete publication 前检查普通文件哈希覆盖；复用的可信 sha 从基线结转，copied 文件使用写入校验结果。
+- `on_write=false` 不承诺完整 hash coverage，新复制文件可为 `sha=None`。Full verify 检查快照与 manifest 的存在性/类型/大小及已有 sha；无 sha 条目跳过哈希并计入 `unhashed_entries`，extras 只报告，均不单独令 `ok` 失败。Quick 不重算哈希。Full verify 不证明快照等于历史源，也不能替代 source-side change detection；默认相同 size/mtime 仍信任元数据，`backup --full-hash` 可强制对与基线同大小的源文件作哈希复核。
+- 普通文件复制先写 staging temp、flush/fsync、源 size/mtime 复测，再在 temp 设置所需 mtime，最后 `os.replace`。启用写入校验时，文件 publication 后比对源/目标哈希，失败仅重试一次；整体快照仍为 incomplete，直到 complete manifest 原子发布。Recovered mtime 不符时清除信任并重物化，不对可能共享历史 inode 的 recovered 文件原地 `utime`。
+- **Complete manifest 的原子发布仍是 backup safety commit point**，随后才做 resumed incomplete discard、retention 和 report。它不等于所有后续操作都成功；普通 complete 内容不被改写，但保留策略可以删除到期快照。
+- Temp cleanup 必须依据 manifest 证明 ownership，`.mrtmp` 后缀本身不是删除授权；complete 快照不进入 temp cleanup。Retention 先移除 manifest 再删除 tree；tree 删除失败可留下可识别的孤儿目录，不把残缺 tree 留作可信 complete。
+
+证据：[recovery.py](../src/mirrorly/recovery.py)、[snapshot.py](../src/mirrorly/snapshot.py)、[verify.py](../src/mirrorly/verify.py)、`cli.cmd_backup`；`TestB12ResumeHashCoverage` / `TestVerifyOnWriteHashCoverageTransition`（test_cli）、`TestSafetyInvariants`（test_snapshot）、`tests/test_recovery.py`、`tests/test_verify.py`。
+
+### Shared manifest path boundary 与报告
+
+- `load_manifest()`、`write_manifest()`、`list_manifests()` 共用 canonical lexical entry-path validation：拒绝非法/non-canonical 路径、重复与 Windows 大小写冲突；不自动修复输入。规则适用于合法 v1/v2 读及 v2 写，保护 Verify、Recovery、baseline、retention 等正常 loader consumers。Restore 复用规则并转译路径错误为 `RestoreError`，保留独立的 filesystem/reparse/destination 与 commit-time 检查。Lexical validation 不等于完整 filesystem alias/reparse 安全证明。
+- Backup/verify report 仍为必需命令产物，位于 `logs/`；logical filename/schema 不变。`_write_report` 的 mkdir、撞名查询、exclusive sibling temp 写入、atomic replace 和 owned-temp 失败清理统一使用 `scan.to_long_path()`。清理仅尝试删除本次拥有的 temp，失败不覆盖原 publication error；不保证所有控制面路径任意长度均可用。
+- Backup 已提交后 report I/O publication 失败仍 **exit 1**，错误明确给出 snapshot ID、「已成功提交」和「必需报告发布失败」。Verify report 失败同样 exit 1，但说明校验已完成及结果，不声称提交快照。报告原子可见性不等于 lifecycle state 的 durable reservation 协议。
+
+证据：`manifest.validate_manifest_entry_paths`、`restore._load_restore_manifest`、`cli._write_report` / `cmd_backup` / `cmd_verify`；`tests/test_manifest.py`、各 consumer path-boundary tests、`tests/test_cli.py::TestReportPublication` / `TestPaths::test_long_repository_backup_and_verify_reports`。
+
+## 已提交的公开前加固
+
+| Commit | 已实现范围 |
+| --- | --- |
+| `2977497` | B1-1：temp residue ownership 与 complete 只读保护 |
+| `f44795c` | B1-2：resumed snapshot hash certification / coverage |
+| `196ce9f` | repository agent instructions |
+| `3313566` | False→True write-verification hash coverage |
+| `b22e87b` | staging mtime 与 recovered metadata 安全 |
+| `438d92f` | CONCURRENCY-1：同 repo 跨 task writer serialization |
+| `c5259b3` | SNAPSHOT-ID-REUSE-1：UUID lifecycle identity；当时的局部 ordinal 已由后续 durable sequence 取代 |
+| `0b224c5` + `6ae831a` | WALL-CLOCK-ORDER-1：durable sequence foundation + 全部安全 ordering consumer 迁移 |
+| `aef6648` | shared manifest canonical entry-path boundary（含 lone-surrogate error contract） |
+| `1fb0cde` | report long-path transaction / owned-temp cleanup / post-commit error semantics |
+
+## MVP 历史验收（冻结记录）
 
 **MVP 开发与验收全部完成（10/10），已最终验收通过** —— T-01~T-09 已最终验收；T-10 端到端验收完成且 M10「盘符漂移」blocker 已修复（卷锚自动重定位：`[target]` 三键 all-or-none 锚 + `cli._resolve_repo` 七态 fail-closed 状态机 + `volume.py` Windows 官方 GUID API；真实 GUID 链路 E2E 验证「配置 path 失联不改配置自动定位原卷原仓库」）。完整 pytest 全套 **452 passed / 4 skipped / 0 failed**（4 skip 均为文件级 symlink 权限限制——当前 Windows 环境无 SeCreateSymbolicLinkPrivilege / Developer Mode，目录级 junction 对应防护已真实 Windows 通过，已被产品负责人裁定允许为 MVP environmental skip）；E2E **13 passed / 0 failed**；ruff 全绿。验收报告 `docs/MVP_ACCEPTANCE.md`。
 
@@ -15,7 +90,7 @@
 - [docs/TECH_RISKS.md](TECH_RISKS.md)：技术风险分析 v1.0（TR-1~TR-7，高风险集中于中断恢复与外置盘）
 - [docs/ARCHITECTURE.md](ARCHITECTURE.md)：架构决策记录（ADR-001~013）
 - [docs/DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)：manifest/配置/哈希三项选型分析 v1.0
-- [docs/CLI_SPEC.md](CLI_SPEC.md)：CLI 契约 v1.0（五命令 + 退出码规范）
+- [docs/CLI_SPEC.md](CLI_SPEC.md)：当前 CLI 契约（五命令 + 退出码；MVP v1.0 历史版本保留于 tag）
 - [docs/MVP_TASKS.md](MVP_TASKS.md)：MVP 开发任务拆分 v1.0（T-01~T-10，含验收标准与测试要求）
 - [docs/UI_DIRECTION.md](UI_DIRECTION.md)：未来 GUI 设计约束 v1.0（clean/lightweight/trustworthy，mint green）
 
@@ -30,7 +105,9 @@
 | Python（系统/工具链） | 3.13.x | 宿主沙箱自带，不用于项目开发 |
 | 编辑器格式约定 | `.editorconfig`（UTF-8、LF、Python 4 空格） | |
 
-## 已完成
+## MVP 已完成记录（截至 2026-09-13，保留当时实现与验证数字）
+
+以下 T-01~T-10 是历史记录；其中 timestamp 排序、旧 ID 分配、仅 task lock 等描述已被上方当前实现取代，不作为现行行为说明。
 
 - [x] 确认工作目录与开发环境（Git / Conda / Python）
 - [x] 创建独立 Conda 环境 `mirrorly`（Python 3.12，本机默认环境位置）
@@ -57,14 +134,18 @@
 - [x] **T-09 CLI 集成与报告**：mirrorly.cli（argparse 五命令 init/backup/verify/restore/list，纯编排不重复业务逻辑；退出码严格按 CLI_SPEC §6[0/1/2/3/4/5/6/130 全部有触发路径]；破坏性操作确认与 --yes[restore 覆盖、init warn 降级]，--in-place 必须显式 --yes，多任务未指定 --task→用法错误 2；任务锁 O_EXCL[占用→6、dry-run 不取锁]；backup 编排[配置解析→卷校验→incomplete 提示续传→扫描→变更检测→--full-hash 基线 mtime 置 -1 强制全量复核→锁内 incomplete manifest→write_snapshot→sha 结转合并→complete 原子提交→续传善后→retention]；backup/verify 报告 JSON 落盘 logs/[tmp+原子改名]+终端摘要；--json 机器可读输出；全局选项 parents+SUPPRESS 支持子命令后书写）；__main__ 委托 cli.main（entry point 不变，mirrorly.exe 与 python -m mirrorly 真实验证）；OQ-1 澄清：CLI_SPEC `--path <pattern>`→`--path <path>` 注明字面路径非 glob；集成暴露小修：config.py dump_task_config TOML 反斜杠转义（T-01 潜伏 bug）、repo.py 新增 RepoFormatError 子类（退出码 5 精确映射）；**integration hardening follow-up**：①snapshot id collision 修复——`_new_snapshot_id` 锁内先选定空闲 id（冲突追加 -01/-02 canonical 后缀、100 候选占满安全失败）再落盘 incomplete manifest，任何撞车下既有快照目录/manifest 字节/complete 状态零触碰；②任务锁前移至确定 repo/task 后（覆盖 recovery/扫描/检测/写入/善后/retention，dry-run 有意例外）；③--json stdout 严格单一 JSON 文档——人类文本走 stderr、交互场景无 --yes 直接 exit 6 且 stdout 为空、dry-run --json 结构化输出；④init 预检前移（task config 已存在/source 与 prospective repo 互相包含检查均在 init_repo 前，零写入拒绝）+ `validate_task_name` 防锁路径逃逸（load_task_config 与 CLI --task/init 强制执行）；⑤verify --snapshot/--all 互斥（argparse exit 2）、报告文件名微秒+撞名后缀不再同秒覆盖；**list --verbose「增量大小」经裁定 MVP 不实现**（冻结数据模型无权威口径，CLI_SPEC 已澄清为文件数/目录数/总大小/状态，列为 MVP 后候选指标——未来实现须在 backup 创建时持久化权威值）；**最终收尾**：write_task_config 写入边界自身校验 task name（library API 不依赖调用者提前验证，非法 name 零写入拒绝）、init preflight 回归补强（已有 task config 时零仓库写入逐字节固化）；全套 **383 项测试通过 / 8 项沙箱跳过 / 0 失败**（safe-delete 配额刷新后完整回归一次通过，上轮 20 项护栏受阻用例全部转绿），CLI 专项 119 项通过，ruff 通过；**源码验收 blocker 修复**：`_path_within` 字符串 startswith 在 Windows 卷根上前缀失配（`C:\` + os.sep），`init --source C:\` 可漏过「repo 位于源内」保护——改为 realpath+normcase 后 commonpath 判断（跨盘 ValueError→False，UNC 兼容），新增卷根/跨盘/UNC 纯单元与盘根 source 零写入共 7 项测试；最终完整回归 **390 项测试通过 / 8 项沙箱跳过 / 0 失败**——T-09 正式最终验收
 - [x] **T-10 端到端验收 + M10 blocker 修复**：`tests/test_e2e.py`（13 用例，真实 CLI 子进程 + 真实 NTFS：主流程 A–F[init/backup#1/verify/变更/dry-run 零写入/backup#2/list]、restore[整快照字节级/--path 文件与子树/never/always]、损坏检测 exit 4、TR-5 真实 kill 续传、M10 身份[错误 serial exit 5 零写入 + **真实 GUID 链路盘符漂移自动重定位** + GUID 未挂载零写入 + 仓库缺失不自动 init]、retention 多快照清理后 verify 全过）；`scripts/t10_perf_baseline.py` 性能基线两 workload（9.6 GB 混合/4 GB 大文件；unchanged 二次备份 0 字节写入、硬链接复用 10,006 文件、空间仅 +0.01 GB）；**M10 修复**：`src/mirrorly/volume.py`（GetVolumePathNameW / GetVolumeNameForVolumeMountPointW / GetVolumePathNamesForVolumeNameW，FindFirstVolumeW 仅诊断）、repo.json `volume.guid` 增量可选（format_version 不变双向兼容）、TaskConfig `[target] volume_guid/repo_id/repo_dir` all-or-none 锚（三重校验 + join 后 containment 复验）、`cli._resolve_repo` 七态 fail-closed 状态机（GUID 主锚 + repo_id/serial 确认，无 serial 降级 fallback，重定位不自动改写 config）；测试 +34（test_volume 7 / TestM10Resolver 11 / config 锚 16）；reparse 真机补验：4 个目录级 junction 用例通过、4 个文件级用例因无 symlink 特权（ERROR_PRIVILEGE_NOT_HELD）如实 skip；完整回归 **452 passed / 4 skipped / 0 failed**，ruff 全绿；`docs/MVP_ACCEPTANCE.md` 结论 **PASS WITH ENVIRONMENTAL SKIPS（M10 blocker 已修复并验证）**
 
-## 待办（建议优先级从高到低）
+## 文档分类与后续边界
 
-1. **配置远程 Git 仓库并 push**：工作区在外置盘，尽早推送降低断盘风险
-2. **创建 MVP release / tag**：基于 final accepted HEAD `60ed124` 打 MVP 版本标记
-3. **MVP 后 hardening / GUI 等另起阶段**：不与 MVP 混在一起（含 MVP_ACCEPTANCE §11 第 10/11 项 post-MVP compatibility/diagnostic hardening）
+- Living/current：`README.md`、本文件、`CLI_SPEC.md`；`DEVELOPMENT_LOG.md` 只追加新记录，原有日期条目保留。
+- 历史设计/验收：`PRD.md` v0.2、`ARCHITECTURE.md` ADR-001~013、`DESIGN_DECISIONS.md` v1.0、`TECH_RISKS.md` v1.0、`MVP_TASKS.md`、`MVP_ACCEPTANCE.md`。它们记载当时需求、设计与验收，不将每一项设想自动视为当前已实现保证；当前格式、锁、排序和校验以本文件及源码为准。`UI_DIRECTION.md` 是后续 GUI 设计约束，不代表 GUI 已实现。
+- Developer instructions：repo-root `AGENTS.md`。另外 `LICENSE` 为 MIT；`pyproject.toml` / `environment.yml` 是安装与环境配置，不在本轮改写。
+- 远程 push 与历史 MVP tag 已存在，不再列为待创建。是否发布新的 GitHub release 是独立任务；本次不创建 release 或移动 tag。
+- 待独立处理/评估：CP-KILL-A1（early incomplete 已落盘但 tree 尚未建立时，接受 resume 会拒绝目录缺失）；post-commit discard/retention 失败的状态说明和残留恢复；MVP_ACCEPTANCE §11 的卷兼容/诊断 hardening。Report long-path P2 已提交，不继续列为开放修复。
+- 上一 Control Metadata / Path Containment 综合审计仍是 **AUDIT INCOMPLETE / SAFETY-BLOCKED**；未完成项保持 **NOT TESTED — blocked by Codex cyber safety control**。Shared lexical boundary 的实现与回归不等于 duplicate JSON keys、numeric/parser ambiguity、filename/payload identity、结构冲突及 alias/reparse 等完整动态 matrix 已通过。
+- Package metadata 仍为 `0.0.1`、Pre-Alpha、`Private :: Do Not Upload`，description 仍含 synchronization；`src/mirrorly/__init__.py` 的包 docstring 也仍写初始化/占位状态。发布元数据及包说明需独立同步，本轮不修改 packaging 或 production 文件。GUI、调度及其他产品扩展另起阶段。
 
 ## 风险与注意事项
 
-- 工作区位于外置盘（`P:\`），注意断盘风险；建议尽早配置远程仓库并定期推送
+- 工作区位于外置盘（`P:\`），注意断盘风险；远程已配置，后续推送仍需明确授权
 - Git 仓库级身份已设为 GitHub 用户 `local-usr-bin` + noreply 邮箱（2026-09-13）；历史 commit 的占位身份保留不重写
 - Mirrorly 是备份工具，务必坚持「备份产物永不入库」的 .gitignore 约定
