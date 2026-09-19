@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-09-19 0.1.0 final release preparation（基线 554bde9）
+
+- 本次开始时 `HEAD = main = origin/main = 554bde9f760154268a9ea60b0a7c974119cdea92`，working tree/index clean。仅进行 release preparation，不新增功能或修改业务行为。
+- `pyproject.toml` 与 `mirrorly.__version__` 从 `0.1.0.dev0` 收口为 **`0.1.0`**；smoke regression 同步精确值并保留源码双版本一致性检查，不引入动态版本机制。
+- **Development Status :: 3 - Alpha** 与 **Private :: Do Not Upload** 原样保留；PyPI 发布仍禁用，其他 package metadata 不变。不安装或重新安装开发环境 package。
+- CLI_SPEC / STATUS 同步当前版本与待 review 的 release preparation 状态；README 无当前版本声明，无需修改。旧日志中的 `0.0.1` / `0.1.0.dev0` 和历史测试数字不改写。
+- 历史 `v0.1.0-mvp` 仍冻结于 `999ceb88c7d4c73c3062eb1927fd1c513d9e0234`，不是已发布的 Python package `0.1.0`。未来 `v0.1.0` 将与其并存；本次不创建 tag / GitHub Release、不发布 PyPI，正式 release 仍待独立批准。
+- GUI 尚未实现且未开始开发；本阶段不进入 `0.2`，GUI development 在 CLI `0.1.0` release 收口之后开始。
+- 实际验证：focused version / entry-point tests **5 passed**；full regression **570 passed / 4 skipped**；独立 Windows E2E **13 passed**；Ruff check PASS、format check **44 files already formatted**、`git diff --check` 通过。4 skip 仍为 Windows 文件 symlink 环境限制，不记为 PASS。
+- `python -B -m mirrorly --version` 与现有 `mirrorly.exe --version` 均输出 `mirrorly 0.1.0`，两种入口的 `--help` 正常。已安装 distribution metadata 仍为历史 `0.0.1`，不影响 editable source runtime；未执行 reinstall。
+
+---
+
 ## 2026-09-19 Public source transition（基线 c75e1ad）
 
 - Pre-Public safety hardening、living documentation 与 package metadata 同步已完成；**Final Pre-Public Gate：PASS；GitHub Public source readiness：PASS**。项目负责人已确认 repository 从 Private 切为 **Public**，本次仅记录转换，不操作 visibility。

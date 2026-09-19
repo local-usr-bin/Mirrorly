@@ -8,7 +8,7 @@ import mirrorly
 
 def test_package_importable() -> None:
     """镜像包应可导入并暴露版本号。"""
-    assert mirrorly.__version__ == "0.1.0.dev0"
+    assert mirrorly.__version__ == "0.1.0"
 
 
 def test_source_versions_match() -> None:
@@ -16,4 +16,4 @@ def test_source_versions_match() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     with pyproject.open("rb") as stream:
         project = tomllib.load(stream)["project"]
-    assert project["version"] == mirrorly.__version__ == "0.1.0.dev0"
+    assert project["version"] == mirrorly.__version__ == "0.1.0"
