@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-19 Public source transition（基线 c75e1ad）
+
+- Pre-Public safety hardening、living documentation 与 package metadata 同步已完成；**Final Pre-Public Gate：PASS；GitHub Public source readiness：PASS**。项目负责人已确认 repository 从 Private 切为 **Public**，本次仅记录转换，不操作 visibility。
+- 本次 bookkeeping 开始时 `HEAD = main = origin/main = c75e1adaf64afd43c6810536c442f1b05d0dece7`，working tree/index clean；不修改 production code、tests 或 package metadata。
+- 已完成的 committed-state regression：**570 passed / 4 environmental skips**；独立 Windows E2E：**13 passed**。4 skip 为 Windows 文件 symlink 创建权限 / Developer Mode 环境限制，不记为 PASS；本次 bookkeeping 不重跑 regression。
+- Public exposure / reachable history / secret audit **无 blocking finding**。项目负责人知情接受已披露的低敏感度本机路径/账户名历史痕迹；本条记录其 Final Gate 与 Public 转换确认，不将此前工具受限的 GitHub-side 检查改写为已执行 API 审计。
+- 历史 `v0.1.0-mvp` 保持冻结，仍指向 `999ceb88c7d4c73c3062eb1927fd1c513d9e0234`；MVP acceptance 与旧日志不改写。
+- 当前 source/package 为 **`0.1.0.dev0` / Alpha**，不是 production-ready 或 stable 声明；尚未声明 package `0.1.0` final、创建 `v0.1.0` tag / GitHub Release，未发布 PyPI。**`Private :: Do Not Upload` 有意保留**，仅表示当前不发布 PyPI，不限制 GitHub Public 源码。
+- 下一步进入 **`0.1.0` final release preparation**；GUI 尚未实现，GUI development 在 `0.1.0` release 收口之后开始。本次不创建 tag/release；0.1.0 final release preparation 将作为下一独立阶段进行。
+
+---
+
 ## 2026-09-19 Pre-Public package metadata 同步（基线 d92c9cb）
 
 - 本次开始时 `HEAD = main = origin/main = d92c9cb0ee0c057777bc8a2f2caed20cc7be39f8`，working tree/index clean。仅同步 metadata、包说明、smoke regression 和相关 living docs，不改业务逻辑或 repo/manifest 格式。

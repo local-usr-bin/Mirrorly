@@ -24,7 +24,7 @@ python -m pip install .
 python -m mirrorly --help
 ```
 
-也可使用安装生成的 `mirrorly` 命令。运行时依赖由 `pyproject.toml` 声明；开发安装使用 `python -m pip install -e ".[dev]"`。当前仍是公开前源码阶段，不以 PyPI 发布包作为安装前提。
+也可使用安装生成的 `mirrorly` 命令。运行时依赖由 `pyproject.toml` 声明；开发安装使用 `python -m pip install -e ".[dev]"`。当前已公开源码，尚未发布 PyPI package。
 
 以下路径为示例，请换成自己的源、备份盘和空恢复目录；源与备份仓库不得互相包含：
 
