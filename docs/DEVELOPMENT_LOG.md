@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-19 Mirrorly v0.1.0 正式发布（post-release bookkeeping）
+
+- 项目负责人确认 **Mirrorly v0.1.0 GitHub Release 已正式发布**，标题为 **Mirrorly v0.1.0**，标记为 **Latest**、**非 Pre-release**；GitHub source repository 为 Public。
+- Tag `v0.1.0` 指向 release commit `a466e6913c66932b9226fd0469d5a33017bdb6d4`。本次开始时 `HEAD = main = origin/main` 均为该 commit，working tree/index clean；本次只做文档 bookkeeping，不修改 tag 或 GitHub Release。
+- Release 提供 **Source code ZIP / tar.gz**，没有手动上传的 binary/package asset；**未发布 PyPI package**，`Private :: Do Not Upload` 继续有意保留。
+- Release candidate validation：**570 passed / 4 environmental skips / 0 failed**；独立 Windows E2E：**13 passed**。4 skip 仍是 Windows 文件 symlink 创建权限 / Developer Mode 环境限制，不记为 PASS；本次不重跑 regression。
+- 当前 source/package version 为 **`0.1.0`**，**Alpha maturity 保留**；正式 GitHub source release 不表示 production-ready、stable 或 `1.0` ready。Final Pre-Public Gate 与 GitHub Public source readiness 均为 **PASS**。
+- 历史 frozen tag `v0.1.0-mvp` 仍指向 `999ceb88c7d4c73c3062eb1927fd1c513d9e0234`，与 `v0.1.0` 并存；旧日志、MVP acceptance 和历史测试数字不改写。
+- **CLI / Pre-Public / 0.1 release 主线：CLOSED。** 下一阶段为 **GUI product/UI design and development**；GUI 尚未实现，本次不进入 GUI implementation。
+
+---
+
 ## 2026-09-19 0.1.0 final release preparation（基线 554bde9）
 
 - 本次开始时 `HEAD = main = origin/main = 554bde9f760154268a9ea60b0a7c974119cdea92`，working tree/index clean。仅进行 release preparation，不新增功能或修改业务行为。

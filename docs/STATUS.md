@@ -1,23 +1,25 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-19（`0.1.0` final release preparation；基于已提交基线 `554bde9f760154268a9ea60b0a7c974119cdea92`）
+> 最后更新：2026-09-19（`v0.1.0` post-release bookkeeping；release commit `a466e6913c66932b9226fd0469d5a33017bdb6d4`）
 
 ## 当前阶段
 
-**Final Pre-Public Gate：PASS；GitHub Public source readiness：PASS。** Repository 已为 **Public**；主要生产代码安全加固、living documentation 与 package metadata 同步已完成。本次 release preparation 开始时 `HEAD = main = origin/main = 554bde9`（Record public source transition）。
+**Mirrorly CLI v0.1.0：RELEASED；GitHub Release：published。** 项目负责人已确认 Release 标题为 **Mirrorly v0.1.0**，标记为 Latest、非 Pre-release；Source code ZIP / tar.gz 可用，没有手动上传的 binary/package asset。Tag `v0.1.0` 指向 `a466e6913c66932b9226fd0469d5a33017bdb6d4`。
 
-当前 source/package 已收口为 **`0.1.0` / Alpha**，不表示 production-ready、stable 或 `1.0` ready。**`0.1.0` final release preparation 正在进行，等待 Architecture / Release Review**；尚未宣布 release，未创建 `v0.1.0` tag / GitHub Release，未发布 PyPI。GUI 尚未实现且本阶段未开始开发；GUI development 在 `0.1.0` release 收口之后开始。内置调度、云备份、双向同步均未实现。
+**Final Pre-Public Gate：PASS；GitHub Public source readiness：PASS。** Repository 已为 **Public**。当前 source/package 为 **`0.1.0` / Alpha**，不表示 production-ready、stable 或 `1.0` ready；PyPI package 尚未发布，`Private :: Do Not Upload` 继续有意保留。
+
+**CLI / Pre-Public / 0.1 release 主线：CLOSED；下一阶段为 GUI product/UI design and development。** GUI 尚未实现，本次 bookkeeping 不进入 GUI implementation。内置调度、云备份、双向同步均未实现。
 
 ### 当前验证记录与历史验收分开记录
 
 | 范围 | 已完成验证结果 | 说明 |
 | --- | --- | --- |
-| 当前 release-preparation 工作树（source `0.1.0`） | **570 passed / 4 skipped** | 完整回归；focused version / entry-point tests **5 passed** |
+| `v0.1.0` release candidate（已提交为 `a466e69`，source `0.1.0`） | **570 passed / 4 environmental skips / 0 failed** | 保留 release candidate 完整回归记录；focused version / entry-point tests **5 passed**；本次 bookkeeping 不重跑 |
 | 已提交基线 `c75e1ad`（source `0.1.0.dev0`） | **570 passed / 4 skipped** | 保留 Final Pre-Public Gate 完整回归记录 |
 | 上一生产基线 `1fb0cde` | **569 passed / 4 skipped** | 保留此前已批准的 regression 记录 |
-| 当前 Windows E2E | **13 passed** | 本次 release preparation 独立运行 `tests/test_e2e.py` |
-| 当前静态/格式检查 | Ruff check PASS；format check：44 files already formatted | 本次 release preparation 记录；`git diff --check` 通过 |
+| 当前 Windows E2E | **13 passed** | Release candidate 期间独立运行 `tests/test_e2e.py` |
+| 当前静态/格式检查 | Ruff check PASS；format check：44 files already formatted | 保留 release preparation 记录；当时 `git diff --check` 通过 |
 | 冻结 MVP acceptance | **452 passed / 4 skipped / 0 failed**；T-10 E2E **13 passed** | 不以当前数字覆盖历史验收 |
 
 当前 4 个 skip 为 Windows 文件 symlink 创建权限 / Developer Mode 环境限制，不能描述为文件 reparse 验证 PASS。历史目录 junction 的通过记录与文件 symlink 的 skip 分开保留。冻结 tag `v0.1.0-mvp` 指向提交 `999ceb88c7d4c73c3062eb1927fd1c513d9e0234`（验收文档提交）；历史验收所记录的生产 HEAD 仍为 `60ed124`。
@@ -142,11 +144,11 @@
 
 - Living/current：`README.md`、本文件、`CLI_SPEC.md`；`DEVELOPMENT_LOG.md` 只追加新记录，原有日期条目保留。
 - 历史设计/验收：`PRD.md` v0.2、`ARCHITECTURE.md` ADR-001~013、`DESIGN_DECISIONS.md` v1.0、`TECH_RISKS.md` v1.0、`MVP_TASKS.md`、`MVP_ACCEPTANCE.md`。它们记载当时需求、设计与验收，不将每一项设想自动视为当前已实现保证；当前格式、锁、排序和校验以本文件及源码为准。`UI_DIRECTION.md` 是后续 GUI 设计约束，不代表 GUI 已实现。
-- Developer instructions：repo-root `AGENTS.md`。另外 `LICENSE` 为 MIT；`pyproject.toml` / `environment.yml` 是安装与环境配置，本次 release preparation 仅将 `pyproject.toml` 的版本收口为 `0.1.0`，其他 metadata 与 `environment.yml` 不变。
-- 远程 push 与历史 MVP tag 已存在，不再列为待创建。是否发布新的 GitHub release 是独立任务；本次不创建 release 或移动 tag。
+- Developer instructions：repo-root `AGENTS.md`。另外 `LICENSE` 为 MIT；`pyproject.toml` / `environment.yml` 是安装与环境配置，`0.1.0` 版本收口已提交；本次仅同步发布后的文档，不修改 package metadata 或环境配置。
+- `v0.1.0` tag 与正式 GitHub Release 已发布，历史 `v0.1.0-mvp` 保持冻结；本次不创建或修改 tag / Release。
 - 待独立处理/评估：CP-KILL-A1（early incomplete 已落盘但 tree 尚未建立时，接受 resume 会拒绝目录缺失）；post-commit discard/retention 失败的状态说明和残留恢复；MVP_ACCEPTANCE §11 的卷兼容/诊断 hardening。Report long-path P2 已提交，不继续列为开放修复。
 - 上一 Control Metadata / Path Containment 综合审计仍是 **AUDIT INCOMPLETE / SAFETY-BLOCKED**；未完成项保持 **NOT TESTED — blocked by Codex cyber safety control**。Shared lexical boundary 的实现与回归不等于 duplicate JSON keys、numeric/parser ambiguity、filename/payload identity、结构冲突及 alias/reparse 等完整动态 matrix 已通过。
-- 当前 source/package version 为 **`0.1.0`**，Development Status 继续为 **Alpha**；版本收口不等于 tag / GitHub Release 已发布。`pyproject.toml` 与 `mirrorly.__version__` 保持手工双源，由 smoke regression 检查一致。历史 `v0.1.0-mvp` 只是 Git MVP milestone，当时 package metadata 为 `0.0.1`，不是已发布的 Python package `0.1.0`；未来 `v0.1.0` 将表示经过安全加固与公开前审计的正式 CLI source release，与旧 tag 并存，不移动旧 tag。**`Private :: Do Not Upload` 有意保留**，只表示当前不发布 PyPI，不限制 GitHub Public 源码。正式 release/tag 仍需独立批准，GUI development 在 release 收口之后开始。
+- 当前 source/package version 为 **`0.1.0`**，Development Status 继续为 **Alpha**；GitHub Release 的非 Pre-release 标记不改变该成熟度。`pyproject.toml` 与 `mirrorly.__version__` 保持手工双源，由 smoke regression 检查一致。历史 `v0.1.0-mvp` 只是 Git MVP milestone，当时 package metadata 为 `0.0.1`，不是已发布的 Python package `0.1.0`；现已发布的 `v0.1.0` 是经过安全加固与公开前审计的正式 CLI source release，与旧 tag 并存，旧 tag 不移动。**`Private :: Do Not Upload` 有意保留**，只表示当前不发布 PyPI，不限制 GitHub Public 源码。CLI release 主线已收口，下一阶段为 GUI product/UI design and development。
 
 ## 风险与注意事项
 
