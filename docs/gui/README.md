@@ -1,7 +1,12 @@
 # Mirrorly GUI Phase 0：架构与契约入口
 
-> 2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
-> 本目录记录 GUI 开发事实源。已批准产品边界在本轮落档；详细契约提案待 review。GUI、worker、共享 application service 均尚未实现。
+> Phase 0 历史快照：2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
+> 当时 GUI、worker、共享 application service 均尚未实现；下文保留该阶段的产品边界与契约提案。当前实施状态见下方更新。
+
+**当前实施状态（2026-09-20）**：[Phase 1A Technical Vertical Slice](PHASE1A.md)
+**PASS — Technical Vertical Slice validated**，用户已补齐托盘和通知可见性人工验收。
+下文保留 Phase 0 设计与待决项；Phase 1A 仅验证隔离的技术原型，不代表生产 worker、
+真实 backup GUI 或最终分发已完成。O-09 继续 OPEN，下一阶段须另行批准。
 
 ## 阅读顺序与状态标记
 
@@ -47,6 +52,7 @@
 | O-06 | Packaged/MSIX 或 unpackaged；Python 分发形式、runtime 依赖、签名与更新方案 | Phase 1 明确开发形态；生产分发另行 review |
 | O-07 | GUI registry/config 文件归属、导入/编辑已有 task 的规则；本地 store 格式/限额 | 写真实配置或本地持久化前 |
 | O-08 | `older` 是否向首版 Advanced 暴露；legacy 多版本选择、resume、非 NTFS 同意流程的首版入口 | 对应真实能力上线前；不得自动同意或猜默认 |
+| O-09 | **最终 Python worker distribution / packaging strategy**：A. 保留 MSIX/package identity，使用 Windows Application Packaging Project 或经验证的其他官方多 executable 方案；B. unpackaged/self-contained WinUI + 传统 installer/deployment | 捆绑生产 Python worker、冻结 installer 或宣称可分发前；两候选均未批准，见 [架构约束](ARCHITECTURE.md#python-worker-分发与打包open-decision-o-09)；O-06 的 worker 分发问题在此具体登记 |
 
 IPC 字段、进度阶段、活动存储限额和 source tree 都是 PROPOSED DESIGN，可在 review 中调整；这不重开已批准技术路线。视觉图片本轮未附加，文本方向已批准；不得声称已查看或复制 Visual Baseline v0 图片。
 

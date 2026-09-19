@@ -57,10 +57,33 @@ GUI registry 的 `backup_id` 是展示/队列身份；Python 仍用配置与 rep
 - 每个 Windows 用户会话一个 GUI coordinator；重复启动激活已有窗口，避免两个独立内存队列。跨会话/外部 CLI 仍由现有锁裁决。
 - Desktop process 同时拥有窗口和 tray；隐藏/最小化只改变可见性，不能 dispose coordinator、IPC 或 worker。
 - 按需启动一个受管理的 Python child session，后台读取协议/诊断流；IO/operation runner 与协议读写分离。一次一个 Backup operation；空闲 worker 可关闭并在下次重建 session。
-- 使用显式 Python executable、模块、绝对配置目录与受控工作目录；生产包不能依赖用户 PATH/Conda 激活或当前目录猜配置。开发阶段可指向已有环境，最终 Python 打包方式为 O-06。
+- 使用显式 Python executable、模块、绝对配置目录与受控工作目录；生产包不能依赖用户 PATH/Conda 激活或当前目录猜配置。开发阶段可指向已有环境，最终 Python 打包方式为 O-09（关联总体分发决策 O-06）。
 - 完整收到 terminal result 并确认 worker 不再执行该 operation 后才释放 slot。失联/崩溃进入 outcome unknown，停止 dispatch；不能先拉起另一个 worker 又继续队列。
 - 父进程异常退出不等于用户 Cancel。失联 worker 如何收尾、是否等待当前 IO/operation 完成是 O-03；不得采用 kill-on-window-close/job-close 作为取消。生产接入前必须解决 orphan 检测与不重复启动规则。
 - 真正 Exit 的 Running 部分为 O-01；本轮不承诺后台 broker、重连或跨启动恢复。应用不作为 Windows service，不需要默认提权。
+
+## Python worker 分发与打包（OPEN DECISION O-09）
+
+**CURRENT FACT · 2026-09-20**：Microsoft 的 [single-project MSIX limitations](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/single-project-msix#limitations)
+明确指出，生成的包只支持一个 executable；需要把多个 executable 放入同一个
+MSIX 时，应使用 Windows Application Packaging Project。这是 single-project
+打包方式的限制，不能泛化为 MSIX 不能承载多进程应用。
+
+Phase 1A 的包包含 desktop host；它启动的是包外的
+`C:\Users\sakur\anaconda3\envs\mirrorly\python.exe`，脚本也在当前 worktree，
+不是包内生产 worker。**Phase 1A packaged output PASS ≠ final distribution solved**。
+当前证据仅覆盖 packaged WinUI desktop app + 开发机外部 Python worker。
+
+**OPEN DECISION**，不在 Phase 1A closure 拍板或迁移项目：
+
+| 候选 | 需要后续证明的事项 |
+| --- | --- |
+| A. 保留 MSIX/package identity；使用 Windows Application Packaging Project，或其他经过官方文档与实测支持的多 executable 打包方案 | desktop、Python executable、worker 及其依赖一起部署；包内路径/子进程启动；通知身份；签名、安装、升级、卸载及无 Conda 的干净机器验证。参见 [官方 packaging project 文档](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-packaging-dot-net) |
+| B. unpackaged/self-contained WinUI，配合传统 installer/deployment | .NET/App SDK 与 Python 的具体部署方式；通知/激活所需注册；安装升级与卸载；干净机器验证。参见 [官方分发选项](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/) |
+
+self-contained 不能被理解为 Python 已自动打包，也不自动带来 package identity。
+两候选继续保留同一个独立 Python worker 与 IPC 边界，不为打包而改 core 或把
+Python 业务搬进 GUI。当前 single-project 原型结构保持不变。
 
 ## Backup / repository（APPROVED）
 

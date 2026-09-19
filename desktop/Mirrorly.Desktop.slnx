@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="Mirrorly.Desktop/Mirrorly.Desktop.csproj" />
+  <Project Path="Mirrorly.Desktop.Tests/Mirrorly.Desktop.Tests.csproj" />
+</Solution>

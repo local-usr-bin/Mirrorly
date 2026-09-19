@@ -1,0 +1,43 @@
+<Window x:Class="Mirrorly.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Mirrorly Technical Prototype">
+  <NavigationView x:Name="Navigation" IsBackButtonVisible="Collapsed" IsSettingsVisible="True"
+                  PaneDisplayMode="Auto" PaneTitle="Mirrorly" Background="{ThemeResource MirrorlyNavigationSurface}"
+                  SelectionChanged="Navigation_SelectionChanged">
+    <NavigationView.MenuItems>
+      <NavigationViewItem Content="Home" Tag="Home" Icon="Home" IsSelected="True" />
+      <NavigationViewItem Content="Backups" Tag="Backups" Icon="Folder" />
+      <NavigationViewItem Content="Restore" Tag="Restore" Icon="Undo" />
+      <NavigationViewItem Content="Activity" Tag="Activity" Icon="Clock" />
+    </NavigationView.MenuItems>
+    <ScrollViewer Background="{ThemeResource MirrorlySurface}" HorizontalScrollBarVisibility="Disabled"
+                  HorizontalScrollMode="Disabled" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="{StaticResource PageMargin}" Spacing="{StaticResource ContentSpacing}">
+        <TextBlock x:Name="PageTitle" Text="Home" Style="{StaticResource TitleTextBlockStyle}" TextWrapping="Wrap" />
+        <StackPanel x:Name="HomePanel" Spacing="{StaticResource ContentSpacing}" MaxWidth="640" HorizontalAlignment="Left">
+          <TextBlock Text="Mirrorly Technical Prototype" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" Foreground="{ThemeResource MirrorlyAccent}" />
+          <TextBlock Text="Phase 1A · No backup or restore operations." Style="{StaticResource PrototypeText}" />
+          <Border Padding="{StaticResource CardPadding}" CornerRadius="{StaticResource CardCornerRadius}"
+                  BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+            <StackPanel Spacing="{StaticResource ControlSpacing}">
+              <TextBlock Text="{Binding StatusText}" Style="{StaticResource PrototypeText}" AutomationProperties.LiveSetting="Polite" />
+              <TextBlock Text="{Binding Detail}" Style="{StaticResource PrototypeText}" IsTextSelectionEnabled="True" />
+              <TextBlock Text="IPC protocol: phase1a / 1 (UTF-8 NDJSON over stdio)" Style="{StaticResource PrototypeText}" />
+              <Button Content="Ping worker" Click="Ping_Click" IsEnabled="{Binding CanRequest}" Style="{StaticResource PrototypeButton}" />
+              <Button Content="Trigger test event" Click="TestEvent_Click" IsEnabled="{Binding CanRequest}" Style="{StaticResource PrototypeButton}" />
+              <Button Content="Show test notification" Click="Notification_Click" Style="{StaticResource PrototypeButton}" />
+              <Button Content="Crash test worker" Click="Crash_Click" IsEnabled="{Binding CanRequest}" Style="{StaticResource PrototypeButton}" />
+            </StackPanel>
+          </Border>
+          <TextBlock Text="{Binding LastEvent}" Style="{StaticResource PrototypeText}" AutomationProperties.LiveSetting="Polite" />
+          <TextBlock x:Name="NotificationStatus" Text="Notification test has not run." Style="{StaticResource PrototypeText}" AutomationProperties.LiveSetting="Polite" />
+          <TextBlock x:Name="DisplayStatus" Style="{StaticResource PrototypeText}" />
+          <TextBlock Text="Close hides this window to the notification area. Use the tray menu to exit. Restart the app after a crash test." Style="{StaticResource PrototypeText}" />
+          <Button Content="Exit prototype" Click="Exit_Click" UseSystemFocusVisuals="True" />
+        </StackPanel>
+        <TextBlock x:Name="Placeholder" Text="Not implemented in Phase 1A." Visibility="Collapsed" Style="{StaticResource PrototypeText}" />
+      </StackPanel>
+    </ScrollViewer>
+  </NavigationView>
+</Window>

@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "Mirrorly.Desktop (packaged)": {
+      "commandName": "MsixPackage"
+    }
+  }
+}

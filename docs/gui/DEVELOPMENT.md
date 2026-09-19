@@ -3,6 +3,10 @@
 > 2026-09-19 · PROPOSED DESIGN / 安装计划；本轮不安装、下载 SDK/package、不创建工程。
 > 稳定渠道版本是本日官方文档快照，实施前应确认 servicing 状态并记录实际使用版本，不自动追 Preview/Experimental。
 
+**2026-09-20 更新**：下方工具安装计划及“当前环境”段落保留 Phase 0 当日检查
+快照，不再表示这台机器缺少 SDK。已安装工具与实际技术原型验证见
+[PHASE1A](PHASE1A.md)。开发包验证与最终分发必须分开验收，见 O-09。
+
 ## 当前环境与 Phase 1 前置工具
 
 **CURRENT FACT**：`dotnet` 可见于 `C:\Program Files\dotnet\dotnet.exe`，`dotnet --list-sdks` 无输出；host/runtime 存在不表示具备 SDK。当前 Python project 环境为 Python 3.12；本轮不改变 Conda、PATH、Developer Mode 或 Windows 安装组件。
@@ -28,6 +32,19 @@
 推荐 Phase 1 用 C# WinUI Blank App (Packaged) 做开发验证，正式发行 packaged/unpackaged 仍 O-06。若选择 CLI 模板路线，官方模板包为 `Microsoft.WindowsAppSDK.WinUI.CSharp.Templates`，不是已有 SDK；VS 路线无需为凑齐工具再单独安装它。不要执行可顺带启用系统设置的一键安装脚本作为本轮工作。
 
 Phase 1 获准后应记录实际 SDK/MSBuild/package 版本，在合适的工程配置中固定版本，并验证 template defaults；模板成功不能证明 Python child 启动、tray、通知、最小系统或安装包都兼容。生产分发还需决定 .NET/App SDK 的 framework-dependent/self-contained 方式、Python runtime/bundle、签名、卸载/升级保留本地数据策略。Phase 1 不需要购置正式签名证书或发布安装包。
+
+## Python worker 分发的独立验收门槛
+
+**CURRENT FACT / OPEN DECISION O-09**：官方 [single-project MSIX 限制](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/single-project-msix#limitations)
+为一个包只支持一个 executable。Phase 1A 调用开发机包外 Python 与 worktree
+脚本，故 packaged output PASS 仅证明这条开发技术链，不证明最终分发已解决。
+
+正式分发前需在 [ARCHITECTURE](ARCHITECTURE.md#python-worker-分发与打包open-decision-o-09)
+两候选间另行决定：A. MSIX/package identity + Windows Application Packaging
+Project 或其他官方支持方案；B. unpackaged/self-contained WinUI + 传统 installer。
+本轮不迁移项目、不创建 packaging project、不新增 installer 工具。后续必须验证
+无开发 SDK/Conda/worktree 的机器、Python runtime/依赖及脚本落点、子进程启动、
+通知身份、签名、安装升级与卸载。保持 Python core 不变。
 
 ## 建议 Phase 1 范围
 

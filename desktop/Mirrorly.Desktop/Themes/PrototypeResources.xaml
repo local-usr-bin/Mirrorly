@@ -1,0 +1,33 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <SolidColorBrush x:Key="MirrorlyAccent" Color="#387D42" />
+      <SolidColorBrush x:Key="MirrorlySurface" Color="#FCFEFC" />
+      <SolidColorBrush x:Key="MirrorlyNavigationSurface" Color="#EEF7ED" />
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Default">
+      <SolidColorBrush x:Key="MirrorlyAccent" Color="#A7D9A8" />
+      <SolidColorBrush x:Key="MirrorlySurface" Color="#202520" />
+      <SolidColorBrush x:Key="MirrorlyNavigationSurface" Color="#263026" />
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="HighContrast">
+      <SolidColorBrush x:Key="MirrorlyAccent" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlySurface" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="MirrorlyNavigationSurface" Color="{ThemeResource SystemColorWindowColor}" />
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+  <Thickness x:Key="PageMargin">24</Thickness>
+  <Thickness x:Key="CardPadding">20</Thickness>
+  <x:Double x:Key="ContentSpacing">16</x:Double>
+  <x:Double x:Key="ControlSpacing">8</x:Double>
+  <CornerRadius x:Key="CardCornerRadius">8</CornerRadius>
+  <Style x:Key="PrototypeText" TargetType="TextBlock">
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+  <Style x:Key="PrototypeButton" TargetType="Button">
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
+    <Setter Property="UseSystemFocusVisuals" Value="True" />
+  </Style>
+</ResourceDictionary>

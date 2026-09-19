@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Exercise the actual production-side test client without loading WinUI. -->
+    <Compile Include="..\Mirrorly.Desktop\Services\Protocol.cs" Link="Services\Protocol.cs" />
+    <Compile Include="..\Mirrorly.Desktop\Services\FakeWorkerClient.cs" Link="Services\FakeWorkerClient.cs" />
+    <Compile Include="..\Mirrorly.Desktop\Services\PrototypeConfiguration.cs" Link="Services\PrototypeConfiguration.cs" />
+    <Compile Include="..\Mirrorly.Desktop\ViewModels\HomeViewModel.cs" Link="ViewModels\HomeViewModel.cs" />
+    <AssemblyMetadata Include="Phase1AWorkerPath" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\phase1a_worker\worker.py'))" />
+  </ItemGroup>
+</Project>
