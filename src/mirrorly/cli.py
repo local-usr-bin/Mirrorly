@@ -67,7 +67,7 @@ from .repo import (
 )
 from .restore import RestoreError, apply_restore, plan_restore
 from .retention import RetentionError, apply_retention_plan, build_retention_plan
-from .scan import PreviousEntry, detect_changes, scan_source
+from .scan import PreviousEntry, detect_changes, scan_source, to_long_path
 from .snapshot import (
     SnapshotError,
     generate_snapshot_id,
@@ -98,6 +98,10 @@ class _UserAbort(Exception):
 
 class _LockBusy(Exception):
     """任务锁被占用（另一实例运行中）→ 退出码 6。"""
+
+
+class _ReportPublicationError(RepoError):
+    """报告 JSON 未能完成原子 publication。"""
 
 
 class _IdentityMismatch(Exception):
@@ -440,19 +444,37 @@ def _write_report(repo: RepoInfo, name: str, data: dict) -> Path:
     绝不静默覆盖已有报告。
     """
     logs_dir = repo.path / "logs"
-    logs_dir.mkdir(exist_ok=True)
-    ts = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
-    final = logs_dir / f"{name}-{ts}.json"
-    for n in range(1, 100):
-        if not final.exists():
-            break
-        final = logs_dir / f"{name}-{ts}-{n:02d}.json"
-    else:
-        raise RepoError(f"无法分配唯一报告文件名: {name}-{ts}")
-    tmp = final.with_suffix(final.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, final)
-    return final
+    tmp: Path | None = None
+    owns_tmp = False
+    try:
+        Path(to_long_path(logs_dir)).mkdir(exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
+        final = logs_dir / f"{name}-{ts}.json"
+        for n in range(1, 100):
+            if not os.path.exists(to_long_path(final)):
+                break
+            final = logs_dir / f"{name}-{ts}-{n:02d}.json"
+        else:
+            raise RepoError(f"无法分配唯一报告文件名: {name}-{ts}")
+
+        tmp = final.with_suffix(final.suffix + ".tmp")
+        payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        # ``x`` 模式同时建立本次调用对 temp 的 ownership；若同名 temp
+        # 已存在则 fail closed，异常清理不得删除其他调用留下的文件。
+        stream = open(to_long_path(tmp), "x", encoding="utf-8", newline="\n")
+        owns_tmp = True
+        with stream:
+            stream.write(payload)
+        os.replace(to_long_path(tmp), to_long_path(final))
+        return final
+    except OSError as exc:
+        if owns_tmp and tmp is not None:
+            try:
+                os.remove(to_long_path(tmp))
+            except OSError:
+                # Cleanup is best-effort and must not replace the publication error.
+                pass
+        raise _ReportPublicationError(f"报告发布失败: {tmp or logs_dir}（{exc}）") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +826,13 @@ def cmd_backup(args: argparse.Namespace) -> int:
             "bytes_written": result.bytes_written,
             "retention_deleted": list(retention_deleted),
         }
-        report_path = _write_report(repo, f"backup-{snapshot_id}", report)
+        try:
+            report_path = _write_report(repo, f"backup-{snapshot_id}", report)
+        except _ReportPublicationError as exc:
+            raise RepoError(
+                f"快照 {snapshot_id} 已成功提交（complete manifest 已发布），"
+                f"但必需报告发布失败；备份命令返回错误: {exc}"
+            ) from exc
 
     if _flag(args, "json"):
         report["report_path"] = str(report_path)
@@ -944,7 +972,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         "ok": not failed,
     }
     name = f"verify-{targets[0]}" if len(targets) == 1 else "verify-all"
-    report_path = _write_report(repo, name, report)
+    try:
+        report_path = _write_report(repo, name, report)
+    except _ReportPublicationError as exc:
+        outcome = "失败" if failed else "通过"
+        raise RepoError(
+            f"校验已完成（结果: {outcome}），但必需报告发布失败；verify 命令返回错误: {exc}"
+        ) from exc
     if _flag(args, "json"):
         report["report_path"] = str(report_path)
         print(json.dumps(report, ensure_ascii=False, indent=2))

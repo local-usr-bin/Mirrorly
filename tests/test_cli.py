@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -118,6 +120,16 @@ def _write(path: Path, data: bytes = b"x") -> None:
     Path(to_long_path(path.parent)).mkdir(parents=True, exist_ok=True)
     with open(to_long_path(path), "wb") as f:
         f.write(data)
+
+
+def _target_for_repo_path_length(base: Path, length: int) -> Path:
+    """Return a child target whose ``MirrorlyRepo`` path has an exact length."""
+
+    for width in range(1, 256):
+        target = base / ("x" * width)
+        if len(str(target / "MirrorlyRepo")) == length:
+            return target
+    pytest.skip(f"system Temp base is too long for isolated report-path test: {base}")
 
 
 def _fake_exfat(monkeypatch) -> None:
@@ -417,6 +429,33 @@ class TestBackup:
             repo.path / "snapshots" / manifests[0].snapshot_id / "a.txt"
         ).read_bytes() == b"alpha"
 
+    def test_post_commit_report_failure_is_explicit(
+        self, ws, snap_ids, monkeypatch, capsys
+    ) -> None:
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        capsys.readouterr()
+
+        def fail_report(*args, **kwargs):
+            raise cli._ReportPublicationError("simulated report publication failure")
+
+        monkeypatch.setattr(cli, "_write_report", fail_report)
+        assert _run(ws, "backup", "--yes") == 1
+        captured = capsys.readouterr()
+
+        repo = _repo(ws)
+        manifests = list_manifests(repo)
+        assert len(manifests) == 1
+        summary = manifests[0]
+        assert summary.status == "complete"
+        assert summary.snapshot_id in captured.err
+        assert "已成功提交" in captured.err
+        assert "报告发布失败" in captured.err
+        assert verify_snapshot(repo, summary.snapshot_id).ok
+
+        assert _run(ws, "list") == 0
+        assert summary.snapshot_id in capsys.readouterr().out
+
     def test_staging_metadata_failure_keeps_snapshot_incomplete(
         self, ws, snap_ids, monkeypatch
     ) -> None:
@@ -654,6 +693,30 @@ class TestVerify:
         assert len(reports) == 1
         payload = json.loads(reports[0].read_text(encoding="utf-8"))
         assert payload["ok"] is True
+
+    def test_report_failure_describes_completed_verify_without_commit_claim(
+        self, backed_up, monkeypatch, capsys
+    ) -> None:
+        calls = []
+        real_verify = cli.verify_snapshot
+
+        def tracked_verify(*args, **kwargs):
+            calls.append(args[1])
+            return real_verify(*args, **kwargs)
+
+        def fail_report(*args, **kwargs):
+            raise cli._ReportPublicationError("simulated report publication failure")
+
+        monkeypatch.setattr(cli, "verify_snapshot", tracked_verify)
+        monkeypatch.setattr(cli, "_write_report", fail_report)
+        capsys.readouterr()
+
+        assert _run(backed_up, "verify") == 1
+        captured = capsys.readouterr()
+        assert calls
+        assert "校验已完成（结果: 通过）" in captured.err
+        assert "报告发布失败" in captured.err
+        assert "已成功提交" not in captured.err
 
     def test_verify_tampered_exit_4(self, backed_up, capsys) -> None:
         ws = backed_up
@@ -902,6 +965,64 @@ class TestPaths:
         rel = (deep / "long.txt").relative_to(ws["src"])
         assert Path(to_long_path(repo.path / "snapshots" / sid / rel)).exists()
         assert _run(ws, "verify") == 0
+
+    @pytest.mark.skipif(not sys.platform.startswith("win"), reason="Windows 长路径场景")
+    def test_long_repository_backup_and_verify_reports(self, snap_ids, monkeypatch) -> None:
+        base = Path(tempfile.mkdtemp(prefix="mirrorly-report-long-"))
+        try:
+            target = _target_for_repo_path_length(base, 150)
+            ws = {"src": base / "src", "target": target, "config": base / "cfg"}
+            ws["src"].mkdir()
+            _write(ws["src"] / "data.txt", b"long report path")
+
+            converted: list[str] = []
+
+            def record_long_path(path):
+                converted.append(str(path))
+                return to_long_path(path)
+
+            monkeypatch.setattr(cli, "to_long_path", record_long_path)
+            assert _init(ws) == 0
+            assert _run(ws, "backup", "--yes") == 0
+
+            repo = _repo(ws)
+            summary = list_manifests(repo)[0]
+            assert summary.status == "complete"
+            assert verify_snapshot(repo, summary.snapshot_id).ok
+
+            logs = repo.path / "logs"
+            backup_names = [
+                name
+                for name in os.listdir(to_long_path(logs))
+                if name.startswith(f"backup-{summary.snapshot_id}-") and name.endswith(".json")
+            ]
+            assert len(backup_names) == 1
+            backup_report = logs / backup_names[0]
+            backup_tmp = backup_report.with_suffix(backup_report.suffix + ".tmp")
+            assert len(str(backup_tmp)) >= 260
+            with open(to_long_path(backup_report), encoding="utf-8") as stream:
+                assert json.load(stream)["status"] == "complete"
+            assert str(backup_tmp) in converted
+            assert str(backup_report) in converted
+
+            assert _run(ws, "verify") == 0
+            verify_names = [
+                name
+                for name in os.listdir(to_long_path(logs))
+                if name.startswith(f"verify-{summary.snapshot_id}-") and name.endswith(".json")
+            ]
+            assert len(verify_names) == 1
+            verify_report = logs / verify_names[0]
+            verify_tmp = verify_report.with_suffix(verify_report.suffix + ".tmp")
+            assert len(str(verify_tmp)) >= 260
+            with open(to_long_path(verify_report), encoding="utf-8") as stream:
+                assert json.load(stream)["ok"] is True
+            assert str(verify_tmp) in converted
+            assert str(verify_report) in converted
+            assert not any(name.endswith(".tmp") for name in os.listdir(to_long_path(logs)))
+        finally:
+            if os.path.exists(to_long_path(base)):
+                shutil.rmtree(to_long_path(base))
 
     def test_quiet_suppresses_info(self, backed_up, capsys) -> None:
         assert _run(backed_up, "backup", "--yes", "--quiet") == 0
@@ -2635,6 +2756,74 @@ class TestTaskNameValidation:
         assert not (ws["target"] / "MirrorlyRepo").exists()
         assert not (ws["config"] / "config.d" / "evil.toml").exists()
         assert not (ws["config"] / "evil.toml").exists()
+
+
+class TestReportPublication:
+    def test_preexisting_temp_is_not_claimed_or_deleted(self, backed_up, monkeypatch) -> None:
+        repo = _repo(backed_up)
+        when = datetime(2026, 9, 18, 12, 0, 0, 123456)
+        _freeze_snapshot_clock(monkeypatch, when)
+        temp = repo.path / "logs" / "unowned-2026-09-18_120000_123456.json.tmp"
+        temp.write_bytes(b"not owned by this call")
+
+        with pytest.raises(cli._ReportPublicationError, match="报告发布失败"):
+            cli._write_report(repo, "unowned", {"value": "new report"})
+
+        assert temp.read_bytes() == b"not owned by this call"
+
+    def test_partial_temp_write_failure_cleans_owned_temp(self, backed_up, monkeypatch) -> None:
+        repo = _repo(backed_up)
+        real_open = open
+
+        class PartialWriteFailure:
+            def __init__(self, stream) -> None:
+                self.stream = stream
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc) -> None:
+                self.stream.close()
+
+            def write(self, value: str) -> None:
+                self.stream.write(value[:1])
+                self.stream.flush()
+                raise OSError(5, "simulated partial report write failure")
+
+        def failing_open(path, *args, **kwargs):
+            stream = real_open(path, *args, **kwargs)
+            if "cleanup-write" in str(path) and str(path).endswith(".json.tmp"):
+                return PartialWriteFailure(stream)
+            return stream
+
+        monkeypatch.setattr(cli, "open", failing_open, raising=False)
+        with pytest.raises(cli._ReportPublicationError, match="报告发布失败"):
+            cli._write_report(repo, "cleanup-write", {"value": "payload"})
+
+        assert not list((repo.path / "logs").glob("cleanup-write*"))
+
+    def test_replace_failure_cleans_owned_temp_and_preserves_existing_final(
+        self, backed_up, monkeypatch
+    ) -> None:
+        repo = _repo(backed_up)
+        when = datetime(2026, 9, 18, 12, 0, 0, 123456)
+        _freeze_snapshot_clock(monkeypatch, when)
+        existing = repo.path / "logs" / "cleanup-replace-2026-09-18_120000_123456.json"
+        existing.write_bytes(b"existing report")
+        real_replace = os.replace
+
+        def fail_report_replace(source, destination):
+            if "cleanup-replace" in str(destination):
+                raise OSError(5, "simulated report replace failure")
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(cli.os, "replace", fail_report_replace)
+        with pytest.raises(cli._ReportPublicationError, match="报告发布失败"):
+            cli._write_report(repo, "cleanup-replace", {"value": "replacement"})
+
+        assert existing.read_bytes() == b"existing report"
+        assert not existing.with_name("cleanup-replace-2026-09-18_120000_123456-01.json").exists()
+        assert not list((repo.path / "logs").glob("cleanup-replace*.tmp"))
 
 
 class TestCliContractGaps:
