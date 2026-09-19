@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-09-19 GUI Phase 0：架构与契约文档（待 review）
+
+- 从 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`、干净工作树开始，只读核对源码事实与官方 Stable 工具文档。
+- 新增 `docs/gui/` 索引、GUI-ADR-001、operation/queue/progress/cancellation、IPC、Activity/Settings、资源/无障碍及开发计划。已批准边界与具体提案、capability gap、OPEN DECISION 明确分开。
+- 记录 WinUI 3/C# frontend + Python worker + 未来共享 application service；CLI 私有编排提取必须另开任务并保持 CLI/锁/publish/retention/recovery 兼容。本轮不提取代码。
+- `UI_DIRECTION` 转为当前 GUI 文档入口，替换“CLI 外壳/JSON 最终接口”的旧设想；同步架构索引与项目状态。历史 release 日志、验收、tags、version 不改。
+- 本轮验证文档本地链接、JSON 示例、Markdown fence/尾部空白与 `git diff --check`，不重跑 CLI audit；没有 GUI/worker 代码、依赖、安装、系统设置、commit、push 或发布操作。文档等待 review，Phase 1 尚未开始。
+
+---
+
 ## 2026-09-19 Mirrorly v0.1.0 正式发布（post-release bookkeeping）
 
 - 项目负责人确认 **Mirrorly v0.1.0 GitHub Release 已正式发布**，标题为 **Mirrorly v0.1.0**，标记为 **Latest**、**非 Pre-release**；GitHub source repository 为 Public。

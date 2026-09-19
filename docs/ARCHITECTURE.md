@@ -3,6 +3,8 @@
 > 记录影响项目长期形态的技术决策。每条决策包含：背景、决定、理由、备选方案。
 > ADR-001~004 为工程决策，ADR-005~009 为产品架构决策（PRD v0.2 确认），ADR-010~013 为 MVP 前最终细化决策。
 
+GUI Phase 0 的独立决策入口：[GUI-ADR-001：WinUI frontend 与 Python worker](gui/ARCHITECTURE.md)。状态标记、契约草案及 OPEN DECISION 见 [GUI 文档索引](gui/README.md)。以下既有 core ADR 保持其历史与安全语义，不因 GUI 启动而重新设计。
+
 ## ADR-001：开发语言与运行时
 
 - **决定**：Python 3.12，Conda 独立环境管理（环境名 `mirrorly`，位于本机默认 Conda 环境目录）。

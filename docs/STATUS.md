@@ -1,7 +1,7 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-19（`v0.1.0` post-release bookkeeping；release commit `a466e6913c66932b9226fd0469d5a33017bdb6d4`）
+> 最后更新：2026-09-19（GUI Phase 0 架构与契约文档；CLI release 记录保持不变）
 
 ## 当前阶段
 
@@ -9,7 +9,15 @@
 
 **Final Pre-Public Gate：PASS；GitHub Public source readiness：PASS。** Repository 已为 **Public**。当前 source/package 为 **`0.1.0` / Alpha**，不表示 production-ready、stable 或 `1.0` ready；PyPI package 尚未发布，`Private :: Do Not Upload` 继续有意保留。
 
-**CLI / Pre-Public / 0.1 release 主线：CLOSED；下一阶段为 GUI product/UI design and development。** GUI 尚未实现，本次 bookkeeping 不进入 GUI implementation。内置调度、云备份、双向同步均未实现。
+**CLI / Pre-Public / 0.1 release 主线：CLOSED；当前为 GUI Phase 0 架构与契约文档 review。** GUI 尚未实现，内置调度、云备份、双向同步均未实现。
+
+### GUI Phase 0（文档，待 review）
+
+- 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`；已批准 WinUI 3/C# + 独立 Python worker、单 source/独立 repo、Backup FIFO 串行队列、Restore Skip/确认 Replace 等边界，见 [GUI 文档索引](gui/README.md)。
+- 本轮只新增/修改文档，不创建 GUI 工程、worker、依赖或 callbacks，不修改 CLI/core/version/release。共享 application service 提取为后续单独任务。
+- 具体 IPC、进度、取消、安全 checkpoint、Running-on-Exit、分发/本地存储细节按 APPROVED / PROPOSED DESIGN / OPEN DECISION 分开记录；取消与细粒度 progress 仍是 capability gap。
+- `dotnet` host 可见，但 `dotnet --list-sdks` 为空；稳定工具链仅列于 [DEVELOPMENT](gui/DEVELOPMENT.md)，本轮没有安装/下载或修改系统环境。
+- 以下 CLI 验收均为既有记录，本轮不重跑完整 audit，不将其当成 GUI 验收。
 
 ### 当前验证记录与历史验收分开记录
 

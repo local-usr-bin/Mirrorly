@@ -1,41 +1,11 @@
-# Mirrorly 未来 UI 设计方向
+# Mirrorly GUI 设计方向入口
 
-> 版本：v1.0 · 日期：2026-09-12
-> 性质：**设计约束文档**。不创建 GUI、不引入依赖。未来启动 GUI 阶段时以本文为准，偏离需先修订本文。
+> 2026-09-19 · GUI Phase 0。当前长期文档见 [docs/gui](gui/README.md)。GUI 尚未实现。
 
-## 定位关键词
+已批准的方向是 **Modern Windows + Fresh Spring Garden**：WinUI 3 的 Windows/Fluent 骨架、清新浅草绿、白/极淡绿白、少量独立粉花/嫩叶装饰。品牌色与 success/warning/error 语义分离，状态始终有 icon + text。
 
-**clean · lightweight · trustworthy**
+一级导航为 Home / Backups / Restore / Activity / Settings；Snapshots 属于具体 Backup。Home 优先状态、当前备份摘要与 Back up now，随后少量活动，不做统计 dashboard。普通用户的任务、下一步、安全解释优先于技术信息。
 
-Mirrorly 的 GUI 面向个人用户（PRD 画像 P1/P2），气质是"安静可靠的家用工具"，不是极客玩具，也不是企业软件。
+GUI 使用独立 Python worker 与版本化本地 IPC，未来与 CLI 共用 application service；不以 CLI 私有编排/人类输出作为长期 GUI API。本文旧版“CLI 可视化外壳、以 --json 为 GUI 最终接口”的设想由 [GUI-ADR-001](gui/ARCHITECTURE.md) 取代；CLI 参数/退出码/JSON 兼容性仍必须保持。
 
-## 视觉方向
-
-- **主色**：浅绿 / mint green / soft green（传达"安全、完好、可恢复"的心理暗示）；
-- 界面大量留白，信息密度低，圆角柔和；
-- 状态色语义化：正常=绿、警告= amber、失败=红（与主色协调，不用刺眼荧光色）；
-- 字体用系统默认 UI 字体，等宽字体仅用于路径展示。
-
-## 明确避免
-
-- ❌ 黑客终端风（黑底绿字、满屏滚动日志）；
-- ❌ 复杂企业后台风（多级菜单、密集表格、仪表盘墙）；
-- ❌ 硬盘检测工具风（S.M.A.R.T. 参数、速率曲线、技术参数堆砌）。
-
-## 首屏核心展示（用户最关心的五件事）
-
-1. **最近一次备份状态**（成功/部分完成/失败 + 时间，一句话说清）；
-2. **源目录**；
-3. **目标备份盘**；
-4. **快照数量**（及最早可回溯时间）；
-5. **完整性状态**（最近 verify 结论）。
-
-一个"立即备份"主按钮。其他一切都是次要信息，收起而非堆叠。
-
-## 默认不展示底层技术细节
-
-inode、哈希速度、IO queue、硬链接数等**不作为默认界面内容**；仅在"高级/诊断"折叠区或日志查看器中提供。技术细节的存在是为了诊断问题，不是为了展示能力。
-
-## 与 CLI 的关系
-
-GUI 是 CLI 能力的可视化外壳，不绕过 CLI 契约（CLI_SPEC）另造逻辑；`--json` 输出是 GUI 与核心之间的预期接口。
+资源结构、Visual Baseline v0、DPI、键盘、screen reader、High Contrast、tray/notification 约束见 [DESIGN_RESOURCES](gui/DESIGN_RESOURCES.md)；运行结果/队列/取消边界见 [OPERATIONS](gui/OPERATIONS.md)。旧设计与 release 历史保留在 Git 中，本次不改冻结 tag 或历史验收。

@@ -1,0 +1,55 @@
+# Mirrorly GUI Phase 0：架构与契约入口
+
+> 2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
+> 本目录记录 GUI 开发事实源。已批准产品边界在本轮落档；详细契约提案待 review。GUI、worker、共享 application service 均尚未实现。
+
+## 阅读顺序与状态标记
+
+| 文档 | 内容 |
+| --- | --- |
+| [ARCHITECTURE](ARCHITECTURE.md) | GUI-ADR-001、分层、运行时、Backup/repository、Restore v1、未来目录 |
+| [OPERATIONS](OPERATIONS.md) | operation/result、health、queue、progress、cancellation/Exit 状态机 |
+| [IPC_CONTRACT](IPC_CONTRACT.md) | transport 推荐、版本、消息、identity、错误与故障处理草案 |
+| [ACTIVITY_SETTINGS](ACTIVITY_SETTINGS.md) | 本地设置、历史、问题状态与 core truth 的关系 |
+| [DESIGN_RESOURCES](DESIGN_RESOURCES.md) | 导航、视觉资源、组件、DPI/无障碍、tray/notifications |
+| [DEVELOPMENT](DEVELOPMENT.md) | 稳定工具链计划、分期、验证与实施门槛 |
+
+本文档统一使用以下标记；没有标成 CURRENT FACT 的接口/字段不能视为现有 API。
+
+- **CURRENT FACT**：当前源码及已提交测试证明的行为；事实改变时先核对源码。
+- **APPROVED**：本轮用户已批准的产品/架构约束，不表示已经实现。
+- **PROPOSED DESIGN**：为实现已批准方向提出的具体契约，等待 review；不是新增行为的授权。
+- **DEFERRED**：明确不进入 GUI 首版的功能。
+- **OPEN DECISION**：尚未拍板；实现受影响部分前必须解决，不能由默认值暗中决定。
+
+事实优先级：源码 → tests → 当前设计/项目文档 → 产品提示与历史讨论。若发生冲突，报告差异，不为迎合 GUI 修改 core。CLI release、frozen tags、版本与验收记录不受本目录改变。
+
+## 已批准且应保持的边界
+
+1. WinUI 3 / C# / XAML + 独立 Python worker；经版本化本地 IPC 接入未来共享 application service，再使用现有 core。WPF 只保留后备地位。
+2. 一个 Backup = 一个 source root + 一个独立 repository；首版不支持多 source 或同 repo 下多个 task namespace。
+3. Backup 自动 FIFO 串行队列；同一 Backup 不重复 Running/Queued，可移除未开始项。Close 到 tray、Minimize 均继续队列；真正 Exit 清空未开始项，不跨退出保存队列。
+4. Restore 是 merge：默认 Skip，确认后 Replace；`older` 若保留只在 Advanced。不会删除目标额外文件；Keep both 等延期。
+5. 快照 complete、CLI exit code、上次成功均不能单独推导“当前已是最新”。运行状态、提交事实、最终结果、长期问题分别表达。
+6. 当前进度/取消是 capability gap；本轮仅设计契约。不得以强杀 worker 代替正常取消。
+7. GUI 本地 settings/activity/issues 与 task TOML、manifest、report 分离。
+8. 语义资源、独立装饰层、可调整组件和 DPI/无障碍从第一天建立；不构建通用工作流/主题插件系统。
+
+## 待决事项登记
+
+| ID | OPEN DECISION | 何时必须解决 |
+| --- | --- | --- |
+| O-01 | Running-on-Exit：完成当前后退出，或支持安全取消后退出；用户撤回退出意图的交互 | 启用真实运行/Exit 前；[候选](OPERATIONS.md) |
+| O-02 | 取消 checkpoint、publication 不可取消区、finalizing 策略、restore 部分写入提示的详细提案 | 单独的安全关键 cancellation 任务前 |
+| O-03 | 是否接受 stdio session transport、协议 v1 草案；父进程崩溃/断连时 worker 存活与收尾策略 | 生产 worker 前；Phase 1 只用 fake client |
+| O-04 | Restore/verify 与 Backup 的并发门禁；是否共用前台 IO slot | 接入真实 restore/verify 前；GUI 门禁不能解决外部 CLI 竞争 |
+| O-05 | GUI 最低 Windows build/edition、Windows 10 支持范围、首发 CPU 架构；开发工具版本组合 | 创建正式工程前确认开发目标，发布前验证完整支持矩阵 |
+| O-06 | Packaged/MSIX 或 unpackaged；Python 分发形式、runtime 依赖、签名与更新方案 | Phase 1 明确开发形态；生产分发另行 review |
+| O-07 | GUI registry/config 文件归属、导入/编辑已有 task 的规则；本地 store 格式/限额 | 写真实配置或本地持久化前 |
+| O-08 | `older` 是否向首版 Advanced 暴露；legacy 多版本选择、resume、非 NTFS 同意流程的首版入口 | 对应真实能力上线前；不得自动同意或猜默认 |
+
+IPC 字段、进度阶段、活动存储限额和 source tree 都是 PROPOSED DESIGN，可在 review 中调整；这不重开已批准技术路线。视觉图片本轮未附加，文本方向已批准；不得声称已查看或复制 Visual Baseline v0 图片。
+
+## 本轮范围
+
+只新增/修改文档和入口链接；不创建 GUI 工程、C#/XAML、worker、依赖、schema 代码或 core callbacks。共享 application service 的提取、协议实现和 cooperative cancellation 均是后续独立任务。本文不授予 commit、安装、push 或发布许可。
