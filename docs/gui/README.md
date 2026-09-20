@@ -5,6 +5,7 @@
 
 **当前实施状态（2026-09-20）**：[Phase 1C Backup Setup UX Prototype](PHASE1C.md)
 **PASS — product review approved**，含最终 responsive policy；真实只读文件夹浏览 + 两步确认，Create 仅显示原型提示，不连接 core。
+Python 接入准备已推进至 [Phase 2B：共享 application 基础设施](PHASE2.md)：任务读取、仓库解析、锁与报告发布已供 CLI 使用；完整命令事务仍在 CLI，GUI 状态和 fake worker 不变。
 [Phase 1B Visual Shell & Home Prototype](PHASE1B.md) 已冻结为
 **PASS — visual review approved**（`00d07da0bd8fe2e3350523c57eb6c2d2089e8683`）；v1 与当前 SVG 已获批准。Home 继续使用 presentation fixtures。
 [Phase 1A Technical Vertical Slice](PHASE1A.md) 已冻结为
@@ -23,6 +24,7 @@ O-09 继续 OPEN，后续阶段须另行批准。
 | [DESIGN_RESOURCES](DESIGN_RESOURCES.md) | 导航、视觉资源、组件、DPI/无障碍、tray/notifications |
 | [MOTION](MOTION.md) | 未来真实任务开始时的一次性花瓣规范；尚未实现 |
 | [DEVELOPMENT](DEVELOPMENT.md) | 稳定工具链计划、分期、验证与实施门槛 |
+| [PHASE2](PHASE2.md) | 当前 Python application 提取进度、边界与兼容性验证 |
 
 本文档统一使用以下标记；没有标成 CURRENT FACT 的接口/字段不能视为现有 API。
 

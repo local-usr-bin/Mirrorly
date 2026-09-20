@@ -30,6 +30,9 @@ import pytest
 from mirrorly import cli
 from mirrorly import manifest as manifest_mod
 from mirrorly import snapshot as snapshot_mod
+from mirrorly.application import locking as locking_mod
+from mirrorly.application import reports as reports_mod
+from mirrorly.application import repositories as repositories_mod
 from mirrorly.cli import main
 from mirrorly.config import (
     ConfigError,
@@ -133,9 +136,10 @@ def _target_for_repo_path_length(base: Path, length: int) -> Path:
 
 
 def _fake_exfat(monkeypatch) -> None:
-    """把 CLI 层与 repo 模块内部的卷信息查询都 mock 成 exFAT。"""
+    """把 init、共享 resolver 与 repo 内部的卷信息查询都 mock 成 exFAT。"""
     fake = lambda p: VolumeInfo("USB", "DEADBEEF", "exFAT")  # noqa: E731
     monkeypatch.setattr(cli, "get_volume_info", fake)
+    monkeypatch.setattr(repositories_mod, "get_volume_info", fake)
     import mirrorly.repo as repo_mod
 
     monkeypatch.setattr(repo_mod, "get_volume_info", fake)
@@ -209,6 +213,8 @@ def _freeze_snapshot_clock(monkeypatch, when: datetime, *, manifests: bool = Fal
             return aware.astimezone(tz)
 
     monkeypatch.setattr(cli, "datetime", FrozenDateTime)
+    monkeypatch.setattr(reports_mod, "datetime", FrozenDateTime)
+    monkeypatch.setattr(locking_mod, "datetime", FrozenDateTime)
     if manifests:
         monkeypatch.setattr(manifest_mod, "datetime", FrozenDateTime)
 
@@ -437,9 +443,9 @@ class TestBackup:
         capsys.readouterr()
 
         def fail_report(*args, **kwargs):
-            raise cli._ReportPublicationError("simulated report publication failure")
+            raise reports_mod.ReportPublicationError("simulated report publication failure")
 
-        monkeypatch.setattr(cli, "_write_report", fail_report)
+        monkeypatch.setattr(reports_mod, "write_report", fail_report)
         assert _run(ws, "backup", "--yes") == 1
         captured = capsys.readouterr()
 
@@ -705,10 +711,10 @@ class TestVerify:
             return real_verify(*args, **kwargs)
 
         def fail_report(*args, **kwargs):
-            raise cli._ReportPublicationError("simulated report publication failure")
+            raise reports_mod.ReportPublicationError("simulated report publication failure")
 
         monkeypatch.setattr(cli, "verify_snapshot", tracked_verify)
-        monkeypatch.setattr(cli, "_write_report", fail_report)
+        monkeypatch.setattr(reports_mod, "write_report", fail_report)
         capsys.readouterr()
 
         assert _run(backed_up, "verify") == 1
@@ -981,7 +987,7 @@ class TestPaths:
                 converted.append(str(path))
                 return to_long_path(path)
 
-            monkeypatch.setattr(cli, "to_long_path", record_long_path)
+            monkeypatch.setattr(reports_mod, "to_long_path", record_long_path)
             assert _init(ws) == 0
             assert _run(ws, "backup", "--yes") == 0
 
@@ -2294,7 +2300,7 @@ class TestBackupLockScope:
         writer_lock = repo.path / "locks" / "repo-writer" / "active.lock"
         assert task_lock != writer_lock
 
-        with cli._TaskLock(repo, "repo-writer"), cli._RepoWriterLock(repo):
+        with locking_mod.TaskLock(repo, "repo-writer"), locking_mod.RepoWriterLock(repo):
             assert task_lock.is_file()
             assert writer_lock.is_file()
         _assert_repo_writer_idle(repo)
@@ -2304,12 +2310,12 @@ class TestBackupLockScope:
         namespace = repo.path / "locks" / "repo-writer"
         writer_lock = namespace / "active.lock"
 
-        with cli._RepoWriterLock(repo):
+        with locking_mod.RepoWriterLock(repo):
             assert writer_lock.is_file()
         assert namespace.is_dir()
         assert not writer_lock.exists()
 
-        with cli._RepoWriterLock(repo):
+        with locking_mod.RepoWriterLock(repo):
             assert writer_lock.is_file()
         assert namespace.is_dir()
         assert not writer_lock.exists()
@@ -2322,7 +2328,7 @@ class TestBackupLockScope:
         target2.mkdir()
         repo2 = init_repo(target2, assume_yes=True)
 
-        with cli._RepoWriterLock(repo1), cli._RepoWriterLock(repo2):
+        with locking_mod.RepoWriterLock(repo1), locking_mod.RepoWriterLock(repo2):
             assert (repo1.path / "locks" / "repo-writer" / "active.lock").is_file()
             assert (repo2.path / "locks" / "repo-writer" / "active.lock").is_file()
         _assert_repo_writer_idle(repo1)
@@ -2338,7 +2344,7 @@ class TestBackupLockScope:
         monkeypatch.setattr(cli, "scan_source", boom)
         assert _run(ws, "backup", "--yes") == 1
         _assert_repo_writer_idle(repo)
-        with cli._RepoWriterLock(repo):
+        with locking_mod.RepoWriterLock(repo):
             assert (repo.path / "locks" / "repo-writer" / "active.lock").is_file()
         _assert_repo_writer_idle(repo)
 
@@ -2663,33 +2669,36 @@ class TestPathWithin:
         # 旧 startswith(p + os.sep) 实现的 bug：realpath(卷根) 已以
         # 反斜杠结尾，拼接后前缀失配 → 卷根 containment 被绕过
         root = Path(os.path.splitdrive(str(tmp_path))[0] + os.sep)
-        assert cli._path_within(tmp_path, root) is True
+        assert repositories_mod.path_within(tmp_path, root) is True
         # 反向不成立：卷根不位于其子目录内
-        assert cli._path_within(root, tmp_path) is False
+        assert repositories_mod.path_within(root, tmp_path) is False
 
     def test_equal_paths(self, tmp_path) -> None:
-        assert cli._path_within(tmp_path, tmp_path) is True
+        assert repositories_mod.path_within(tmp_path, tmp_path) is True
 
     def test_nested_paths(self, tmp_path) -> None:
         inner = tmp_path / "a" / "b"
-        assert cli._path_within(inner, tmp_path) is True
-        assert cli._path_within(inner, tmp_path / "a") is True
-        assert cli._path_within(tmp_path / "a", inner) is False
+        assert repositories_mod.path_within(inner, tmp_path) is True
+        assert repositories_mod.path_within(inner, tmp_path / "a") is True
+        assert repositories_mod.path_within(tmp_path / "a", inner) is False
 
     def test_sibling_paths_false(self, tmp_path) -> None:
         a, b = tmp_path / "a", tmp_path / "b"
         a.mkdir()
         b.mkdir()
-        assert cli._path_within(a, b) is False
-        assert cli._path_within(b, a) is False
+        assert repositories_mod.path_within(a, b) is False
+        assert repositories_mod.path_within(b, a) is False
 
     def test_different_drives_false(self) -> None:
         # 不存在的路径 realpath 原样返回；跨盘 commonpath ValueError → False
-        assert cli._path_within(Path("C:/data"), Path("D:/backup")) is False
+        assert repositories_mod.path_within(Path("C:/data"), Path("D:/backup")) is False
 
     def test_unc_root_contains_subdir(self) -> None:
-        assert cli._path_within(Path("//server/share/data"), Path("//server/share")) is True
-        assert cli._path_within(Path("//server/share"), Path("//other/share")) is False
+        assert (
+            repositories_mod.path_within(Path("//server/share/data"), Path("//server/share"))
+            is True
+        )
+        assert repositories_mod.path_within(Path("//server/share"), Path("//other/share")) is False
 
 
 class TestTaskNameValidation:
@@ -2766,8 +2775,8 @@ class TestReportPublication:
         temp = repo.path / "logs" / "unowned-2026-09-18_120000_123456.json.tmp"
         temp.write_bytes(b"not owned by this call")
 
-        with pytest.raises(cli._ReportPublicationError, match="报告发布失败"):
-            cli._write_report(repo, "unowned", {"value": "new report"})
+        with pytest.raises(reports_mod.ReportPublicationError, match="报告发布失败"):
+            reports_mod.write_report(repo, "unowned", {"value": "new report"})
 
         assert temp.read_bytes() == b"not owned by this call"
 
@@ -2796,9 +2805,9 @@ class TestReportPublication:
                 return PartialWriteFailure(stream)
             return stream
 
-        monkeypatch.setattr(cli, "open", failing_open, raising=False)
-        with pytest.raises(cli._ReportPublicationError, match="报告发布失败"):
-            cli._write_report(repo, "cleanup-write", {"value": "payload"})
+        monkeypatch.setattr(reports_mod, "open", failing_open, raising=False)
+        with pytest.raises(reports_mod.ReportPublicationError, match="报告发布失败"):
+            reports_mod.write_report(repo, "cleanup-write", {"value": "payload"})
 
         assert not list((repo.path / "logs").glob("cleanup-write*"))
 
@@ -2817,9 +2826,9 @@ class TestReportPublication:
                 raise OSError(5, "simulated report replace failure")
             return real_replace(source, destination)
 
-        monkeypatch.setattr(cli.os, "replace", fail_report_replace)
-        with pytest.raises(cli._ReportPublicationError, match="报告发布失败"):
-            cli._write_report(repo, "cleanup-replace", {"value": "replacement"})
+        monkeypatch.setattr(reports_mod.os, "replace", fail_report_replace)
+        with pytest.raises(reports_mod.ReportPublicationError, match="报告发布失败"):
+            reports_mod.write_report(repo, "cleanup-replace", {"value": "replacement"})
 
         assert existing.read_bytes() == b"existing report"
         assert not existing.with_name("cleanup-replace-2026-09-18_120000_123456-01.json").exists()
@@ -2840,7 +2849,7 @@ class TestCliContractGaps:
             def now(cls, tz=None):
                 return datetime(2026, 9, 13, 13, 0, 0)
 
-        monkeypatch.setattr(cli, "datetime", FrozenDatetime)
+        monkeypatch.setattr(reports_mod, "datetime", FrozenDatetime)
         assert _run(ws, "verify") == 0
         assert _run(ws, "verify") == 0
         reports = sorted((_repo(ws).path / "logs").glob("verify-*.json"))
@@ -2945,7 +2954,7 @@ class TestM10Resolver:
         _make_repo_at(fake_e / "Backup")
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "Backup")
-        with pytest.raises(cli._IdentityMismatch, match="仓库 id 不匹配"):
+        with pytest.raises(repositories_mod.IdentityMismatch, match="仓库 id 不匹配"):
             cli._resolve_repo(cfg)
 
     def test_case5_multiple_distinct_candidates_rejected(self, tmp_path, monkeypatch) -> None:
@@ -2960,7 +2969,7 @@ class TestM10Resolver:
             "mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\", str(fake_f) + "\\"]
         )
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, info.repo_id, "Backup")
-        with pytest.raises(cli._IdentityMismatch, match="不唯一"):
+        with pytest.raises(repositories_mod.IdentityMismatch, match="不唯一"):
             cli._resolve_repo(cfg)
 
     def test_case5f_same_repo_two_mount_roots_not_ambiguous(self, tmp_path, monkeypatch) -> None:
@@ -2982,7 +2991,7 @@ class TestM10Resolver:
         target = tmp_path / "t" / "Backup"
         info = _make_repo_at(target)
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_B, info.repo_id, _rel_repo_dir(target))
-        with pytest.raises(cli._IdentityMismatch, match="未连接或卷锚已失效"):
+        with pytest.raises(repositories_mod.IdentityMismatch, match="未连接或卷锚已失效"):
             cli._resolve_repo(cfg)
 
     def test_case7_volume_found_repo_missing(self, tmp_path, monkeypatch) -> None:
@@ -3010,8 +3019,8 @@ class TestM10Resolver:
         # 防线 2：_search_anchored join 后 containment 复验（不信任单次校验）
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
         bad_cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "..\\escape")
-        with pytest.raises(cli._IdentityMismatch, match="逃逸"):
-            cli._search_anchored(bad_cfg)
+        with pytest.raises(repositories_mod.IdentityMismatch, match="逃逸"):
+            repositories_mod._search_anchored(bad_cfg)
 
 
 # Phase 2A: characterize the released boundary before moving orchestration.
@@ -3286,8 +3295,8 @@ class TestExtractionFinalization:
             for path in (task_lock, writer_lock):
                 assert f"pid={os.getpid()} " in path.read_text(encoding="utf-8")
 
-        original_enter = cli._ExclusiveFileLock.__enter__
-        original_exit = cli._ExclusiveFileLock.__exit__
+        original_enter = locking_mod._ExclusiveFileLock.__enter__
+        original_exit = locking_mod._ExclusiveFileLock.__exit__
 
         def enter(lock):
             if lock._path == writer_lock:
@@ -3304,8 +3313,8 @@ class TestExtractionFinalization:
             original_exit(lock, *exc)
             calls.append("unlock-task" if lock._path == task_lock else "unlock-repo")
 
-        monkeypatch.setattr(cli._ExclusiveFileLock, "__enter__", enter)
-        monkeypatch.setattr(cli._ExclusiveFileLock, "__exit__", leave)
+        monkeypatch.setattr(locking_mod._ExclusiveFileLock, "__enter__", enter)
+        monkeypatch.setattr(locking_mod._ExclusiveFileLock, "__exit__", leave)
         original_write = cli.write_manifest
 
         def publish(info, manifest):
@@ -3323,7 +3332,7 @@ class TestExtractionFinalization:
             (recovery_mod, "discard_incomplete", "cleanup", cli.RecoveryError),
             (cli, "build_retention_plan", "plan", cli.RetentionError),
             (cli, "apply_retention_plan", "apply", cli.RetentionError),
-            (cli, "_write_report", "report", cli._ReportPublicationError),
+            (reports_mod, "write_report", "report", reports_mod.ReportPublicationError),
         ]
 
         def wrap(original, stage, error_type):
@@ -3392,10 +3401,10 @@ class TestExtractionFinalization:
 
         def fail_report(*args, **kwargs):
             assert len(completed) == 1 and completed[0].ok is (not missing)
-            raise cli._ReportPublicationError("injected verify report failure")
+            raise reports_mod.ReportPublicationError("injected verify report failure")
 
         monkeypatch.setattr(cli, "verify_snapshot", verify)
-        monkeypatch.setattr(cli, "_write_report", fail_report)
+        monkeypatch.setattr(reports_mod, "write_report", fail_report)
         assert _run(ws, "verify", "--json") == 1  # neither normal 0 nor integrity-failure 4
         captured = capsys.readouterr()
         assert captured.out == ""

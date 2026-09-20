@@ -1,6 +1,7 @@
 """Mirrorly 命令行接口（T-09，CLI_SPEC v1.0 / MVP_TASKS T-09）。
 
-职责边界：本模块只做参数解析、确认流程、退出码映射与报告落盘，
+职责边界：本模块保留参数解析、确认流程、输出与退出码映射、命令编排，
+配置/仓库解析、锁与报告落盘基础设施由 application 层提供；
 把 T-01~T-08 的 library API 编排成五个命令；不重新实现任何业务逻辑，
 不绕过底层模块的安全边界（Restore plan/apply、Retention 执行前复核、
 incomplete 不当 complete 等语义全部在底层模块内强制执行）。
@@ -30,11 +31,11 @@ from pathlib import Path
 
 from . import __version__
 from . import volume as _volume
+from .application import locking, repositories, tasks
+from .application import reports as app_reports
 from .config import (
     ConfigError,
     TaskConfig,
-    load_task_config,
-    validate_anchor,
     validate_task_name,
     write_task_config,
 )
@@ -56,18 +57,16 @@ from .recovery import RecoveryError, build_resume_baseline, clean_tmp_residue
 from .repo import (
     HARDLINK_FILESYSTEMS,
     REPO_DIR_NAME,
-    REPO_INFO_FILE,
     RepoError,
     RepoFormatError,
     RepoInfo,
     get_volume_info,
     init_repo,
-    load_repo,
     migrate_repo_to_v2,
 )
 from .restore import RestoreError, apply_restore, plan_restore
 from .retention import RetentionError, apply_retention_plan, build_retention_plan
-from .scan import PreviousEntry, detect_changes, scan_source, to_long_path
+from .scan import PreviousEntry, detect_changes, scan_source
 from .snapshot import (
     SnapshotError,
     generate_snapshot_id,
@@ -94,18 +93,6 @@ DEFAULT_TASK_NAME = "default"
 
 class _UserAbort(Exception):
     """用户中止（交互确认拒绝 / 非交互环境缺少 --yes）→ 退出码 6。"""
-
-
-class _LockBusy(Exception):
-    """任务锁被占用（另一实例运行中）→ 退出码 6。"""
-
-
-class _ReportPublicationError(RepoError):
-    """报告 JSON 未能完成原子 publication。"""
-
-
-class _IdentityMismatch(Exception):
-    """卷标识不匹配（盘符漂移/插错盘，M10）→ 退出码 5。"""
 
 
 class _UsageError(Exception):
@@ -190,31 +177,12 @@ def _human_bytes(n: int) -> str:
 
 
 def _resolve_task_config(args: argparse.Namespace) -> TaskConfig:
-    """解析任务配置：--task 指定；省略时要求 config.d/ 下恰有一个任务。"""
+    """Adapt CLI defaults/arguments and task-selection errors to the shared loader."""
     config_root = Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT)
-    config_d = config_root / "config.d"
-    task = getattr(args, "task", None)
-    if task:
-        # --task 直接拼进文件路径，非法值属用法错误（防路径逃逸）
-        try:
-            validate_task_name(task)
-        except ConfigError as e:
-            raise _UsageError(f"--task 非法：{e}") from e
-        return load_task_config(config_d / f"{task}.toml")
-    if not config_d.is_dir():
-        raise ConfigError(f"未找到任务配置目录: {config_d}（请先运行 mirrorly init）")
-    candidates = sorted(config_d.glob("*.toml"))
-    if not candidates:
-        raise ConfigError(f"未找到任何任务配置: {config_d}（请先运行 mirrorly init）")
-    if len(candidates) > 1:
-        names = ", ".join(p.stem for p in candidates)
-        raise _UsageError(f"存在多个任务（{names}），必须用 --task 指定")
-    return load_task_config(candidates[0])
-
-
-def _guid_matches(current: str | None, expected: str) -> bool:
-    """Volume GUID path 比对（canonical 形式，大小写不敏感）。"""
-    return current is not None and current.casefold() == expected.casefold()
+    try:
+        return tasks.resolve_task_config(config_root, getattr(args, "task", None))
+    except tasks.TaskSelectionError as e:
+        raise _UsageError(str(e)) from e
 
 
 def _notify_relocation(cfg: TaskConfig, repo: RepoInfo) -> None:
@@ -225,194 +193,17 @@ def _notify_relocation(cfg: TaskConfig, repo: RepoInfo) -> None:
     )
 
 
-def _search_anchored(cfg: TaskConfig) -> RepoInfo:
-    """M10 Phase 1：按已登记 Volume GUID 搜索当前挂载点并确认仓库。
-
-    fail-closed 状态机（冻结裁定）：
-    - GUID 无当前挂载点 → _IdentityMismatch（exit 5，"目标备份卷未连接或卷锚已失效"）
-    - GUID 定位成功但 repo_id 不匹配 → exit 5
-    - GUID 定位成功但卷序列号不匹配 → exit 5
-    - 卷在但预期仓库路径缺失 → RepoError（exit 1，不自动 init）
-    - 多个不同仓库候选 → exit 5（同一卷的多个挂载点指向同一 repo，samefile 去重）
-
-    绝不用 serial + repo_id 自动认领 GUID 解析不到的卷（无身份降级 fallback）。
-    """
-    assert cfg.volume_guid is not None and cfg.repo_id is not None and cfg.repo_dir is not None
-    try:
-        mount_roots = _volume.get_mount_roots(cfg.volume_guid)
-    except _volume.VolumeError as e:
-        raise _IdentityMismatch(f"目标备份卷未连接或卷锚已失效（无法解析 volume GUID）: {e}") from e
-    if not mount_roots:
-        raise _IdentityMismatch(
-            f"目标备份卷未连接或卷锚已失效（volume GUID 无当前挂载点）: {cfg.volume_guid}"
-        )
-    candidates: list[tuple[Path, RepoInfo]] = []
-    for m in mount_roots:
-        root = Path(m)
-        # join 后 containment 复验：不信任 config load 时的单次校验（防运行时逃逸）
-        target_dir = root if cfg.repo_dir == "." else root / cfg.repo_dir
-        if not _path_within(target_dir, root):
-            raise _IdentityMismatch(f"repo_dir 逃逸出卷挂载根（拒绝）: {cfg.repo_dir!r} @ {m}")
-        info_file = target_dir / REPO_DIR_NAME / REPO_INFO_FILE
-        if not info_file.exists():
-            continue
-        repo = load_repo(target_dir)
-        if repo.repo_id != cfg.repo_id:
-            raise _IdentityMismatch(
-                f"卷定位成功但预期仓库 id 不匹配（配置 {cfg.repo_id}，"
-                f"实际 {repo.repo_id}），拒绝继续"
-            )
-        current = get_volume_info(target_dir)
-        if current.serial != repo.volume.serial:
-            raise _IdentityMismatch(
-                f"目标卷标识不匹配：仓库记录序列号 {repo.volume.serial}，"
-                f"当前卷序列号 {current.serial}，拒绝继续"
-            )
-        candidates.append((target_dir, repo))
-    # 同一卷的多个挂载点指向同一物理仓库：按文件身份去重（samefile，非字符串比较）
-    unique: list[tuple[Path, RepoInfo]] = []
-    for td, repo in candidates:
-        try:
-            dup = any(os.path.samefile(td / REPO_DIR_NAME, u / REPO_DIR_NAME) for u, _ in unique)
-        except OSError:
-            dup = False
-        if not dup:
-            unique.append((td, repo))
-    if len(unique) == 1:
-        repo = unique[0][1]
-        _notify_relocation(cfg, repo)
-        return repo
-    if not unique:
-        raise RepoError(
-            "注册目标卷存在，但预期仓库路径缺失（"
-            + "、".join(mount_roots)
-            + f" 下未找到 {cfg.repo_dir}\\MirrorlyRepo；不会自动初始化新仓库）"
-        )
-    raise _IdentityMismatch(
-        "卷定位结果不唯一（多个不同仓库候选，拒绝猜测）: " + ", ".join(str(td) for td, _ in unique)
-    )
-
-
 def _resolve_repo(cfg: TaskConfig) -> RepoInfo:
-    """加载仓库并解析目标位置（M10：卷锚 + 盘符漂移自动重定位）。
-
-    任何解析失败均发生在任务锁/源扫描/一切仓库写入之前（零写入）：
-    - anchored 配置（volume_guid/repo_id/repo_dir 齐全）：
-      路径有效且 guid+repo_id+serial 全匹配 → 正常使用；
-      路径失联或被其他卷占用 → 按 GUID 搜索同一卷并重定位；
-    - legacy 配置（无卷锚）：保持既有行为（path + serial 校验，不自动猜卷）；
-    - 卷在但仓库缺失 → RepoError（exit 1）；身份域失败 → exit 5。
-    """
-    # 防直接构造 TaskConfig 绕过 load 边界（写入边界校验之外的第三重防线）
-    validate_anchor(cfg.volume_guid, cfg.repo_id, cfg.repo_dir)
-    anchored = cfg.volume_guid is not None
-    path = Path(cfg.target_path)
-    info_file = path / REPO_DIR_NAME / REPO_INFO_FILE
-
-    if info_file.exists():
-        repo = load_repo(path)
-        if anchored:
-            assert cfg.volume_guid is not None and cfg.repo_id is not None
-            try:
-                current_guid = _volume.get_volume_guid_for_path(path)
-            except _volume.VolumeError:
-                current_guid = None
-            if not _guid_matches(current_guid, cfg.volume_guid):
-                # 配置路径当前不在已登记卷上（盘符漂移/旧盘符被其他卷占用）→ 搜索
-                return _search_anchored(cfg)
-            if repo.repo_id != cfg.repo_id:
-                raise _IdentityMismatch(
-                    f"预期仓库 id 不匹配（配置记录 {cfg.repo_id}，实际 {repo.repo_id}），拒绝继续"
-                )
-            current = get_volume_info(path)
-            if current.serial != repo.volume.serial:
-                raise _IdentityMismatch(
-                    f"目标卷标识不匹配：仓库记录序列号 {repo.volume.serial}，"
-                    f"当前卷序列号 {current.serial}，拒绝继续"
-                )
-            return repo
-        # legacy：既有行为（MVP_TASKS 之前语义，不自动猜卷）
-        current = get_volume_info(path)
-        if current.serial != repo.volume.serial:
-            raise _IdentityMismatch(
-                f"目标卷标识不匹配：仓库记录序列号 {repo.volume.serial}，"
-                f"当前卷序列号 {current.serial}（盘符漂移或插错盘），拒绝继续"
-            )
-        return repo
-
-    if anchored:
-        return _search_anchored(cfg)
-    raise RepoError(
-        f"未找到仓库（repo.json 不存在）: {info_file}\n"
-        "该任务配置为 legacy 格式（无卷锚），无法自动重定位；"
-        "请重新运行 mirrorly init 登记目标卷，或手工修正 target.path"
-    )
+    """Present relocation facts while leaving identity resolution in application."""
+    result = repositories.resolve_repo(cfg)
+    if result.relocated:
+        _notify_relocation(cfg, result.repo)
+    return result.repo
 
 
 def _latest_complete(repo: RepoInfo) -> ManifestSummary | None:
     """选择默认 complete；multiple-legacy ambiguity 由 manifest helper 拒绝。"""
     return select_default_complete(list_manifests(repo))
-
-
-class _ExclusiveFileLock:
-    """以 O_EXCL lockfile 提供保守的跨进程互斥；不自动清理 stale lock。"""
-
-    def __init__(self, path: Path, busy_message: str) -> None:
-        self._path = path
-        self._busy_message = busy_message
-
-    def __enter__(self) -> _ExclusiveFileLock:
-        try:
-            fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as e:
-            raise _LockBusy(self._busy_message) from e
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(f"pid={os.getpid()} acquired_at={datetime.now().isoformat()}\n")
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        try:
-            self._path.unlink()
-        except OSError:
-            pass
-
-
-class _TaskLock(_ExclusiveFileLock):
-    """任务锁（locks/<task>.lock）；保留 task identity / UX 互斥语义。
-
-    MVP 语义：锁文件存在即视为另一实例运行中，不做 stale 自动清理
-    （崩溃残留由用户确认后手工删除，避免误判活人锁）。
-    """
-
-    def __init__(self, repo: RepoInfo, task_name: str) -> None:
-        path = repo.path / "locks" / f"{task_name}.lock"
-        super().__init__(
-            path,
-            f"任务锁被占用: {path}（另一实例可能正在运行；确认无实例运行后可手工删除该锁文件）",
-        )
-
-
-class _RepoWriterLock(_ExclusiveFileLock):
-    """仓库写锁；序列化同一 repo 的所有 non-dry-run backup transaction。
-
-    独立子命名空间 ``locks/repo-writer/active.lock`` 不会与合法的
-    ``locks/<task>.lock`` 身份碰撞。与任务锁一致，stale lock 只允许人工确认
-    后清理；正常/异常退出时只移除本进程创建的 lockfile，命名空间持久保留。
-    """
-
-    def __init__(self, repo: RepoInfo) -> None:
-        self._namespace = repo.path / "locks" / "repo-writer"
-        path = self._namespace / "active.lock"
-        super().__init__(
-            path,
-            f"仓库写锁被占用: {path}（同一仓库正由另一备份事务修改；"
-            "确认无实例运行后可手工删除该锁文件）",
-        )
-
-    def __enter__(self) -> _RepoWriterLock:
-        self._namespace.mkdir(exist_ok=True)
-        super().__enter__()
-        return self
 
 
 def _snapshot_id_free(repo: RepoInfo, snapshot_id: str) -> bool:
@@ -437,65 +228,9 @@ def _new_snapshot_id(repo: RepoInfo, lifecycle_seq: int) -> str:
     )
 
 
-def _write_report(repo: RepoInfo, name: str, data: dict) -> Path:
-    """报告落盘到仓库 logs/（M9）：临时文件 + 原子改名（不产生半个 JSON）。
-
-    文件名带微秒时间戳；仍撞名（同微秒）时追加 ``-01`` 等后缀，
-    绝不静默覆盖已有报告。
-    """
-    logs_dir = repo.path / "logs"
-    tmp: Path | None = None
-    owns_tmp = False
-    try:
-        Path(to_long_path(logs_dir)).mkdir(exist_ok=True)
-        ts = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
-        final = logs_dir / f"{name}-{ts}.json"
-        for n in range(1, 100):
-            if not os.path.exists(to_long_path(final)):
-                break
-            final = logs_dir / f"{name}-{ts}-{n:02d}.json"
-        else:
-            raise RepoError(f"无法分配唯一报告文件名: {name}-{ts}")
-
-        tmp = final.with_suffix(final.suffix + ".tmp")
-        payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-        # ``x`` 模式同时建立本次调用对 temp 的 ownership；若同名 temp
-        # 已存在则 fail closed，异常清理不得删除其他调用留下的文件。
-        stream = open(to_long_path(tmp), "x", encoding="utf-8", newline="\n")
-        owns_tmp = True
-        with stream:
-            stream.write(payload)
-        os.replace(to_long_path(tmp), to_long_path(final))
-        return final
-    except OSError as exc:
-        if owns_tmp and tmp is not None:
-            try:
-                os.remove(to_long_path(tmp))
-            except OSError:
-                # Cleanup is best-effort and must not replace the publication error.
-                pass
-        raise _ReportPublicationError(f"报告发布失败: {tmp or logs_dir}（{exc}）") from exc
-
-
 # ---------------------------------------------------------------------------
 # init
 # ---------------------------------------------------------------------------
-
-
-def _path_within(child: Path, parent: Path) -> bool:
-    """child 是否与 parent 相同或位于其内部（realpath + normcase，防简单前缀误判）。
-
-    用 os.path.commonpath 判断包含关系：字符串 startswith 在 Windows 卷根
-    上会出错（realpath("C:\\") 以反斜杠结尾，再拼 os.sep 后前缀失配，
-    卷根 source/target 的 containment 检查被绕过）。commonpath 在
-    不同 drive（或混合类型）时抛 ValueError，按「不包含」处理。
-    """
-    c = os.path.normcase(os.path.realpath(child))
-    p = os.path.normcase(os.path.realpath(parent))
-    try:
-        return os.path.commonpath([c, p]) == p
-    except ValueError:
-        return False
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -522,10 +257,10 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     # source 与 prospective repo 不得互相包含（备份源含仓库会自我吞没/递归）
     prospective_repo = target / REPO_DIR_NAME
-    if _path_within(prospective_repo, source):
+    if repositories.path_within(prospective_repo, source):
         _err(f"备份目标仓库 {prospective_repo} 位于源目录 {source} 内，拒绝初始化")
         return EXIT_ERROR
-    if _path_within(source, prospective_repo):
+    if repositories.path_within(source, prospective_repo):
         _err(f"源目录 {source} 位于备份目标仓库 {prospective_repo} 内，拒绝初始化")
         return EXIT_ERROR
 
@@ -725,7 +460,7 @@ def cmd_backup(args: argparse.Namespace) -> int:
     # 真实执行：按 task → repo 顺序取锁。task lock 保留身份/UX 语义，repo writer
     # lock 则是跨 task 的 mutation safety boundary；两者覆盖 recovery/incomplete
     # 基线选择、源扫描、变更检测、快照/manifest 写入、续传善后、retention 与报告。
-    with _TaskLock(repo, cfg.name), _RepoWriterLock(repo):
+    with locking.TaskLock(repo, cfg.name), locking.RepoWriterLock(repo):
         repo = migrate_repo_to_v2(repo)
         started = time.monotonic()
         baseline = _select_baseline(args, cfg, repo)
@@ -827,8 +562,8 @@ def cmd_backup(args: argparse.Namespace) -> int:
             "retention_deleted": list(retention_deleted),
         }
         try:
-            report_path = _write_report(repo, f"backup-{snapshot_id}", report)
-        except _ReportPublicationError as exc:
+            report_path = app_reports.write_report(repo, f"backup-{snapshot_id}", report)
+        except app_reports.ReportPublicationError as exc:
             raise RepoError(
                 f"快照 {snapshot_id} 已成功提交（complete manifest 已发布），"
                 f"但必需报告发布失败；备份命令返回错误: {exc}"
@@ -973,8 +708,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
     }
     name = f"verify-{targets[0]}" if len(targets) == 1 else "verify-all"
     try:
-        report_path = _write_report(repo, name, report)
-    except _ReportPublicationError as exc:
+        report_path = app_reports.write_report(repo, name, report)
+    except app_reports.ReportPublicationError as exc:
         outcome = "失败" if failed else "通过"
         raise RepoError(
             f"校验已完成（结果: {outcome}），但必需报告发布失败；verify 命令返回错误: {exc}"
@@ -1229,10 +964,10 @@ def main(argv: list[str] | None = None) -> int:
     except _UsageError as e:
         _err(str(e))
         return EXIT_USAGE
-    except _LockBusy as e:
+    except locking.LockBusy as e:
         _err(str(e))
         return EXIT_ABORTED
-    except _IdentityMismatch as e:
+    except repositories.IdentityMismatch as e:
         _err(str(e))
         return EXIT_IDENTITY
     except RepoFormatError as e:
