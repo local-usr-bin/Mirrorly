@@ -3012,3 +3012,394 @@ class TestM10Resolver:
         bad_cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "..\\escape")
         with pytest.raises(cli._IdentityMismatch, match="逃逸"):
             cli._search_anchored(bad_cfg)
+
+
+# Phase 2A: characterize the released boundary before moving orchestration.
+# These tests exercise cli.main and real temporary repositories; fault injection
+# belongs at the currently executing seam, not at a future application interface.
+def _assert_json_contract(actual, expected) -> None:
+    """Compare complete existing JSON values, including types (bool is not int)."""
+    assert type(actual) is type(expected)
+    if isinstance(expected, dict):
+        assert actual.keys() == expected.keys()
+        for key in expected:
+            _assert_json_contract(actual[key], expected[key])
+    elif isinstance(expected, list):
+        assert len(actual) == len(expected)
+        for value, reference in zip(actual, expected, strict=True):
+            _assert_json_contract(value, reference)
+    else:
+        assert actual == expected
+
+
+class TestExtractionOutputContract:
+    def test_init_json_shape_and_channels(self, ws, capsys) -> None:
+        assert _init(ws, "--json") == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        repo = _repo(ws)
+        _assert_json_contract(
+            json.loads(captured.out),
+            {
+                "repo": str(repo.path),
+                "repo_id": repo.repo_id,
+                "filesystem": "NTFS",
+                "volume_serial": repo.volume.serial,
+                "hardlinks": True,
+                "hash_algorithm": repo.hash_algorithm,
+                "filesystem_policy": "strict",
+                "task_config": str(ws["config"] / "config.d" / "default.toml"),
+            },
+        )
+
+    def test_backup_preview_and_persisted_report_contract(self, ws, snap_ids, capsys) -> None:
+        # Creation order deliberately differs from the defined lexical output order.
+        for name in ("z.txt", "sub/b.txt", "a.txt"):
+            _write(ws["src"] / name, b"data")
+        assert _init(ws) == 0
+        capsys.readouterr()
+        repo = _repo(ws)
+        before = {
+            p.relative_to(repo.path): p.read_bytes() for p in repo.path.rglob("*") if p.is_file()
+        }
+        assert _run(ws, "backup", "--dry-run", "--json") == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        changes = {
+            "added": ["a.txt", "sub/b.txt", "z.txt"],
+            "modified": [],
+            "deleted": [],
+            "suspected_modified": [],
+        }
+        _assert_json_contract(
+            json.loads(captured.out),
+            {
+                "command": "backup",
+                "dry_run": True,
+                "changes": {**changes, "added_dirs": ["sub"], "deleted_dirs": []},
+                "skipped": [],
+            },
+        )
+        assert {
+            p.relative_to(repo.path): p.read_bytes() for p in repo.path.rglob("*") if p.is_file()
+        } == before
+
+        assert _run(ws, "backup", "--yes", "--json") == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        payload = json.loads(captured.out)
+        sid = list_manifests(repo)[0].snapshot_id
+        report_path = Path(payload.pop("report_path"))
+        assert report_path.parent == repo.path / "logs"
+        assert type(payload["duration_seconds"]) is float and payload["duration_seconds"] >= 0
+        expected = {
+            "command": "backup",
+            "snapshot_id": sid,
+            "status": "complete",
+            "source": str(ws["src"].resolve()),
+            "duration_seconds": payload["duration_seconds"],  # only the elapsed time is dynamic
+            "full_hash": False,
+            "resumed_from": None,
+            "resume_untrusted": [],
+            "resume_uncertified": [],
+            "changes": changes,
+            "linked": [],
+            "copied": ["a.txt", "sub/b.txt", "z.txt"],
+            "skipped": [],
+            "bytes_written": 12,
+            "retention_deleted": [],
+        }
+        _assert_json_contract(payload, expected)
+        # The stored report has no report_path; only CLI stdout adds it afterwards.
+        _assert_json_contract(json.loads(report_path.read_text(encoding="utf-8")), expected)
+
+    @pytest.mark.parametrize("quick", [False, True])
+    @pytest.mark.parametrize("missing", [False, True])
+    def test_list_and_verify_json_order_shape_and_report(
+        self, ws, monkeypatch, capsys, quick, missing
+    ) -> None:
+        def reverse_clock_id(now=None, *, lifecycle_seq):
+            day = 20 - lifecycle_seq
+            return (
+                f"2026-09-{day:02d}_000000-s{lifecycle_seq:020d}-"
+                f"{UUID(int=lifecycle_seq + 1, version=4).hex}"
+            )
+
+        monkeypatch.setattr(cli, "generate_snapshot_id", reverse_clock_id)
+        _write(ws["src"] / "a.txt", b"alpha")
+        assert _init(ws) == 0
+        for _ in range(2):
+            assert _run(ws, "backup", "--yes") == 0
+        capsys.readouterr()
+        repo = _repo(ws)
+        summaries = list_manifests(repo)
+        assert [s.lifecycle_seq for s in summaries] == [1, 0]
+        assert _run(ws, "list", "--json") == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        _assert_json_contract(
+            json.loads(captured.out),
+            [
+                {
+                    "snapshot_id": s.snapshot_id,
+                    "status": "complete",
+                    "created_at": s.created_at,
+                    "stats": {"files": 1, "dirs": 0, "total_bytes": 5},
+                }
+                for s in summaries
+            ],
+        )
+
+        if missing:
+            # Remove just one test snapshot's link, leaving the other version intact.
+            (repo.path / "snapshots" / summaries[0].snapshot_id / "a.txt").unlink()
+        assert _run(ws, "verify", "--all", "--json", *(["--quick"] if quick else [])) == (
+            4 if missing else 0
+        )
+        captured = capsys.readouterr()
+        assert [
+            line.split(":", 1)[0]
+            for line in captured.err.splitlines()
+            if ": " in line and line.startswith("2026-")
+        ] == [s.snapshot_id for s in summaries]
+        payload = json.loads(captured.out)
+        report_path = Path(payload.pop("report_path"))
+        expected = {
+            "command": "verify",
+            "quick": quick,
+            "ok": not missing,
+            "snapshots": [
+                {
+                    "snapshot_id": s.snapshot_id,
+                    "quick": quick,
+                    "ok": not (missing and i == 0),
+                    "checked_files": 1,
+                    "checked_dirs": 0,
+                    "hashed_files": 0 if quick or (missing and i == 0) else 1,
+                    "unhashed_entries": 0,
+                    "issues": [{"path": "a.txt", "kind": "missing", "detail": "文件不存在"}]
+                    if missing and i == 0
+                    else [],
+                    "extras": [],
+                }
+                for i, s in enumerate(summaries)
+            ],
+        }
+        _assert_json_contract(payload, expected)
+        _assert_json_contract(json.loads(report_path.read_text(encoding="utf-8")), expected)
+
+    @pytest.mark.parametrize("policy", ["never", "always"])
+    def test_restore_json_and_plan_channel_without_persisted_report(
+        self, ws, snap_ids, capsys, policy
+    ) -> None:
+        for name in ("z.txt", "sub/b.txt", "a.txt"):
+            _write(ws["src"] / name, b"data")
+        assert _init(ws) == 0
+        assert _run(ws, "backup", "--yes") == 0
+        capsys.readouterr()
+        repo = _repo(ws)
+        reports_before = set((repo.path / "logs").iterdir())
+        dest = ws["src"].parent / "restored"
+        _write(dest / "a.txt", b"existing")
+        _write(dest / "extra.txt", b"keep")
+        assert _run(ws, "restore", "--to", str(dest), "--overwrite", policy, "--yes", "--json") == (
+            3 if policy == "never" else 0
+        )
+        captured = capsys.readouterr()
+        assert "恢复计划:" in captured.err
+        _assert_json_contract(
+            json.loads(captured.out),
+            {
+                "command": "restore",
+                "snapshot_id": list_manifests(repo)[0].snapshot_id,
+                "destination": str(dest),
+                "restored": (["a.txt"] if policy == "always" else []) + ["z.txt", "sub/b.txt"],
+                "dirs_created": ["sub"],
+                "skipped": [{"path": "a.txt", "reason": "目标已存在（never）"}]
+                if policy == "never"
+                else [],
+                "conflicts": [],
+                "errors": [],
+                "leftovers": [],
+                "bytes_written": 8 if policy == "never" else 12,
+            },
+        )
+        assert (dest / "extra.txt").read_bytes() == b"keep"
+        assert set((repo.path / "logs").iterdir()) == reports_before
+
+    @pytest.mark.parametrize("command", ["backup", "list", "verify", "restore"])
+    def test_missing_config_json_errors_remain_stderr(self, ws, capsys, command) -> None:
+        extra = ["--to", str(ws["src"].parent / "restore")] if command == "restore" else []
+        assert _run(ws, command, "--json", *extra) == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "未找到任务配置目录" in captured.err
+
+    @pytest.mark.parametrize("answer", ["", "maybe"])
+    def test_confirm_and_ask_keep_distinct_defaults(self, monkeypatch, answer) -> None:
+        _answer(monkeypatch, answer)
+        args = SimpleNamespace(yes=False, json=False)
+        with pytest.raises(cli._UserAbort, match="拒绝"):
+            cli._confirm(args, "confirm")
+        assert cli._ask(args, "resume") is True
+
+
+class TestExtractionFinalization:
+    def test_init_config_write_failure_keeps_initialized_repository(
+        self, ws, monkeypatch, capsys
+    ) -> None:
+        def fail_config(cfg, config_root):
+            repo = load_repo(cfg.target_path)
+            assert repo.repo_id == cfg.repo_id
+            assert (repo.path / "lifecycle.json").is_file()
+            assert list_manifests(repo) == []
+            raise OSError("injected config write failure")
+
+        monkeypatch.setattr(cli, "write_task_config", fail_config)
+        assert _init(ws, "--json") == 1
+        captured = capsys.readouterr()
+        assert captured.out == "" and "injected config write failure" in captured.err
+        repo = _repo(ws)  # repository publication is NOT rolled back
+        assert (repo.path / "repo.json").is_file()
+        assert (repo.path / "lifecycle.json").is_file()
+        assert list_manifests(repo) == []
+        assert not (ws["config"] / "config.d" / "default.toml").exists()
+
+    @pytest.mark.parametrize("failure", [None, "cleanup", "plan", "apply", "report"])
+    def test_post_complete_stages_keep_both_locks_and_stop_at_failure(
+        self, backed_up, monkeypatch, capsys, failure
+    ) -> None:
+        import mirrorly.recovery as recovery_mod
+
+        ws = backed_up
+        repo = _repo(ws)
+        incomplete = TestBackupResume()._make_incomplete(ws)
+        old_complete = {s.snapshot_id for s in list_manifests(repo) if s.status == "complete"}
+        reports_before = set((repo.path / "logs").iterdir())
+        capsys.readouterr()
+        calls = []
+        committed = []
+        task_lock = repo.path / "locks" / "default.lock"
+        writer_lock = repo.path / "locks" / "repo-writer" / "active.lock"
+
+        def both_locked():
+            for path in (task_lock, writer_lock):
+                assert f"pid={os.getpid()} " in path.read_text(encoding="utf-8")
+
+        original_enter = cli._ExclusiveFileLock.__enter__
+        original_exit = cli._ExclusiveFileLock.__exit__
+
+        def enter(lock):
+            if lock._path == writer_lock:
+                assert task_lock.is_file()  # task precedes repository writer acquisition
+            result = original_enter(lock)
+            calls.append("lock-task" if lock._path == task_lock else "lock-repo")
+            return result
+
+        def leave(lock, *exc):
+            if lock._path == writer_lock:
+                both_locked()
+            else:
+                assert task_lock.is_file() and not writer_lock.exists()
+            original_exit(lock, *exc)
+            calls.append("unlock-task" if lock._path == task_lock else "unlock-repo")
+
+        monkeypatch.setattr(cli._ExclusiveFileLock, "__enter__", enter)
+        monkeypatch.setattr(cli._ExclusiveFileLock, "__exit__", leave)
+        original_write = cli.write_manifest
+
+        def publish(info, manifest):
+            both_locked()
+            result = original_write(info, manifest)
+            if manifest.status == "complete":
+                # Record only AFTER the real publication has returned successfully.
+                load_manifest(info, manifest.snapshot_id, require_complete=True)
+                committed.append(manifest.snapshot_id)
+                calls.append("commit")
+            return result
+
+        monkeypatch.setattr(cli, "write_manifest", publish)
+        stages = [
+            (recovery_mod, "discard_incomplete", "cleanup", cli.RecoveryError),
+            (cli, "build_retention_plan", "plan", cli.RetentionError),
+            (cli, "apply_retention_plan", "apply", cli.RetentionError),
+            (cli, "_write_report", "report", cli._ReportPublicationError),
+        ]
+
+        def wrap(original, stage, error_type):
+            def execute(*args, **kwargs):
+                both_locked()
+                assert len(committed) == 1
+                calls.append(stage)
+                if failure == stage:
+                    raise error_type(f"injected {stage} failure")
+                return original(*args, **kwargs)
+
+            return execute
+
+        for module, name, stage, error_type in stages:
+            monkeypatch.setattr(module, name, wrap(getattr(module, name), stage, error_type))
+
+        assert _run(ws, "backup", "--yes", "--json") == (1 if failure else 0)
+        captured = capsys.readouterr()
+        executed = ["cleanup", "plan", "apply", "report"]
+        if failure:
+            executed = executed[: executed.index(failure) + 1]
+            assert captured.out == ""
+            assert f"injected {failure} failure" in captured.err
+            assert set((repo.path / "logs").iterdir()) == reports_before
+            if failure == "report":
+                assert committed[0] in captured.err and "已成功提交" in captured.err
+        else:
+            payload = json.loads(captured.out)
+            assert payload["snapshot_id"] == committed[0]
+            assert payload["resumed_from"] == incomplete
+            assert len(set((repo.path / "logs").iterdir()) - reports_before) == 1
+        assert calls == [
+            "lock-task",
+            "lock-repo",
+            "commit",
+            *executed,
+            "unlock-repo",
+            "unlock-task",
+        ]
+        assert {s.snapshot_id for s in list_manifests(repo) if s.status == "complete"} == (
+            old_complete | set(committed)
+        )
+        assert verify_snapshot(repo, committed[0]).ok
+        assert (repo.path / "manifests" / f"{incomplete}.json").exists() == (failure == "cleanup")
+        assert (repo.path / "snapshots" / incomplete).exists() == (failure == "cleanup")
+        _assert_repo_writer_idle(repo)
+
+    @pytest.mark.parametrize("missing", [False, True])
+    def test_verify_completed_but_report_failed_overrides_integrity_exit(
+        self, backed_up, monkeypatch, capsys, missing
+    ) -> None:
+        ws = backed_up
+        repo = _repo(ws)
+        sid = list_manifests(repo)[0].snapshot_id
+        if missing:
+            (repo.path / "snapshots" / sid / "a.txt").unlink()
+        reports_before = set((repo.path / "logs").iterdir())
+        capsys.readouterr()
+        completed = []
+        original = cli.verify_snapshot
+
+        def verify(*args, **kwargs):
+            result = original(*args, **kwargs)
+            completed.append(result)
+            return result
+
+        def fail_report(*args, **kwargs):
+            assert len(completed) == 1 and completed[0].ok is (not missing)
+            raise cli._ReportPublicationError("injected verify report failure")
+
+        monkeypatch.setattr(cli, "verify_snapshot", verify)
+        monkeypatch.setattr(cli, "_write_report", fail_report)
+        assert _run(ws, "verify", "--json") == 1  # neither normal 0 nor integrity-failure 4
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert f"校验已完成（结果: {'失败' if missing else '通过'}）" in captured.err
+        assert "必需报告发布失败" in captured.err and "已成功提交" not in captured.err
+        assert set((repo.path / "logs").iterdir()) == reports_before
+        assert load_manifest(repo, sid, require_complete=True).status == "complete"
