@@ -5,7 +5,7 @@
 
 **当前实施状态（2026-09-20）**：[Phase 1C Backup Setup UX Prototype](PHASE1C.md)
 **PASS — product review approved**，含最终 responsive policy；真实只读文件夹浏览 + 两步确认，Create 仅显示原型提示，不连接 core。
-Python 接入准备已推进至 [Phase 2C：共享 setup/init 与只读 preflight](PHASE2.md)：Phase 2B 基础设施继续使用，CLI init 已调用共享服务；完整 backup 事务仍在 CLI，GUI Create Backup 和 fake worker 仍是原型。
+Python 接入准备已推进至 [Phase 2D：共享 Backup 事务](PHASE2.md)（2026-09-21）：Phase 2B 基础设施、Phase 2C setup/init 与只读 preflight 继续使用；CLI init/backup 已调用共享服务，GUI Create Backup / Back up now 和 fake worker 仍是原型。尚无生产 worker、progress 或 cooperative cancellation。
 [Phase 1B Visual Shell & Home Prototype](PHASE1B.md) 已冻结为
 **PASS — visual review approved**（`00d07da0bd8fe2e3350523c57eb6c2d2089e8683`）；v1 与当前 SVG 已获批准。Home 继续使用 presentation fixtures。
 [Phase 1A Technical Vertical Slice](PHASE1A.md) 已冻结为

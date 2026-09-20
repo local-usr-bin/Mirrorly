@@ -13,14 +13,14 @@
 
 `application/__init__.py` 仅标明包边界，没有 service manager 或提前构造的事务框架。
 
-## 兼容性边界
+## Phase 2B 兼容性边界（该阶段记录）
 
 - CLI 的 `_resolve_task_config` 仍提供 `./.mirrorly` 默认值，按调用时 cwd 解释；application 不将相对路径改成配置文件相对路径，也不重新定义任务身份。选择错误仍映射到 CLI exit 2，配置错误仍映射到 exit 1。
 - application 保留原异常诊断字符串以保护 CLI 兼容性，包括其中已有的 CLI 操作提示；这不是新 GUI error taxonomy，也不是面向 GUI 的展示 API。
 - 仓库解析只返回事实。GUID、repo id、serial、containment、候选去重与拒绝规则保持不变，不自动修复配置或初始化仓库。CLI 的 `_resolve_repo` adapter 根据 `relocated` 调用原 `_notify_relocation`，原文仍输出到 stderr（包括 quiet/JSON 模式）。
 - `cmd_backup` 仍在原位置按 task → repository writer 的顺序取锁，覆盖原有完整事务及 finalization/report 路径；application 锁类不决定事务范围。不新增 list/verify/restore 锁，不增加等待、重试或 queue。
 - 报告 payload 仍由原命令构造。persisted report 不自动增加 `report_path`，CLI 在原位置加入 stdout JSON 的 `report_path`。complete 已发布后报告失败仍是提交后的错误，不回滚 snapshot。
-- Phase 2B 结束时，`cmd_init`、`_Baseline` / baseline selection、scan/detect、snapshot ID allocation、完整 backup、list/verify/restore 编排全部留在 `cli.py`；Phase 2C 只继续提取了 init（见下）。配置写入仍由既有 `config.py` 实现，init 的部分副作用语义未改。
+- Phase 2B 结束时，`cmd_init`、`_Baseline` / baseline selection、scan/detect、snapshot ID allocation、完整 backup、list/verify/restore 编排全部留在 `cli.py`；后续 Phase 2C/2D 的范围见下。配置写入仍由既有 `config.py` 实现，init 的部分副作用语义未改。
 - 既有不同 CLI tasks 可引用同一 repository 的语义不变；未把 GUI 的一 Backup 一 repository 产品规则加入 core。
 
 ## 测试与开发环境
@@ -45,7 +45,7 @@ Phase 2B 验证（2026-09-20，Windows；均使用已 qualification 的独立 wo
 
 没有 C#/XAML 或 desktop project input 变化，因此未重建 WinUI。未重新设计或重新审计已发布 CLI 语义。
 
-## 当前事实：Phase 2C setup/init
+## Phase 2C setup/init
 
 在 Phase 2B `a90a0c543f3211e2fc79105a132f258ed41a33a4` 上新增 [application/setup.py](../../src/mirrorly/application/setup.py)。它同步执行原 `cmd_init` 的业务序列，不调用 CLI、input 或 UI，也不执行 backup。CLI 继续负责默认值、原确认行为、原 JSON/human 输出与退出码映射。
 
@@ -100,8 +100,80 @@ Phase 2C 验证（2026-09-21，Windows；独立 worktree interpreter）：
 
 源码结构对比也确认：除 init adapter 外的 CLI 函数、init 成功输出块、既有 CLI 685 条断言保持不变；repo 初始化的写入序列和限制提示文本未变。没有 desktop 输入变化，未重建 WinUI。
 
+## 当前事实：Phase 2D 共享 Backup 事务
+
+以 Phase 2C `37efaa0050821fa5eb112816dbec333d5f65465e` 为起点，新增 [application/backup.py](../../src/mirrorly/application/backup.py)，移入原 `cmd_backup` 的完整业务事务。它是 CLI 与未来 worker 共用的唯一 Backup 编排；底层算法没有复制或改写。没有新增依赖。
+
+### 移动范围与 Python API
+
+| 原 `cli.py` 实现 | 当前所有者 |
+| --- | --- |
+| `_Baseline`、`_select_baseline` | `application.backup` 同名私有 helper；原生命周期/续传选择规则 |
+| `_scan_and_detect` | `application.backup` 同名 helper；只将 Namespace 换为普通 request |
+| `_snapshot_id_free`、`_new_snapshot_id` | `application.backup` 同名 helper；原 clock/sequence/UUID/collision 行为 |
+| `cmd_backup` dry-run / real transaction | `application.backup.run_backup`；CLI 仅适配输入、交互、输出、exit mapping |
+
+`BackupRequest(config_root, task=None, dry_run=False, full_hash=False, exclude=())` 使用普通 Python 值。config root 必须由调用者提供；CLI 仍传原 `./.mirrorly` 默认值。相对路径、配置文件选择身份与 `TaskConfig.name`/锁身份的区别不变；不同 CLI task 可以指向同一 repo。
+
+`run_backup(request, *, decide_resume=None, on_relocation=None, on_resume=None)` 同步返回 `DryRunResult` 或 `BackupResult`，普通异常包装为 `BackupFailure(stage, cause, facts)`。`BaseException`（含 KeyboardInterrupt）直接传播并按原 context manager 释放锁，不被解释为取消 API。
+
+- `DryRunResult(facts, changes, scan_skipped)`：只读分析；无 task/repo 锁、migration、sequence reservation、cleanup、manifest/snapshot 写入、retention 或 report publication。真实执行重新加载配置、解析仓库和扫描，不接收该结果作为执行依据。
+- `BackupResult(facts, report, duration_seconds)`：返回成功完成整个事务的事实与原 report payload。`has_issues` 基于真实 skipped items，不能把 complete 当成无问题或 source 当前 up to date。report 不含 CLI 的 `report_path`；CLI 复制 payload 后加入该字段，保持原 JSON keys/types/order。duration 保存原未取整值供 CLI human output；persisted report 仍保留原三位小数。
+- `BackupFacts`：已解析的 TaskConfig/RepoInfo、relocation、成功返回的 lifecycle sequence、snapshot id、commit state、resumed-from、ChangeSet、scan skipped、SnapshotResult、构造出的 Manifest、成功返回的 retention deleted 列表和 report path。未取得的字段为 None；不通过解析异常文本猜测事实。
+- `BackupFailure`：保留原异常对象与失败阶段及上述已知事实；不是项目级 error taxonomy，也不直接成为 CLI/IPC JSON schema。
+
+### Commit 边界与失败事实
+
+| `facts.commit_state` | 本次调用已知的事实 |
+| --- | --- |
+| `not_published` | 尚未调用 complete publisher；可能已有迁移、sequence、incomplete 或 snapshot 文件等副作用，不代表 rollback |
+| `unknown` | complete `write_manifest` 已进入但未成功返回；即使磁盘可能已发布，也不猜测提交结果 |
+| `published` | complete `write_manifest(repo, complete_manifest)` 已成功返回；不等于后续 finalization/report 成功 |
+
+`mark_complete` 是构造候选值；完成构造后、进入 publisher 前才设 unknown，publisher 返回后立即设 published。facts 中 complete candidate 的 `status` 本身不能作为 commit 证据。
+
+已 published 后，resumed-incomplete cleanup、retention plan/apply、mandatory report 仍可能失败。服务保留实际 snapshot identity、manifest stats、scan/materialization 结果和原始异常，不回滚 complete。retention apply 未返回时 `retention_deleted=None`，不声称删除了零个或精确猜测部分删除数；report 未返回时 `report_path=None` 同样不是“肯定没有落盘”的断言。
+
+CLI 保留原异常/退出码映射。在 report stage 收到 `ReportPublicationError` 时，仍输出原“快照已成功提交，但必需报告发布失败”的错误文本。complete publication 本身抛错仍沿用原错误文本/exit 1，不向 CLI 用户虚构未提交或新增 JSON 格式。
+
+### 原事务顺序和锁范围
+
+task/config resolution → repository resolution → 原 relocation notice（如有）
+
+真实执行：TaskLock → RepoWriterLock → migration → baseline/resume selection → scan/change detection → owned temp residue cleanup → durable lifecycle sequence reservation → unused snapshot ID allocation → incomplete manifest publication → snapshot materialization → final manifest construction → hash-coverage guard → complete manifest publication → resumed-incomplete discard → retention plan → retention apply → mandatory report publication → release RepoWriterLock → release TaskLock。
+
+两把锁仍覆盖原有全部 mutation 和 finalization/report 路径。sequence 可以在后续失败时形成 gap；不复用、不回滚。baseline/legacy/resume 信任规则、verify-on-write 切换和 complete hash-coverage guard 仍由原代码和 core primitive 执行。list/verify/restore 的编排与锁策略均未移动。
+
+### 仅限原有 resume/relocation 的同步适配
+
+已有 resume 询问发生在 migration 之后、scan 之前，并且位于两把锁内。`ResumeDecision(snapshot_id, created_at)` 交给同步 `decide_resume`；CLI 在该位置调用原 `_ask()`，保留 prompt、`--yes`、JSON/非交互及默认回答语义。不调用 `_confirm()` 替代它。不提供 callback 时抛出 `ResumeDecisionRequired`（作为 BackupFailure 的 cause），不会默默决定续传或拒绝。
+
+`on_resume(ResumeNotice)` 仅携带原 available/selected/declined 及已物化/缺失/不可信/未认证数量；CLI 将其转换为原文本，通过 `_info` 保持 quiet/JSON/stdout/stderr 规则。`on_relocation(cfg, repo)` 仅把原 relocation fact 交给 CLI `_notify_relocation`。这两个窄通知接口是为了保留诊断在后续错误之前的原输出时机，**不是 phase/file/byte progress 或 worker event stream**。
+
+已有拒绝续传文案说“从头开始”，实际代码仍可能选用 sequenced complete baseline；本轮保留这一既有语义和文案，不做 CLI UX 清理。未来 worker 必须另行处理锁内同步 resume 决策和断连；本轮未设计 IPC 交互或 cancellation。
+
+### 验证范围
+
+[test_backup_application.py](../../tests/test_backup_application.py) 直接调用 dry-run/real transaction，覆盖只读预览和重新扫描、success/issues、pre-complete 副作用与 sequence gap、complete publisher 在落盘前/后抛错均 unknown、known post-commit failure facts、完整事务/锁顺序、resume decision、relocation timing、Ctrl+C、文件名/锁身份以及 isolated subprocess 禁止 CLI import。
+
+既有 CLI tests 的 patch 移至 `application.backup` 的真实调用位置，包括跨进程 writer-lock barrier 内的 `write_snapshot`，clock/ID、resume/scan/detect、manifest、retention。原 verify/setup/report/lock 底层 patch 保持其真实所有者。原 CLI **685 条 assert 的 AST 完全不变**；其余现存 CLI 函数（含 init/list/verify/restore/main/_ask/_confirm）AST 未变。snapshot ID helpers、baseline type、scan/detect 算法及 report payload 的结构对比也通过。
+
+Phase 2D 验证（2026-09-21，Windows；所有 Python 命令显式使用已 qualification 的 `mirrorly-gui-dev` interpreter）：
+
+| 检查 | 结果 |
+| --- | --- |
+| Checkout qualification：in-process、普通/isolated subprocess、console entry point | PASS；均为当前 GUI worktree，editable origin 一致 |
+| backup/setup/application/CLI/qualification 聚焦测试 | 260 passed |
+| 完整 Python regression | 662 passed；无 skip/failure（Phase 2C 642 + 新增 20） |
+| Windows E2E 单独运行 | 13 passed（也包含在完整 regression 中） |
+| 默认 testpaths 外 fake-worker tests | 11 passed |
+| Ruff check / format check / pip check | PASS；73 Python files 格式通过 |
+| diff check / 更新文档相对链接检查 | PASS |
+
+测试开发中发现两个多行 snapshot-ID monkeypatch 仍指向旧 CLI 符号，已迁到真实 application 调用点；没有改变预期行为或弱化断言。没有修改底层 core 算法、格式、版本、desktop/fake-worker 或环境依赖；未重建 WinUI。
+
 ## 尚未实现
 
-共享 backup transaction、生产 Python worker、真实 GUI Create Backup / Back up now、progress、cancellation、queue 和 GUI 配置持久化均未实现。权威 setup preflight 目前只存在于 Python 侧；GUI Setup 仍是 Phase 1C prototype。Phase 0–1C 文档继续作为各阶段历史记录，不能将 setup 服务理解为完整 backup 事务已提取。
+生产 Python worker、真实 GUI Create Backup / Back up now、progress、cooperative cancellation、queue 和 GUI 配置持久化均未实现。权威 setup preflight 与共享 Backup 目前只存在于 Python 侧；GUI Setup 仍是 Phase 1C prototype，Home 按钮仍使用 fixture。Phase 0–1C 文档继续作为各阶段历史记录。
 
-O-01～O-09 保持 [OPEN](README.md#待决事项登记)，尤其 O-09 最终 Python worker packaging/distribution 未作决定。后续事务提取需要独立任务与 review；本轮不开始 Phase 2D。
+O-01～O-09 保持 [OPEN](README.md#待决事项登记)，尤其 O-09 最终 Python worker packaging/distribution 未作决定。后续 worker 集成需要独立任务与 review；本轮不开始 Phase 2E。

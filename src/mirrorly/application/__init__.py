@@ -1,1 +1,1 @@
-"""Shared infrastructure and setup; the backup transaction remains in cli.py."""
+"""Shared infrastructure, setup and Backup transaction; no frontend dependency."""

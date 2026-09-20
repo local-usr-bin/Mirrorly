@@ -30,6 +30,7 @@ import pytest
 from mirrorly import cli
 from mirrorly import manifest as manifest_mod
 from mirrorly import snapshot as snapshot_mod
+from mirrorly.application import backup as backup_mod
 from mirrorly.application import locking as locking_mod
 from mirrorly.application import reports as reports_mod
 from mirrorly.application import repositories as repositories_mod
@@ -186,7 +187,7 @@ def snap_ids(monkeypatch):
             f"s{lifecycle_seq:020d}-{UUID(int=counter['n'], version=4).hex}"
         )
 
-    monkeypatch.setattr(cli, "generate_snapshot_id", next_id)
+    monkeypatch.setattr(backup_mod, "generate_snapshot_id", next_id)
     return counter
 
 
@@ -213,7 +214,7 @@ def _freeze_snapshot_clock(monkeypatch, when: datetime, *, manifests: bool = Fal
             aware = when if when.tzinfo is not None else when.replace(tzinfo=UTC)
             return aware.astimezone(tz)
 
-    monkeypatch.setattr(cli, "datetime", FrozenDateTime)
+    monkeypatch.setattr(backup_mod, "datetime", FrozenDateTime)
     monkeypatch.setattr(reports_mod, "datetime", FrozenDateTime)
     monkeypatch.setattr(locking_mod, "datetime", FrozenDateTime)
     if manifests:
@@ -519,7 +520,7 @@ class TestBackup:
     def test_partial_backup_exit_3(self, backed_up, monkeypatch) -> None:
         ws = backed_up
         _write(ws["src"] / "flaky.txt", b"data")
-        orig = cli.write_snapshot
+        orig = backup_mod.write_snapshot
 
         def fake_write(*a, **kw):
             result = orig(*a, **kw)
@@ -528,7 +529,7 @@ class TestBackup:
 
             return replace(result, skipped=(("flaky.txt", "复制期间源文件发生变动，已跳过"),))
 
-        monkeypatch.setattr(cli, "write_snapshot", fake_write)
+        monkeypatch.setattr(backup_mod, "write_snapshot", fake_write)
         assert _run(ws, "backup", "--yes") == 3
         repo = _repo(ws)
         reports = sorted((repo.path / "logs").glob("backup-*.json"))
@@ -583,7 +584,7 @@ class TestBackup:
         def boom(*a, **kw):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(cli, "write_snapshot", boom)
+        monkeypatch.setattr(backup_mod, "write_snapshot", boom)
         assert _run(ws, "backup", "--yes") == 130
         repo = _repo(ws)
         # 锁已释放；中断态 manifest 保留（可被下次续传），不是 complete
@@ -1230,7 +1231,7 @@ class TestSnapshotIdCollision:
             ),
         )
         monkeypatch.setattr(
-            cli,
+            backup_mod,
             "generate_snapshot_id",
             lambda now=None, *, lifecycle_seq: current,
         )
@@ -1253,7 +1254,7 @@ class TestSnapshotIdCollision:
         repo = _repo(ws)
         occupied = "2026-09-13_100000-s00000000000000000000-ffffffffffff4fff8fffffffffffffff"
         monkeypatch.setattr(
-            cli,
+            backup_mod,
             "generate_snapshot_id",
             lambda now=None, *, lifecycle_seq: occupied,
         )
@@ -1600,18 +1601,18 @@ class TestAuthoritativeLifecycleOrdering:
                 previous_dirs=frozenset(),
             )
 
-        monkeypatch.setattr(cli, "build_resume_baseline", fake_resume)
-        args = SimpleNamespace(dry_run=False, yes=True)
+        monkeypatch.setattr(backup_mod, "build_resume_baseline", fake_resume)
+        request = backup_mod.BackupRequest(ws["config"])
         cfg = load_task_config(ws["config"] / "config.d" / "default.toml")
 
-        baseline = cli._select_baseline(args, cfg, repo)
+        baseline = backup_mod._select_baseline(request, cfg, repo, decide_resume=lambda _: True)
         assert baseline.resumed_from == lifecycle_new
         assert selected == [lifecycle_new]
         assert old_wall_new != lifecycle_new
 
         complete = add_v2(2, "complete", "1999-01-01T00:00:00+00:00")
         selected.clear()
-        baseline = cli._select_baseline(args, cfg, repo)
+        baseline = backup_mod._select_baseline(request, cfg, repo, decide_resume=lambda _: True)
         assert selected == []
         assert baseline.resumed_from is None
         assert baseline.previous_snapshot_dir == repo.path / "snapshots" / complete
@@ -2028,7 +2029,7 @@ class TestB12ResumeHashCoverage:
         assert _init(ws) == 0
         repo = self._make_interrupted(ws, ["post0.txt"])
 
-        real_build = cli.build_resume_baseline
+        real_build = backup_mod.build_resume_baseline
 
         def regressed_build(repo_, snapshot_id, **kwargs):
             baseline = real_build(repo_, snapshot_id, **kwargs)
@@ -2039,9 +2040,9 @@ class TestB12ResumeHashCoverage:
                 previous={p: replace(e, sha=None) for p, e in baseline.previous.items()},
             )
 
-        monkeypatch.setattr(cli, "build_resume_baseline", regressed_build)
+        monkeypatch.setattr(backup_mod, "build_resume_baseline", regressed_build)
 
-        real_detect = cli.detect_changes
+        real_detect = backup_mod.detect_changes
 
         def regressed_detect(*args, **kwargs):
             changes = real_detect(*args, **kwargs)
@@ -2049,7 +2050,7 @@ class TestB12ResumeHashCoverage:
             # 错误恢复成 unchanged，使其硬链接但没有 carried hash。
             return replace(changes, modified=[p for p in changes.modified if p != "pre0.txt"])
 
-        monkeypatch.setattr(cli, "detect_changes", regressed_detect)
+        monkeypatch.setattr(backup_mod, "detect_changes", regressed_detect)
 
         # fail closed：SnapshotError → exit 1，不发布 complete
         assert _run(ws, "backup", "--yes") == 1
@@ -2238,12 +2239,12 @@ class TestVerifyOnWriteHashCoverageTransition:
         _write(ws["src"] / "file.txt", b"content")
         assert _init(ws) == 0
         repo = _repo(ws)
-        real_write = cli.write_snapshot
+        real_write = backup_mod.write_snapshot
 
         def drop_hashes(*args, **kwargs):
             return replace(real_write(*args, **kwargs), hashes={})
 
-        monkeypatch.setattr(cli, "write_snapshot", drop_hashes)
+        monkeypatch.setattr(backup_mod, "write_snapshot", drop_hashes)
         assert _run(ws, "backup", "--yes") == 1
         summaries = list_manifests(repo)
         assert len(summaries) == 1
@@ -2259,8 +2260,8 @@ class TestBackupLockScope:
         def forbidden(*a, **k):
             raise AssertionError("锁被占用时不应触发 recovery/扫描")
 
-        monkeypatch.setattr(cli, "list_manifests", forbidden)
-        monkeypatch.setattr(cli, "scan_source", forbidden)
+        monkeypatch.setattr(backup_mod, "list_manifests", forbidden)
+        monkeypatch.setattr(backup_mod, "scan_source", forbidden)
         assert _run(ws, "backup", "--yes") == 6
 
     def test_dry_run_does_not_need_lock(self, backed_up) -> None:
@@ -2286,8 +2287,8 @@ class TestBackupLockScope:
         def forbidden(*a, **k):
             raise AssertionError("仓库写锁被占用时不应触发 recovery/扫描")
 
-        monkeypatch.setattr(cli, "list_manifests", forbidden)
-        monkeypatch.setattr(cli, "scan_source", forbidden)
+        monkeypatch.setattr(backup_mod, "list_manifests", forbidden)
+        monkeypatch.setattr(backup_mod, "scan_source", forbidden)
         assert _run(ws, "backup", "--yes") == 6
         assert writer_lock.is_file()
         assert not (repo.path / "locks" / "default.lock").exists()
@@ -2342,7 +2343,7 @@ class TestBackupLockScope:
         def boom(*a, **kw):
             raise cli.SnapshotError("simulated handled backup error")
 
-        monkeypatch.setattr(cli, "scan_source", boom)
+        monkeypatch.setattr(backup_mod, "scan_source", boom)
         assert _run(ws, "backup", "--yes") == 1
         _assert_repo_writer_idle(repo)
         with locking_mod.RepoWriterLock(repo):
@@ -2378,9 +2379,10 @@ import os
 import sys
 import time
 from mirrorly import cli
+from mirrorly.application import backup as backup_mod
 
 config, marker, release = map(Path, sys.argv[1:])
-real_write_snapshot = cli.write_snapshot
+real_write_snapshot = backup_mod.write_snapshot
 
 def pause_after_write(*args, **kwargs):
     result = real_write_snapshot(*args, **kwargs)
@@ -2392,7 +2394,7 @@ def pause_after_write(*args, **kwargs):
         time.sleep(0.01)
     return result
 
-cli.write_snapshot = pause_after_write
+backup_mod.write_snapshot = pause_after_write
 raise SystemExit(cli.main([
     "--config", str(config), "--task", "taskA", "backup", "--yes", "--json"
 ]))
@@ -2585,7 +2587,7 @@ class TestJsonPurity:
     def test_partial_backup_json_single_doc(self, backed_up, monkeypatch, capsys) -> None:
         ws = backed_up
         _write(ws["src"] / "flaky.txt", b"data")
-        orig = cli.write_snapshot
+        orig = backup_mod.write_snapshot
 
         def fake_write(*a, **kw):
             result = orig(*a, **kw)
@@ -2593,7 +2595,7 @@ class TestJsonPurity:
 
             return replace(result, skipped=(("flaky.txt", "复制期间源文件发生变动，已跳过"),))
 
-        monkeypatch.setattr(cli, "write_snapshot", fake_write)
+        monkeypatch.setattr(backup_mod, "write_snapshot", fake_write)
         assert _run(ws, "backup", "--yes", "--json") == 3
         payload = json.loads(capsys.readouterr().out)
         assert payload["skipped"][0]["path"] == "flaky.txt"
@@ -3135,7 +3137,7 @@ class TestExtractionOutputContract:
                 f"{UUID(int=lifecycle_seq + 1, version=4).hex}"
             )
 
-        monkeypatch.setattr(cli, "generate_snapshot_id", reverse_clock_id)
+        monkeypatch.setattr(backup_mod, "generate_snapshot_id", reverse_clock_id)
         _write(ws["src"] / "a.txt", b"alpha")
         assert _init(ws) == 0
         for _ in range(2):
@@ -3316,7 +3318,7 @@ class TestExtractionFinalization:
 
         monkeypatch.setattr(locking_mod._ExclusiveFileLock, "__enter__", enter)
         monkeypatch.setattr(locking_mod._ExclusiveFileLock, "__exit__", leave)
-        original_write = cli.write_manifest
+        original_write = backup_mod.write_manifest
 
         def publish(info, manifest):
             both_locked()
@@ -3328,11 +3330,11 @@ class TestExtractionFinalization:
                 calls.append("commit")
             return result
 
-        monkeypatch.setattr(cli, "write_manifest", publish)
+        monkeypatch.setattr(backup_mod, "write_manifest", publish)
         stages = [
             (recovery_mod, "discard_incomplete", "cleanup", cli.RecoveryError),
-            (cli, "build_retention_plan", "plan", cli.RetentionError),
-            (cli, "apply_retention_plan", "apply", cli.RetentionError),
+            (backup_mod, "build_retention_plan", "plan", cli.RetentionError),
+            (backup_mod, "apply_retention_plan", "apply", cli.RetentionError),
             (reports_mod, "write_report", "report", reports_mod.ReportPublicationError),
         ]
 

@@ -1,7 +1,7 @@
 """Mirrorly 命令行接口（T-09，CLI_SPEC v1.0 / MVP_TASKS T-09）。
 
 职责边界：本模块保留参数解析、确认流程、输出与退出码映射、命令编排，
-setup/init、配置/仓库解析、锁与报告落盘由 application 层提供；
+setup/init、backup 事务、配置/仓库解析、锁与报告落盘由 application 层提供；
 把 T-01~T-08 的 library API 编排成五个命令；不重新实现任何业务逻辑，
 不绕过底层模块的安全边界（Restore plan/apply、Retention 执行前复核、
 incomplete 不当 complete 等语义全部在底层模块内强制执行）。
@@ -23,46 +23,33 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 from . import __version__
+from .application import backup as app_backup
 from .application import locking, repositories, setup, tasks
 from .application import reports as app_reports
 from .config import (
     ConfigError,
     TaskConfig,
 )
-from .lifecycle import reserve_lifecycle_sequence
 from .manifest import (
     STATUS_COMPLETE,
     ManifestError,
     ManifestSummary,
-    create_manifest,
-    latest_sequenced_complete,
     list_manifests,
-    load_manifest,
-    mark_complete,
-    newest_eligible_incomplete,
     select_default_complete,
-    write_manifest,
 )
-from .recovery import RecoveryError, build_resume_baseline, clean_tmp_residue
+from .recovery import RecoveryError
 from .repo import (
     RepoError,
     RepoFormatError,
     RepoInfo,
-    migrate_repo_to_v2,
 )
 from .restore import RestoreError, apply_restore, plan_restore
-from .retention import RetentionError, apply_retention_plan, build_retention_plan
-from .scan import PreviousEntry, detect_changes, scan_source
+from .retention import RetentionError
 from .snapshot import (
     SnapshotError,
-    generate_snapshot_id,
-    write_snapshot,
 )
 from .verify import verify_snapshot
 
@@ -198,28 +185,6 @@ def _latest_complete(repo: RepoInfo) -> ManifestSummary | None:
     return select_default_complete(list_manifests(repo))
 
 
-def _snapshot_id_free(repo: RepoInfo, snapshot_id: str) -> bool:
-    """快照 id 未被当前正式或 staging artifact 占用。"""
-    return (
-        not (repo.path / "snapshots" / snapshot_id).exists()
-        and not (repo.path / "manifests" / f"{snapshot_id}.json").exists()
-        and not (repo.path / "manifests.tmp" / f"{snapshot_id}.json.tmp").exists()
-    )
-
-
-def _new_snapshot_id(repo: RepoInfo, lifecycle_seq: int) -> str:
-    """Mint a UUID identity carrying an already-durable attempt sequence."""
-
-    now = datetime.now()
-    for _ in range(100):
-        candidate = generate_snapshot_id(now, lifecycle_seq=lifecycle_seq)
-        if _snapshot_id_free(repo, candidate):
-            return candidate
-    raise SnapshotError(
-        f"无法分配唯一快照 id：sequence {lifecycle_seq} 的连续 100 个 UUID candidate 均已被占用"
-    )
-
-
 # ---------------------------------------------------------------------------
 # init
 # ---------------------------------------------------------------------------
@@ -287,244 +252,81 @@ def cmd_init(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _Baseline:
-    """备份基线：上一 complete 快照或 incomplete 续传基线的统一视图。"""
-
-    previous: dict[str, PreviousEntry]
-    previous_dirs: tuple[str, ...]
-    previous_snapshot_dir: Path | None
-    carried_shas: dict[str, str]
-    resumed_from: str | None
-    untrusted: tuple[str, ...] = ()
-    uncertified: tuple[str, ...] = ()
-
-
-def _select_baseline(args: argparse.Namespace, cfg: TaskConfig, repo: RepoInfo) -> _Baseline:
-    """按 durable sequence 选择续传/complete 基线；legacy 不自动复用。"""
-    summaries = list_manifests(repo)
-    latest_inc = newest_eligible_incomplete(summaries)
-    if latest_inc is not None:
-        if args.dry_run:
-            _info(args, f"检测到中断的备份 {latest_inc.snapshot_id}（正式执行时将提示续传）")
-        elif _ask(
+def _present_resume_notice(args: argparse.Namespace, notice: app_backup.ResumeNotice) -> None:
+    """Keep existing notice text/channels at the transaction's original call sites."""
+    if notice.kind == "available":
+        _info(args, f"检测到中断的备份 {notice.snapshot_id}（正式执行时将提示续传）")
+    elif notice.kind == "selected":
+        _info(
             args,
-            f"检测到中断的备份 {latest_inc.snapshot_id}"
-            f"（{latest_inc.created_at}），是否以其为基线续传？"
-            "（选 n 将从头开始新备份，incomplete 保留不动）",
-        ):
-            # B1-2：verify_on_write=True 时对已物化条目做内容等价认证，
-            # 获得可信哈希覆盖或拒绝信任旧副本；False 时保持既有语义
-            baseline = build_resume_baseline(
-                repo,
-                latest_inc.snapshot_id,
-                source=cfg.source,
-                verify_content=cfg.verify_on_write,
-            )
+            f"将以 {notice.snapshot_id} 为基线续传"
+            f"（已物化 {notice.materialized} 个文件，待补 {notice.missing} 个）",
+        )
+        if notice.untrusted:
             _info(
                 args,
-                f"将以 {latest_inc.snapshot_id} 为基线续传"
-                f"（已物化 {len(baseline.previous)} 个文件，待补 {len(baseline.missing)} 个）",
+                f"  {notice.untrusted} 个已物化文件内容与当前源不一致"
+                "（中断后副本可能被损坏），不信任旧副本，将重新复制",
             )
-            if baseline.untrusted:
-                _info(
-                    args,
-                    f"  {len(baseline.untrusted)} 个已物化文件内容与当前源不一致"
-                    "（中断后副本可能被损坏），不信任旧副本，将重新复制",
-                )
-            if baseline.uncertified:
-                _info(
-                    args,
-                    f"  {len(baseline.uncertified)} 个已物化文件未能完成内容认证"
-                    "（源暂不可读或元数据与清单不一致），将重新复制",
-                )
-            return _Baseline(
-                previous=dict(baseline.previous),
-                previous_dirs=tuple(sorted(baseline.previous_dirs)),
-                previous_snapshot_dir=baseline.snapshot_path,
-                carried_shas={p: e.sha for p, e in baseline.previous.items() if e.sha},
-                resumed_from=latest_inc.snapshot_id,
-                untrusted=baseline.untrusted,
-                uncertified=baseline.uncertified,
+        if notice.uncertified:
+            _info(
+                args,
+                f"  {notice.uncertified} 个已物化文件未能完成内容认证"
+                "（源暂不可读或元数据与清单不一致），将重新复制",
             )
-        else:
-            _info(args, "不续传，从头开始新备份（incomplete 快照保留不动）")
-
-    # 自动 backup baseline 只允许 sequenced complete。迁移后的 legacy-only
-    # repo 必须先全量物化一个 v2 complete，不能猜测 legacy latest 并复用。
-    latest = latest_sequenced_complete(summaries)
-    if latest is None:
-        return _Baseline({}, (), None, {}, None)
-    manifest = load_manifest(repo, latest.snapshot_id, require_complete=True)
-    previous = {
-        e.path: PreviousEntry(size=e.size, mtime_ns=e.mtime_ns, sha=e.sha)
-        for e in manifest.entries
-        if not e.is_dir
-    }
-    return _Baseline(
-        previous=previous,
-        previous_dirs=tuple(e.path for e in manifest.entries if e.is_dir),
-        previous_snapshot_dir=repo.path / "snapshots" / latest.snapshot_id,
-        carried_shas={e.path: e.sha for e in manifest.entries if not e.is_dir and e.sha},
-        resumed_from=None,
-    )
-
-
-def _scan_and_detect(args: argparse.Namespace, cfg: TaskConfig, baseline: _Baseline):
-    """扫描源并做变更检测（dry-run 与真实执行共用同一逻辑）。"""
-    excludes = tuple(cfg.exclude) + tuple(args.exclude or ())
-    scan = scan_source(cfg.source, excludes)
-    current = scan.entries
-
-    # --full-hash：跳过元数据初筛——把基线 mtime 置为不可能匹配的值，
-    # 强制 detect_changes 对所有共存文件做哈希复核（复用 ADR-006 冻结逻辑）
-    prev_for_detect = baseline.previous
-    force_recopy = set(baseline.uncertified)
-    if cfg.verify_on_write:
-        # 当前已启用写入校验时，任何缺少可信哈希的基线文件都不得走
-        # unchanged 硬链接复用。尤其是 False→True：旧 complete snapshot
-        # 的 sha=None 副本可能已损坏，不能只重算旧副本哈希后为其背书。
-        # 将其送入既有 copy/write-verify 路径，以当前源重新物化并获得哈希。
-        force_recopy.update(p for p, e in baseline.previous.items() if e.sha is None)
-    if force_recopy:
-        # mtime 置为不可能值（与 --full-hash 同一冻结机制）强制哈希复核：
-        # prev.sha=None → 保守判 modified → 正常 write-verify 重拷获得可信
-        # 哈希；源已删除的条目则维持 deleted 分类（keys 不变）。
-        prev_for_detect = {
-            k: PreviousEntry(size=v.size, mtime_ns=-1, sha=v.sha) if k in force_recopy else v
-            for k, v in prev_for_detect.items()
-        }
-    if args.full_hash:
-        prev_for_detect = {
-            k: PreviousEntry(size=v.size, mtime_ns=-1, sha=v.sha)
-            for k, v in prev_for_detect.items()
-        }
-    changes = detect_changes(cfg.source, current, prev_for_detect, baseline.previous_dirs)
-    return scan, current, changes
+    else:
+        _info(args, "不续传，从头开始新备份（incomplete 快照保留不动）")
 
 
 def cmd_backup(args: argparse.Namespace) -> int:
-    cfg = _resolve_task_config(args)
-    repo = _resolve_repo(cfg)
+    request = app_backup.BackupRequest(
+        config_root=Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT),
+        task=getattr(args, "task", None),
+        dry_run=args.dry_run,
+        full_hash=args.full_hash,
+        exclude=tuple(args.exclude or ()),
+    )
 
-    if args.dry_run:
-        # dry-run 有意例外：零写入，因此不取任务锁（只读预览不与其他实例互斥）
-        baseline = _select_baseline(args, cfg, repo)
-        scan, _current, changes = _scan_and_detect(args, cfg, baseline)
-        return _finish_dry_run(args, changes, scan.skipped)
-
-    # 真实执行：按 task → repo 顺序取锁。task lock 保留身份/UX 语义，repo writer
-    # lock 则是跨 task 的 mutation safety boundary；两者覆盖 recovery/incomplete
-    # 基线选择、源扫描、变更检测、快照/manifest 写入、续传善后、retention 与报告。
-    with locking.TaskLock(repo, cfg.name), locking.RepoWriterLock(repo):
-        repo = migrate_repo_to_v2(repo)
-        started = time.monotonic()
-        baseline = _select_baseline(args, cfg, repo)
-        scan, current, changes = _scan_and_detect(args, cfg, baseline)
-
-        clean_tmp_residue(repo)
-        # 先分配唯一空闲 id，再落盘 incomplete manifest——任何 id collision 下
-        # 既有快照目录 / manifest 字节 / complete 状态都不被触碰
-        lifecycle_seq = reserve_lifecycle_sequence(repo)
-        snapshot_id = _new_snapshot_id(repo, lifecycle_seq)
-        source_root = str(Path(cfg.source).resolve())
-
-        # manifest 状态机：incomplete 落盘 → 物化 → complete 原子提交
-        write_manifest(
-            repo,
-            create_manifest(
-                snapshot_id,
-                source_root,
-                repo.hash_algorithm,
-                current,
-                lifecycle_seq=lifecycle_seq,
-                resumed_from_snapshot_id=baseline.resumed_from,
-            ),
-        )
-        result = write_snapshot(
-            cfg.source,
-            repo,
-            current,
-            changes,
-            snapshot_id=snapshot_id,
-            previous_snapshot=baseline.previous_snapshot_dir,
-            verify_writes=cfg.verify_on_write,
+    def decide_resume(decision: app_backup.ResumeDecision) -> bool:
+        return _ask(
+            args,
+            f"检测到中断的备份 {decision.snapshot_id}"
+            f"（{decision.created_at}），是否以其为基线续传？"
+            "（选 n 将从头开始新备份，incomplete 保留不动）",
         )
 
-        skipped_paths = {p for p, _ in result.skipped}
-        final_current = {k: v for k, v in current.items() if k not in skipped_paths}
-        # linked 文件 sha 从基线 manifest 结转（不重算），copied 用写入校验哈希
-        merged_hashes = {
-            rel: baseline.carried_shas[rel] for rel in result.linked if rel in baseline.carried_shas
-        } | result.hashes
-        final_manifest = create_manifest(
-            snapshot_id,
-            source_root,
-            repo.hash_algorithm,
-            final_current,
-            hashes=merged_hashes,
-            lifecycle_seq=lifecycle_seq,
-            resumed_from_snapshot_id=baseline.resumed_from,
+    try:
+        outcome = app_backup.run_backup(
+            request,
+            decide_resume=decide_resume,
+            on_relocation=_notify_relocation,
+            on_resume=lambda notice: _present_resume_notice(args, notice),
         )
-        # 全局 defense-in-depth：当前 verify_on_write=True 的 complete 快照
-        # 不允许存在无可信哈希的普通文件条目。skipped/deleted 文件已不在
-        # final_current，目录不需要内容哈希；其余文件必须来自可信结转，或
-        # 正常 copy/write-verify。若未来回归产生 coverage gap，在此 fail
-        # closed（新快照保持 incomplete），绝不现场重哈希副本来生成信任。
-        if cfg.verify_on_write:
-            unhashed_final = sorted(
-                entry.path for entry in final_manifest.entries if not entry.is_dir and not entry.sha
-            )
-            if unhashed_final:
-                raise SnapshotError(
-                    f"快照 {snapshot_id} 存在 {len(unhashed_final)} 个未获得"
-                    f"可信哈希的文件（首个: {unhashed_final[0]!r}），"
-                    "拒绝发布 complete（fail closed）"
-                )
-        write_manifest(repo, mark_complete(final_manifest))
-
-        # 续传善后：显式删除旧 incomplete（complete 快照被底层拒绝，双保险）
-        if baseline.resumed_from:
-            from .recovery import discard_incomplete
-
-            discard_incomplete(repo, baseline.resumed_from)
-
-        # 保留策略（dry-run 已在上方返回；此处为真实执行，复核语义在底层）
-        plan = build_retention_plan(repo, keep_last=cfg.keep_last, keep_monthly=cfg.keep_monthly)
-        retention_deleted = apply_retention_plan(repo, plan)
-
-        duration = time.monotonic() - started
-        all_skipped = list(scan.skipped) + list(result.skipped)
-        report = {
-            "command": "backup",
-            "snapshot_id": snapshot_id,
-            "status": "complete",
-            "source": source_root,
-            "duration_seconds": round(duration, 3),
-            "full_hash": bool(args.full_hash),
-            "resumed_from": baseline.resumed_from,
-            "resume_untrusted": list(baseline.untrusted),
-            "resume_uncertified": list(baseline.uncertified),
-            "changes": {
-                "added": changes.added,
-                "modified": changes.modified,
-                "deleted": changes.deleted,
-                "suspected_modified": changes.suspected_modified,
-            },
-            "linked": list(result.linked),
-            "copied": list(result.copied),
-            "skipped": [{"path": p, "reason": r} for p, r in all_skipped],
-            "bytes_written": result.bytes_written,
-            "retention_deleted": list(retention_deleted),
-        }
-        try:
-            report_path = app_reports.write_report(repo, f"backup-{snapshot_id}", report)
-        except app_reports.ReportPublicationError as exc:
+    except app_backup.BackupFailure as failure:
+        if failure.stage == "task" and isinstance(failure.cause, tasks.TaskSelectionError):
+            raise _UsageError(str(failure.cause)) from failure.cause
+        if failure.stage == "report" and isinstance(
+            failure.cause, app_reports.ReportPublicationError
+        ):
             raise RepoError(
-                f"快照 {snapshot_id} 已成功提交（complete manifest 已发布），"
-                f"但必需报告发布失败；备份命令返回错误: {exc}"
-            ) from exc
+                f"快照 {failure.facts.snapshot_id} 已成功提交（complete manifest 已发布），"
+                f"但必需报告发布失败；备份命令返回错误: {failure.cause}"
+            ) from failure.cause
+        # Preserve main()'s existing exception/exit mapping; do not serialize the DTO.
+        raise failure.cause from None
 
+    if isinstance(outcome, app_backup.DryRunResult):
+        return _finish_dry_run(args, outcome.changes, outcome.scan_skipped)
+
+    report = dict(outcome.report)
+    snapshot_id = outcome.facts.snapshot_id
+    changes = outcome.facts.changes
+    result = outcome.facts.materialization
+    duration = outcome.duration_seconds
+    resumed_from = outcome.facts.resumed_from
+    retention_deleted = outcome.facts.retention_deleted
+    report_path = outcome.facts.report_path
+    all_skipped = list(outcome.facts.scan_skipped) + list(result.skipped)
     if _flag(args, "json"):
         report["report_path"] = str(report_path)
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -537,8 +339,8 @@ def cmd_backup(args: argparse.Namespace) -> int:
             f"；硬链接复用 {len(result.linked)}，复制 {len(result.copied)}"
             f"（{_human_bytes(result.bytes_written)}）",
         )
-        if baseline.resumed_from:
-            _info(args, f"  已基于中断备份 {baseline.resumed_from} 续传并清理旧 incomplete")
+        if resumed_from:
+            _info(args, f"  已基于中断备份 {resumed_from} 续传并清理旧 incomplete")
         if retention_deleted:
             _info(args, f"  保留策略清理: {', '.join(retention_deleted)}")
         if all_skipped:
