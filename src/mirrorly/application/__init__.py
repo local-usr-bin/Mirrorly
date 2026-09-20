@@ -1,1 +1,1 @@
-"""Shared application infrastructure; command orchestration remains in cli.py."""
+"""Shared infrastructure and setup; the backup transaction remains in cli.py."""

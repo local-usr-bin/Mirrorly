@@ -114,19 +114,16 @@ def _get_volume_info_windows(path: Path) -> VolumeInfo:
     return VolumeInfo(label=vol_name.value, serial=f"{serial.value:08X}", filesystem=fs_name.value)
 
 
-def init_repo(
+def inspect_init_target(
     target_root: str | Path,
     *,
     filesystem_policy: str = "strict",
-    assume_yes: bool = False,
-    confirm: Callable[[str], bool] | None = None,
     volume_info_provider: Callable[[Path], VolumeInfo] | None = None,
-) -> RepoInfo:
-    """在 target_root 下初始化 MirrorlyRepo 仓库。
+) -> VolumeInfo:
+    """Run init's existing read-only target checks; do not confirm, write or reserve.
 
-    - filesystem_policy="strict"：目标非 NTFS 时拒绝并提示转换 NTFS；
-    - filesystem_policy="warn"：明确提示能力限制，经用户确认（或 assume_yes）
-      后以整文件复制模式继续（hardlinks=False），绝不静默降级。
+    A successful inspection is an observation, not a promise of successful init.
+    init_repo always runs these checks again before its existing write sequence.
     """
     if filesystem_policy not in FILESYSTEM_POLICIES:
         allowed = " / ".join(FILESYSTEM_POLICIES)
@@ -148,16 +145,43 @@ def init_repo(
         raise RepoError(f"无法建立卷锚（M10 自动重定位所需）: {e}") from e
     volume = replace(volume, guid=guid)
 
+    if volume.filesystem not in HARDLINK_FILESYSTEMS and filesystem_policy == "strict":
+        raise RepoError(f"strict 策略拒绝非 NTFS 目标。{_copy_mode_limitation(volume)}")
+    return volume
+
+
+def _copy_mode_limitation(volume: VolumeInfo) -> str:
+    return (
+        f"目标文件系统为 {volume.filesystem}，不支持硬链接：\n"
+        "  - 将无法跨快照共享未变更文件的存储（空间占用显著增加）；\n"
+        "  - 备份将以整文件复制模式运行。\n"
+        "建议将目标盘转换为 NTFS 后重新 init。"
+    )
+
+
+def init_repo(
+    target_root: str | Path,
+    *,
+    filesystem_policy: str = "strict",
+    assume_yes: bool = False,
+    confirm: Callable[[str], bool] | None = None,
+    volume_info_provider: Callable[[Path], VolumeInfo] | None = None,
+) -> RepoInfo:
+    """在 target_root 下初始化 MirrorlyRepo 仓库。
+
+    - filesystem_policy="strict"：目标非 NTFS 时拒绝并提示转换 NTFS；
+    - filesystem_policy="warn"：明确提示能力限制，经用户确认（或 assume_yes）
+      后以整文件复制模式继续（hardlinks=False），绝不静默降级。
+    """
+    volume = inspect_init_target(
+        target_root, filesystem_policy=filesystem_policy, volume_info_provider=volume_info_provider
+    )
+    target_root = Path(target_root)
+    repo_dir = target_root / REPO_DIR_NAME
+
     hardlinks = volume.filesystem in HARDLINK_FILESYSTEMS
     if not hardlinks:
-        limitation = (
-            f"目标文件系统为 {volume.filesystem}，不支持硬链接：\n"
-            "  - 将无法跨快照共享未变更文件的存储（空间占用显著增加）；\n"
-            "  - 备份将以整文件复制模式运行。\n"
-            "建议将目标盘转换为 NTFS 后重新 init。"
-        )
-        if filesystem_policy == "strict":
-            raise RepoError(f"strict 策略拒绝非 NTFS 目标。{limitation}")
+        limitation = _copy_mode_limitation(volume)
         # warn 策略：明示能力限制，由用户决定继续或取消
         proceed = assume_yes or (confirm or _default_confirm)(
             limitation + "\n是否仍以整文件复制模式继续？"

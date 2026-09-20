@@ -1,7 +1,7 @@
 """Mirrorly 命令行接口（T-09，CLI_SPEC v1.0 / MVP_TASKS T-09）。
 
 职责边界：本模块保留参数解析、确认流程、输出与退出码映射、命令编排，
-配置/仓库解析、锁与报告落盘基础设施由 application 层提供；
+setup/init、配置/仓库解析、锁与报告落盘由 application 层提供；
 把 T-01~T-08 的 library API 编排成五个命令；不重新实现任何业务逻辑，
 不绕过底层模块的安全边界（Restore plan/apply、Retention 执行前复核、
 incomplete 不当 complete 等语义全部在底层模块内强制执行）。
@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -30,14 +29,11 @@ from datetime import datetime
 from pathlib import Path
 
 from . import __version__
-from . import volume as _volume
-from .application import locking, repositories, tasks
+from .application import locking, repositories, setup, tasks
 from .application import reports as app_reports
 from .config import (
     ConfigError,
     TaskConfig,
-    validate_task_name,
-    write_task_config,
 )
 from .lifecycle import reserve_lifecycle_sequence
 from .manifest import (
@@ -55,13 +51,9 @@ from .manifest import (
 )
 from .recovery import RecoveryError, build_resume_baseline, clean_tmp_residue
 from .repo import (
-    HARDLINK_FILESYSTEMS,
-    REPO_DIR_NAME,
     RepoError,
     RepoFormatError,
     RepoInfo,
-    get_volume_info,
-    init_repo,
     migrate_repo_to_v2,
 )
 from .restore import RestoreError, apply_restore, plan_restore
@@ -234,74 +226,38 @@ def _new_snapshot_id(repo: RepoInfo, lifecycle_seq: int) -> str:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    # ---- 预检（全部在 init_repo 之前，任何失败保证零仓库写入）----
-    task_name = getattr(args, "task", None) or DEFAULT_TASK_NAME
-    try:
-        validate_task_name(task_name)
-    except ConfigError as e:
-        _err(f"--task 非法：{e}")
-        return EXIT_USAGE
-
-    source = Path(args.source)
-    if not source.is_dir():
-        _err(f"--source 不是已存在的目录: {source}")
-        return EXIT_USAGE
-    target = Path(args.target)
-    policy = args.filesystem_policy
-
-    config_root = Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT)
-    config_file = config_root / "config.d" / f"{task_name}.toml"
-    if config_file.exists():
-        _err(f"任务配置已存在: {config_file}（如需重建请先手工删除）")
-        return EXIT_ERROR
-
-    # source 与 prospective repo 不得互相包含（备份源含仓库会自我吞没/递归）
-    prospective_repo = target / REPO_DIR_NAME
-    if repositories.path_within(prospective_repo, source):
-        _err(f"备份目标仓库 {prospective_repo} 位于源目录 {source} 内，拒绝初始化")
-        return EXIT_ERROR
-    if repositories.path_within(source, prospective_repo):
-        _err(f"源目录 {source} 位于备份目标仓库 {prospective_repo} 内，拒绝初始化")
-        return EXIT_ERROR
-
-    # ---- 预检全部通过后才允许产生写入 ----
-    # warn 策略的确认由 CLI 层完成（区分「用户取消 → 6」与一般错误 → 1）
-    volume = get_volume_info(target)
-    if volume.filesystem not in HARDLINK_FILESYSTEMS and policy == "warn":
-        _info(
-            args,
-            f"目标文件系统为 {volume.filesystem}，不支持硬链接：\n"
-            "  - 将无法跨快照共享未变更文件的存储（空间占用显著增加）；\n"
-            "  - 备份将以整文件复制模式运行。\n"
-            "建议将目标盘转换为 NTFS 后重新 init。",
-        )
-        _confirm(args, "是否仍以整文件复制模式继续？")
-
-    # M10 卷锚前置解析（失败零仓库写入；init_repo 内部会再取 Volume GUID）
-    try:
-        mount_root = _volume.get_volume_mount_root(str(target.resolve()))
-    except _volume.VolumeError as e:
-        _err(f"无法解析目标卷挂载点（M10 卷锚所需）: {e}")
-        return EXIT_ERROR
-
-    # 确认已完成（或 strict 由底层直接拒绝），assume_yes 防止底层二次提问
-    info = init_repo(target, filesystem_policy=policy, assume_yes=True)
-
-    # M10 卷锚三字段：Volume GUID + repo_id + 卷内相对路径（重定位依据）
-    assert info.volume.guid is not None
-    rel = os.path.relpath(str(target.resolve()), mount_root)
-    repo_dir = "." if rel == "." else rel.replace("/", "\\")
-    cfg = TaskConfig(
-        name=task_name,
-        source=str(source.resolve()),
-        target_path=str(target.resolve()),
-        filesystem_policy=policy,
-        volume_guid=info.volume.guid,
-        repo_id=info.repo_id,
-        repo_dir=repo_dir,
+    request = setup.SetupRequest(
+        task_name=getattr(args, "task", None) or DEFAULT_TASK_NAME,
+        source=args.source,
+        target=args.target,
+        config_root=Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT),
+        filesystem_policy=args.filesystem_policy,
     )
-    written = write_task_config(cfg, config_root)
+    try:
+        try:
+            result = setup.create_backup(request)
+        except setup.CopyModeApprovalRequired as approval:
+            # Preserve warning/prompt order: confirmation precedes mount/repo checks.
+            volume = approval.volume
+            _info(
+                args,
+                f"目标文件系统为 {volume.filesystem}，不支持硬链接：\n"
+                "  - 将无法跨快照共享未变更文件的存储（空间占用显著增加）；\n"
+                "  - 备份将以整文件复制模式运行。\n"
+                "建议将目标盘转换为 NTFS 后重新 init。",
+            )
+            _confirm(args, "是否仍以整文件复制模式继续？")
+            result = setup.create_backup(request, copy_mode_approved=True)
+    except setup.SetupFailure as failure:
+        if isinstance(failure.cause, setup.SetupUsageError):
+            _err(str(failure.cause))
+            return EXIT_USAGE
+        # Keep existing CLI exception/exit mapping, not a new DTO/JSON error schema.
+        raise failure.cause from None
 
+    info = result.repo
+    written = result.config_path
+    policy = request.filesystem_policy
     summary = {
         "repo": str(info.path),
         "repo_id": info.repo_id,

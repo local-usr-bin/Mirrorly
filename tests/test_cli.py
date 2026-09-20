@@ -33,6 +33,7 @@ from mirrorly import snapshot as snapshot_mod
 from mirrorly.application import locking as locking_mod
 from mirrorly.application import reports as reports_mod
 from mirrorly.application import repositories as repositories_mod
+from mirrorly.application import setup as setup_mod
 from mirrorly.cli import main
 from mirrorly.config import (
     ConfigError,
@@ -138,7 +139,7 @@ def _target_for_repo_path_length(base: Path, length: int) -> Path:
 def _fake_exfat(monkeypatch) -> None:
     """把 init、共享 resolver 与 repo 内部的卷信息查询都 mock 成 exFAT。"""
     fake = lambda p: VolumeInfo("USB", "DEADBEEF", "exFAT")  # noqa: E731
-    monkeypatch.setattr(cli, "get_volume_info", fake)
+    monkeypatch.setattr(setup_mod, "get_volume_info", fake)
     monkeypatch.setattr(repositories_mod, "get_volume_info", fake)
     import mirrorly.repo as repo_mod
 
@@ -3264,7 +3265,7 @@ class TestExtractionFinalization:
             assert list_manifests(repo) == []
             raise OSError("injected config write failure")
 
-        monkeypatch.setattr(cli, "write_task_config", fail_config)
+        monkeypatch.setattr(setup_mod, "write_task_config", fail_config)
         assert _init(ws, "--json") == 1
         captured = capsys.readouterr()
         assert captured.out == "" and "injected config write failure" in captured.err
