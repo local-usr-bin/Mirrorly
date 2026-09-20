@@ -244,8 +244,12 @@ Phase 2E 验证（2026-09-21，Windows；全部 Python 命令显式使用 `mirro
 
 结构对比确认：存续 CLI 函数仅 cmd_list/cmd_verify/cmd_restore 的 AST 改变；init/Backup、parser、main、prompt helpers 不变。既有 CLI 685 条断言仅有四处 latest helper 引用迁移，预期值/条件不变；list/restore JSON 构造和 verify report entry 序列化不变。application 无 CLI import，隔离子进程实际完成 query/verify/report failure/restore/partial 操作。底层 core、setup/Backup application、desktop/fake-worker、依赖/版本均未修改；未重建 WinUI。
 
-## 尚未实现
+## Phase 2E 结束时的边界与后续状态
 
 生产 Python worker、真实 GUI Create Backup / Back up now、progress、cooperative cancellation、queue 和 GUI 配置持久化均未实现。权威 setup preflight 与五类共享 application 操作目前只存在于 Python 侧；GUI 不执行真实 Mirrorly 操作，Setup 仍是 Phase 1C prototype，Home 按钮仍使用 fixture。Phase 0–1C 文档继续作为各阶段历史记录。
 
-O-01～O-09 保持 [OPEN](README.md#待决事项登记)，尤其 O-09 最终 Python worker packaging/distribution 未作决定。后续 worker 集成需要独立任务与 review；本轮不开始 production worker。
+上述是 Phase 2E 结束时的实现范围。后续 Phase 3B 已通过独立任务实现
+[production bootstrap / 只读 IPC](PRODUCTION_WORKER.md)，仅开放真实 setup.preflight；
+production mutation、Resume、progress/cancel 和 GUI Create Backup/Back up now 仍未实现。
+O-01/O-03/O-04 及 Resume deadline 的批准状态见 [当前登记](README.md#待决事项登记)；
+O-07/O-09 继续 OPEN，稳定 worker lifecycle gate 必须先于首个 mutation method。

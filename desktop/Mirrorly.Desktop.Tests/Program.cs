@@ -191,6 +191,7 @@ await Test("Responsive boundary stacks status; preview actions never advance fix
     return Task.CompletedTask;
 });
 await SetupTests.Run(Test, Check);
+await ProductionWorkerTests.Run(Test, Check, args);
 Console.WriteLine($"{passed} passed; {failed} failed.");
 return failed == 0 ? 0 : 1;
 

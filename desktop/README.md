@@ -90,7 +90,7 @@ undecided. Phase 1B does not change the package layout or dependencies.
 ## Tests
 
 ```powershell
-dotnet run --project Mirrorly.Desktop.Tests/Mirrorly.Desktop.Tests.csproj
+dotnet run --project Mirrorly.Desktop.Tests/Mirrorly.Desktop.Tests.csproj -- 'C:\Users\sakur\anaconda3\envs\mirrorly-gui-dev\python.exe'
 & 'C:\Users\sakur\anaconda3\envs\mirrorly\python.exe' -m pytest phase1a_worker -q
 ```
 
@@ -99,6 +99,12 @@ third-party test framework. It links the actual non-UI services/ViewModel and
 spawns the same explicit fake worker for integration tests. Phase 1B adds fixture,
 navigation and responsive presentation coverage (17 tests total). Use `dotnet run`, not
 `dotnet test`; this harness is not a Visual Studio Test Explorer adapter.
+
+Phase 3B adds a separate production client and read-only cross-process tests;
+the extra interpreter argument applies to that client only. The UI still uses
+the unchanged fake client/configuration above. See the current
+[production worker contract](../docs/gui/PRODUCTION_WORKER.md) for methods,
+qualification and tests. No real UI Backup/Create action is connected.
 
 Package assets are unmodified placeholders from the installed Microsoft C# WinUI
 packaged template. They are not Mirrorly branding. `bin`, `obj`, `AppPackages`,

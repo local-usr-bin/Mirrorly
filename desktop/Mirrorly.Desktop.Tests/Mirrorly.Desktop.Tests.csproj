@@ -6,6 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Mirrorly.Desktop\Services\ProductionProtocol.cs" Link="Services\ProductionProtocol.cs" />
+    <Compile Include="..\Mirrorly.Desktop\Services\ProductionWorkerClient.cs" Link="Services\ProductionWorkerClient.cs" />
+    <AssemblyMetadata Include="CheckoutRoot" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))" />
     <Compile Include="..\Mirrorly.Desktop\Services\FolderBrowserService.cs" Link="Services\FolderBrowserService.cs" />
     <Compile Include="..\Mirrorly.Desktop\ViewModels\FolderBrowserViewModel.cs" Link="ViewModels\FolderBrowserViewModel.cs" />
     <Compile Include="..\Mirrorly.Desktop\ViewModels\BackupSetupViewModel.cs" Link="ViewModels\BackupSetupViewModel.cs" />
