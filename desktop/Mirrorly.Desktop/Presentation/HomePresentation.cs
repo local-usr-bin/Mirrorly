@@ -21,7 +21,8 @@ public static class HomePolicy
     public const int ManyBackupPreviewLimit = 4;
     public const double StackedStatusBelow = 720;
     public const double CompactActivityBelow = 480;
-    public const double ExpandedNavigationAt = 1000;
+    // Compact navigation preserves content room on medium windows; see PHASE1C calibration.
+    public const double ExpandedNavigationAt = 1280;
     public const double CompactNavigationAt = 640;
     public static readonly bool DecorationsEnabled = true;
     public static bool StackStatus(double width) => width < StackedStatusBelow;

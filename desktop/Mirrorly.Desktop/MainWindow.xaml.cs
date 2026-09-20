@@ -15,6 +15,7 @@ public sealed partial class MainWindow : Window
     private readonly FakeWorkerClient worker = new();
     private readonly NotificationService notifications = new();
     private readonly HomeView home = new();
+    private readonly BackupSetupView setup = new();
     private TrayService? tray;
     private bool exiting;
 #if DEBUG
@@ -28,6 +29,8 @@ public sealed partial class MainWindow : Window
         Navigation.ExpandedModeThresholdWidth = HomePolicy.ExpandedNavigationAt;
         Navigation.CompactModeThresholdWidth = HomePolicy.CompactNavigationAt;
         home.Navigate += Navigate;
+        setup.Navigate += Navigate;
+        setup.StepChanged += () => DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
         home.DecorationChanged += _ => UpdateShellLayout();
         PageHost.Content = home;
         worker.StatusChanged += status => DispatcherQueue.TryEnqueue(() => diagnosticsModel.UpdateStatus(status));
@@ -114,6 +117,7 @@ public sealed partial class MainWindow : Window
     {
         shell.Navigate(page);
         PageHost.Content = page == ShellPage.Home ? home :
+            page == ShellPage.BackupSetup ? setup :
 #if DEBUG
             page == ShellPage.Diagnostics ? diagnostics :
 #endif
@@ -124,7 +128,7 @@ public sealed partial class MainWindow : Window
             var tag = page == ShellPage.BackupSetup ? ShellPage.Backups : page;
             var selected = Navigation.MenuItems.Concat(Navigation.FooterMenuItems)
                 .OfType<NavigationViewItem>().FirstOrDefault(item => item.Tag?.ToString() == tag.ToString());
-            // Do not let the selection callback replace the setup placeholder.
+            // Setup belongs under Backups without replacing the active setup view.
             if (!ReferenceEquals(Navigation.SelectedItem, selected)) { suppressSelection = true; Navigation.SelectedItem = selected; suppressSelection = false; }
         }
         PageHost.UpdateLayout();

@@ -1,0 +1,47 @@
+<UserControl x:Class="Mirrorly.Desktop.Components.FolderBrowserPane" x:Name="Pane" KeyboardAcceleratorPlacementMode="Hidden"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <UserControl.KeyboardAccelerators>
+  <KeyboardAccelerator Key="L" Modifiers="Control" ScopeOwner="{x:Bind Pane}" Invoked="EditPath_Invoked" />
+  <KeyboardAccelerator Key="Left" Modifiers="Menu" ScopeOwner="{x:Bind Pane}" Invoked="Back_Invoked" />
+  <KeyboardAccelerator Key="Up" Modifiers="Menu" ScopeOwner="{x:Bind Pane}" Invoked="Up_Invoked" />
+ </UserControl.KeyboardAccelerators>
+ <Border Style="{StaticResource MirrorlyCard}" Padding="{StaticResource MirrorlyCompactCardPadding}">
+  <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
+   <TextBlock Text="{Binding Title}" Style="{StaticResource MirrorlySectionTitle}" />
+   <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyTextSpacing}">
+    <Button x:Name="BackButton" Content="← Back" IsEnabled="{Binding CanBack}" Click="Back_Click" Style="{StaticResource MirrorlySecondaryButton}" />
+    <Button x:Name="UpButton" Content="↑ Up" IsEnabled="{Binding CanUp}" Click="Up_Click" Style="{StaticResource MirrorlySecondaryButton}" />
+   </StackPanel>
+   <Button x:Name="AddressButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Click="EditPath_Click"
+     ToolTipService.ToolTip="{Binding Address}" Style="{StaticResource MirrorlySecondaryButton}">
+    <TextBlock Text="{Binding Address}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+   </Button>
+   <TextBox x:Name="AddressInput" Visibility="Collapsed" KeyDown="AddressInput_KeyDown" TextWrapping="NoWrap" />
+   <InfoBar x:Name="ErrorBar" IsClosable="False" Severity="Error" Title="Folder unavailable" Message="{Binding Error}"
+     AutomationProperties.LiveSetting="Polite" />
+   <ProgressBar x:Name="LoadingIndicator" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Reading folders" />
+   <ListView x:Name="FolderList" ItemsSource="{Binding Folders}" Height="{StaticResource MirrorlyFolderListHeight}"
+     SelectionMode="Single" SelectionChanged="FolderList_SelectionChanged" DoubleTapped="FolderList_DoubleTapped" PreviewKeyDown="FolderList_KeyDown"
+     ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+    <ListView.ItemContainerStyle><Style TargetType="ListViewItem">
+     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+     <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+    </Style></ListView.ItemContainerStyle>
+    <ListView.ItemTemplate><DataTemplate>
+     <Grid ColumnSpacing="{StaticResource MirrorlyControlSpacing}" ToolTipService.ToolTip="{Binding Path}">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <FontIcon Glyph="&#xE8B7;" Foreground="{ThemeResource MirrorlyAccentBrush}" AutomationProperties.AccessibilityView="Raw" />
+      <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource MirrorlyBody}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+     </Grid>
+    </DataTemplate></ListView.ItemTemplate>
+   </ListView>
+   <TextBlock x:Name="EmptyMessage" Text="No subfolders. You can use this folder." Style="{StaticResource MirrorlyCaption}" Visibility="Collapsed" />
+   <Button x:Name="UseCurrentButton" Content="Use this folder" Click="UseCurrent_Click" Style="{StaticResource MirrorlySecondaryButton}" />
+   <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}">
+    <TextBlock Text="Selected folder" Style="{StaticResource MirrorlyCaption}" />
+    <TextBlock Text="{Binding SelectionText}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding SelectionText}"
+      AutomationProperties.Name="{Binding SelectionText}" AutomationProperties.LiveSetting="Polite" />
+   </StackPanel>
+  </StackPanel>
+ </Border>
+</UserControl>

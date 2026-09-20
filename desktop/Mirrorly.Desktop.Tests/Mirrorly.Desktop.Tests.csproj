@@ -6,6 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Mirrorly.Desktop\Services\FolderBrowserService.cs" Link="Services\FolderBrowserService.cs" />
+    <Compile Include="..\Mirrorly.Desktop\ViewModels\FolderBrowserViewModel.cs" Link="ViewModels\FolderBrowserViewModel.cs" />
+    <Compile Include="..\Mirrorly.Desktop\ViewModels\BackupSetupViewModel.cs" Link="ViewModels\BackupSetupViewModel.cs" />
     <!-- Exercise the actual production-side test client without loading WinUI. -->
     <Compile Include="..\Mirrorly.Desktop\Services\Protocol.cs" Link="Services\Protocol.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\FakeWorkerClient.cs" Link="Services\FakeWorkerClient.cs" />

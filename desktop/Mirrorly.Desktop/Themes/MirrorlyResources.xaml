@@ -96,6 +96,8 @@
   <x:Double x:Key="MirrorlyControlSpacing">12</x:Double>
   <x:Double x:Key="MirrorlyTextSpacing">6</x:Double>
   <x:Double x:Key="MirrorlyContentMaxWidth">1120</x:Double>
+  <!-- Only the folder list scroll viewport is bounded; labels/errors/actions remain auto-sized. -->
+  <x:Double x:Key="MirrorlyFolderListHeight">208</x:Double>
   <x:Double x:Key="MirrorlyNavigationWidth">244</x:Double>
   <!-- Asset pixel bounds never determine page measurement. Placements own these DIP slots. -->
   <x:Double x:Key="MirrorlyHeaderDecorationWidth">180</x:Double>

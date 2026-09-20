@@ -190,6 +190,7 @@ await Test("Responsive boundary stacks status; preview actions never advance fix
     Check(ReferenceEquals(original, home.Fixture) && home.PrototypeMessage.Contains("No files"));
     return Task.CompletedTask;
 });
+await SetupTests.Run(Test, Check);
 Console.WriteLine($"{passed} passed; {failed} failed.");
 return failed == 0 ? 0 : 1;
 

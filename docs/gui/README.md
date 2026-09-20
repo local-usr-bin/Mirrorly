@@ -3,8 +3,10 @@
 > Phase 0 历史快照：2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
 > 当时 GUI、worker、共享 application service 均尚未实现；下文保留该阶段的产品边界与契约提案。当前实施状态见下方更新。
 
-**当前实施状态（2026-09-20）**：[Phase 1B Visual Shell & Home Prototype](PHASE1B.md)
-**PASS — visual review approved**；v1 与当前 SVG 已获批准。Home 使用 presentation fixtures，不连接真实 core。
+**当前实施状态（2026-09-20）**：[Phase 1C Backup Setup UX Prototype](PHASE1C.md)
+**PASS — product review approved**，含最终 responsive policy；真实只读文件夹浏览 + 两步确认，Create 仅显示原型提示，不连接 core。
+[Phase 1B Visual Shell & Home Prototype](PHASE1B.md) 已冻结为
+**PASS — visual review approved**（`00d07da0bd8fe2e3350523c57eb6c2d2089e8683`）；v1 与当前 SVG 已获批准。Home 继续使用 presentation fixtures。
 [Phase 1A Technical Vertical Slice](PHASE1A.md) 已冻结为
 **PASS — Technical Vertical Slice validated**（`de1ed8626e0da563f212530327c762a87009b4c7`）。
 下文保留 Phase 0 设计与待决项；这些阶段不代表生产 worker、真实 backup 功能或最终分发已完成。
