@@ -1,12 +1,37 @@
-# Mirrorly Phase 1A technical prototype
+# Mirrorly desktop — Phase 1B visual prototype
 
 This is a **local development prototype**, not the Mirrorly backup application.
 It never imports or calls the existing Python core. No backup, restore, verify,
 repository writes, real cancellation, queue, or persistent Activity exists here.
 
 Open `Mirrorly.Desktop.slnx` in Visual Studio 2026 and select x64. The desktop
-project uses the packaged launch profile. The completed technical-slice acceptance
-and remaining production limitations are recorded in [PHASE1A](../docs/gui/PHASE1A.md).
+project uses the packaged launch profile. Home now uses sample presentation data;
+Backups, Restore, Activity and Settings are placeholders. The current visual scope
+and verification are recorded in [PHASE1B](../docs/gui/PHASE1B.md). The frozen
+technical-slice acceptance remains in [PHASE1A](../docs/gui/PHASE1A.md).
+
+## Visual review
+
+Home opens with the healthy, one-backup fixture. Sample actions show a prototype
+notice; they never access the displayed paths. In **Debug only**, open **Developer
+diagnostics** at the bottom of the navigation pane. Its fixture selector covers
+healthy, destination unavailable, failed, completed with issues, saved with a
+finalization problem, running, queued, two/three/many backups, empty and long paths.
+Selecting a fixture returns to Home. Resize controls provide a small review window
+or restore the normal window. The page also retains the Phase 1A IPC/notification
+test controls and reports the actual XAML DPI scale. Release has no diagnostics entry.
+
+Use `Themes/MirrorlyResources.xaml` for semantic colors, spacing, typography and
+radii; `Presentation/HomePresentation.cs` for fixture data, preview limits and
+responsive policy; `Components/BackupSummary` for summary layouts; and
+`Assets/Decorations/*.svg` for the two original botanical illustrations, with
+`Components/SpringSprig` as their shared noninteractive SVG presenter. Placement,
+scale and visibility stay in the central resources/presentation policy. Visual
+Baseline v1 supersedes v0; static Home contains no detached petals. Future motion
+is documented in [MOTION](../docs/gui/MOTION.md), not implemented.
+Views express layout and harmless intentions, not backup orchestration. Light is
+the current visual target; High Contrast uses system colors. Dark is only a
+resource fallback, not an advertised theme option.
 
 ## Build and package
 
@@ -58,6 +83,9 @@ directory's import lookup, or the existing editable install.
 Consequently this test package is tied to this development machine/checkout.
 Moving it to another PC does not yet distribute Python or the worker. That is a
 known distribution gap, not a reason to change the Python core.
+Single-project MSIX output does not settle final worker distribution: **O-09 stays
+OPEN**, with multi-executable packaging and unpackaged/installer approaches still
+undecided. Phase 1B does not change the package layout or dependencies.
 
 ## Tests
 
@@ -68,9 +96,14 @@ dotnet run --project Mirrorly.Desktop.Tests/Mirrorly.Desktop.Tests.csproj
 
 The C# test project is a small executable harness (exit 1 on failure), with no
 third-party test framework. It links the actual non-UI services/ViewModel and
-spawns the same explicit fake worker for integration tests. Use `dotnet run`, not
+spawns the same explicit fake worker for integration tests. Phase 1B adds fixture,
+navigation and responsive presentation coverage (17 tests total). Use `dotnet run`, not
 `dotnet test`; this harness is not a Visual Studio Test Explorer adapter.
 
 Package assets are unmodified placeholders from the installed Microsoft C# WinUI
 packaged template. They are not Mirrorly branding. `bin`, `obj`, `AppPackages`,
 certificates and local IDE state are excluded from Git.
+Phase 1B local screenshots are in `artifacts/phase1b-review/` (also excluded); see
+the verification record for which states and system display settings were observed.
+The subsequent v1 fidelity-pass captures are in `artifacts/phase1b-fidelity-v1/`;
+use that set for current visual review rather than the earlier provisional artwork.

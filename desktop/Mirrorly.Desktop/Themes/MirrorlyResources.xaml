@@ -1,0 +1,181 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <Visibility x:Key="MirrorlyDecorationVisibility">Visible</Visibility>
+      <SolidColorBrush x:Key="MirrorlyAccentBrush" Color="#328351" />
+      <SolidColorBrush x:Key="MirrorlyAccentHoverBrush" Color="#286E43" />
+      <SolidColorBrush x:Key="MirrorlySurfaceBrush" Color="#F8FCF9" />
+      <SolidColorBrush x:Key="MirrorlySurfaceSubtleBrush" Color="#F0F8F1" />
+      <SolidColorBrush x:Key="MirrorlySurfaceElevatedBrush" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="MirrorlyNavigationSurfaceBrush" Color="#EDF7ED" />
+      <SolidColorBrush x:Key="MirrorlyFlowerPinkBrush" Color="#EDA4BD" />
+      <SolidColorBrush x:Key="MirrorlyLeafGreenBrush" Color="#8AC795" />
+      <SolidColorBrush x:Key="MirrorlyStatusSuccessBrush" Color="#27854B" />
+      <SolidColorBrush x:Key="MirrorlyStatusOnSuccessBrush" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="MirrorlyStatusWarningBrush" Color="#946019" />
+      <SolidColorBrush x:Key="MirrorlyStatusErrorBrush" Color="#BC3439" />
+      <SolidColorBrush x:Key="MirrorlyTextPrimaryBrush" Color="#203733" />
+      <SolidColorBrush x:Key="MirrorlyTextSecondaryBrush" Color="#61716A" />
+      <SolidColorBrush x:Key="MirrorlyBorderBrush" Color="#DEE9E1" />
+      <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#EDF7ED" />
+      <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#EDF7ED" />
+      <SolidColorBrush x:Key="AccentButtonBackground" Color="#328351" />
+      <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#286E43" />
+      <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#286E43" />
+      <SolidColorBrush x:Key="AccentButtonForeground" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#328351" />
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Default">
+      <Visibility x:Key="MirrorlyDecorationVisibility">Visible</Visibility>
+      <SolidColorBrush x:Key="MirrorlyAccentBrush" Color="#A2D9AE" />
+      <SolidColorBrush x:Key="MirrorlyAccentHoverBrush" Color="#B9E7C3" />
+      <SolidColorBrush x:Key="MirrorlySurfaceBrush" Color="#202823" />
+      <SolidColorBrush x:Key="MirrorlySurfaceSubtleBrush" Color="#29372E" />
+      <SolidColorBrush x:Key="MirrorlySurfaceElevatedBrush" Color="#2D3630" />
+      <SolidColorBrush x:Key="MirrorlyNavigationSurfaceBrush" Color="#243129" />
+      <SolidColorBrush x:Key="MirrorlyFlowerPinkBrush" Color="#CE95A8" />
+      <SolidColorBrush x:Key="MirrorlyLeafGreenBrush" Color="#8AB895" />
+      <SolidColorBrush x:Key="MirrorlyStatusSuccessBrush" Color="#8FDEA6" />
+      <SolidColorBrush x:Key="MirrorlyStatusOnSuccessBrush" Color="#173021" />
+      <SolidColorBrush x:Key="MirrorlyStatusWarningBrush" Color="#F0C27B" />
+      <SolidColorBrush x:Key="MirrorlyStatusErrorBrush" Color="#FFB4B4" />
+      <SolidColorBrush x:Key="MirrorlyTextPrimaryBrush" Color="#EDF4EF" />
+      <SolidColorBrush x:Key="MirrorlyTextSecondaryBrush" Color="#C2CEC5" />
+      <SolidColorBrush x:Key="MirrorlyBorderBrush" Color="#516056" />
+      <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#243129" />
+      <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#243129" />
+      <SolidColorBrush x:Key="AccentButtonBackground" Color="#A2D9AE" />
+      <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#B9E7C3" />
+      <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#B9E7C3" />
+      <SolidColorBrush x:Key="AccentButtonForeground" Color="#173021" />
+      <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#173021" />
+      <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#173021" />
+      <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#A2D9AE" />
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="HighContrast">
+      <Visibility x:Key="MirrorlyDecorationVisibility">Collapsed</Visibility>
+      <SolidColorBrush x:Key="MirrorlyAccentBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyAccentHoverBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlySurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="MirrorlySurfaceSubtleBrush" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="MirrorlySurfaceElevatedBrush" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="MirrorlyNavigationSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="MirrorlyFlowerPinkBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyLeafGreenBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyStatusSuccessBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyStatusOnSuccessBrush" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="MirrorlyStatusWarningBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyStatusErrorBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyTextPrimaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyTextSecondaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="MirrorlyBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="AccentButtonBackground" Color="{ThemeResource SystemColorHighlightColor}" />
+      <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="{ThemeResource SystemColorHighlightColor}" />
+      <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="{ThemeResource SystemColorHighlightColor}" />
+      <SolidColorBrush x:Key="AccentButtonForeground" Color="{ThemeResource SystemColorHighlightTextColor}" />
+      <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="{ThemeResource SystemColorHighlightTextColor}" />
+      <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="{ThemeResource SystemColorHighlightTextColor}" />
+      <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="{ThemeResource SystemColorHighlightColor}" />
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+  <Thickness x:Key="MirrorlyPageMargin">32,24,32,32</Thickness>
+  <Thickness x:Key="MirrorlyCompactPageMargin">16,16,16,24</Thickness>
+  <!-- Reserve the standard NavigationView toggle row outside the scrolling content. -->
+  <Thickness x:Key="MirrorlyMinimalNavigationInset">0,48,0,0</Thickness>
+  <Thickness x:Key="MirrorlyNavigationInset">0</Thickness>
+  <Thickness x:Key="MirrorlyCardPadding">24</Thickness>
+  <Thickness x:Key="MirrorlyCompactCardPadding">16</Thickness>
+  <Thickness x:Key="MirrorlyButtonPadding">20,12</Thickness>
+  <Thickness x:Key="MirrorlyBorderThickness">1</Thickness>
+  <x:Double x:Key="MirrorlySectionSpacing">28</x:Double>
+  <x:Double x:Key="MirrorlyCardSpacing">16</x:Double>
+  <x:Double x:Key="MirrorlyControlSpacing">12</x:Double>
+  <x:Double x:Key="MirrorlyTextSpacing">6</x:Double>
+  <x:Double x:Key="MirrorlyContentMaxWidth">1120</x:Double>
+  <x:Double x:Key="MirrorlyNavigationWidth">244</x:Double>
+  <!-- Asset pixel bounds never determine page measurement. Placements own these DIP slots. -->
+  <x:Double x:Key="MirrorlyHeaderDecorationWidth">180</x:Double>
+  <x:Double x:Key="MirrorlyHeaderDecorationHeight">94</x:Double>
+  <x:Double x:Key="MirrorlyHeaderDecorationScale">1</x:Double>
+  <x:Double x:Key="MirrorlySidebarDecorationWidth">218</x:Double>
+  <x:Double x:Key="MirrorlySidebarDecorationHeight">230</x:Double>
+  <x:Double x:Key="MirrorlySidebarDecorationOffsetX">0</x:Double>
+  <x:Double x:Key="MirrorlySidebarDecorationOffsetY">0</x:Double>
+  <Thickness x:Key="MirrorlySidebarDecorationMargin">4,0,4,8</Thickness>
+  <CornerRadius x:Key="MirrorlyCornerRadiusSmall">6</CornerRadius>
+  <CornerRadius x:Key="MirrorlyCornerRadiusMedium">12</CornerRadius>
+  <CornerRadius x:Key="MirrorlyCornerRadiusLarge">16</CornerRadius>
+  <Style x:Key="MirrorlySidebarDecoration" TargetType="UserControl">
+    <Setter Property="Width" Value="{StaticResource MirrorlySidebarDecorationWidth}"/>
+    <Setter Property="Height" Value="{StaticResource MirrorlySidebarDecorationHeight}"/>
+    <Setter Property="Margin" Value="{StaticResource MirrorlySidebarDecorationMargin}"/>
+    <Setter Property="RenderTransform"><Setter.Value><TranslateTransform X="{StaticResource MirrorlySidebarDecorationOffsetX}" Y="{StaticResource MirrorlySidebarDecorationOffsetY}"/></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="MirrorlyHeaderDecoration" TargetType="UserControl">
+    <Setter Property="Width" Value="{StaticResource MirrorlyHeaderDecorationWidth}"/>
+    <Setter Property="Height" Value="{StaticResource MirrorlyHeaderDecorationHeight}"/>
+    <Setter Property="RenderTransformOrigin" Value="1,0"/>
+    <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="{StaticResource MirrorlyHeaderDecorationScale}" ScaleY="{StaticResource MirrorlyHeaderDecorationScale}"/></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="MirrorlyBody" TargetType="TextBlock">
+    <Setter Property="TextWrapping" Value="Wrap" />
+    <Setter Property="Foreground" Value="{ThemeResource MirrorlyTextPrimaryBrush}" />
+    <Setter Property="FontSize" Value="14" />
+  </Style>
+  <Style x:Key="MirrorlySecondary" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}">
+    <Setter Property="Foreground" Value="{ThemeResource MirrorlyTextSecondaryBrush}" />
+  </Style>
+  <Style x:Key="MirrorlyCaption" TargetType="TextBlock" BasedOn="{StaticResource MirrorlySecondary}">
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style x:Key="MirrorlyPageTitle" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}">
+    <Setter Property="FontSize" Value="32" /><Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="AutomationProperties.HeadingLevel" Value="Level1" />
+  </Style>
+  <Style x:Key="MirrorlySectionTitle" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}">
+    <Setter Property="FontSize" Value="20" /><Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="AutomationProperties.HeadingLevel" Value="Level2" />
+  </Style>
+  <Style x:Key="MirrorlyStatusTitle" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}">
+    <Setter Property="FontSize" Value="24" /><Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style x:Key="MirrorlyPath" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}">
+    <Setter Property="TextWrapping" Value="NoWrap" /><Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    <Setter Property="IsTextSelectionEnabled" Value="True" />
+  </Style>
+  <Style x:Key="MirrorlyCard" TargetType="Border">
+    <Setter Property="Background" Value="{ThemeResource MirrorlySurfaceElevatedBrush}" />
+    <Setter Property="BorderBrush" Value="{ThemeResource MirrorlyBorderBrush}" />
+    <Setter Property="BorderThickness" Value="{StaticResource MirrorlyBorderThickness}" />
+    <Setter Property="CornerRadius" Value="{StaticResource MirrorlyCornerRadiusLarge}" />
+    <Setter Property="Padding" Value="{StaticResource MirrorlyCardPadding}" />
+  </Style>
+  <Style x:Key="MirrorlyPrimaryButton" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+    <Setter Property="Padding" Value="{StaticResource MirrorlyButtonPadding}" />
+    <Setter Property="CornerRadius" Value="{StaticResource MirrorlyCornerRadiusSmall}" />
+    <Setter Property="UseSystemFocusVisuals" Value="True" />
+  </Style>
+  <Style x:Key="MirrorlySecondaryButton" TargetType="Button">
+    <Setter Property="UseSystemFocusVisuals" Value="True" />
+    <Setter Property="CornerRadius" Value="{StaticResource MirrorlyCornerRadiusSmall}" />
+  </Style>
+  <Style x:Key="MirrorlySuccessText" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}"><Setter Property="Foreground" Value="{ThemeResource MirrorlyStatusSuccessBrush}" /></Style>
+  <Style x:Key="MirrorlyStatusBadge" TargetType="Border">
+    <Setter Property="Width" Value="28"/><Setter Property="Height" Value="28"/>
+    <Setter Property="CornerRadius" Value="14"/><Setter Property="VerticalAlignment" Value="Top"/>
+  </Style>
+  <Style x:Key="MirrorlySuccessBadge" TargetType="Border" BasedOn="{StaticResource MirrorlyStatusBadge}">
+    <Setter Property="Background" Value="{ThemeResource MirrorlyStatusSuccessBrush}"/>
+  </Style>
+  <Style x:Key="MirrorlySuccessBadgeText" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}">
+    <Setter Property="Foreground" Value="{ThemeResource MirrorlyStatusOnSuccessBrush}"/>
+  </Style>
+  <Style x:Key="MirrorlyWarningText" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}"><Setter Property="Foreground" Value="{ThemeResource MirrorlyStatusWarningBrush}" /></Style>
+  <Style x:Key="MirrorlyErrorText" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}"><Setter Property="Foreground" Value="{ThemeResource MirrorlyStatusErrorBrush}" /></Style>
+  <Style x:Key="MirrorlyWorkingText" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}"><Setter Property="Foreground" Value="{ThemeResource MirrorlyAccentBrush}" /></Style>
+  <Style x:Key="MirrorlyNeutralText" TargetType="TextBlock" BasedOn="{StaticResource MirrorlyBody}"><Setter Property="Foreground" Value="{ThemeResource MirrorlyTextSecondaryBrush}" /></Style>
+</ResourceDictionary>

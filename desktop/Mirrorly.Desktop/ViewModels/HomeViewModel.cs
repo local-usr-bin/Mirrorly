@@ -1,29 +1,32 @@
 using System.ComponentModel;
-using Mirrorly.Desktop.Services;
+using Mirrorly.Desktop.Presentation;
 
 namespace Mirrorly.Desktop.ViewModels;
 
 public sealed class HomeViewModel : INotifyPropertyChanged
 {
-    private WorkerStatus status = new(WorkerState.Disconnected, "Not started.");
-    public string StatusText => $"Worker status: {status.State}";
-    public string Detail => status.Detail;
-    public bool CanRequest => status.State == WorkerState.Connected;
-    public string LastEvent { get; private set; } = "No test event received.";
+    public HomeScenario Scenario { get; private set; }
+    public HomeFixture Fixture { get; private set; } = HomeFixtures.Create(HomeScenario.Healthy);
+    public StatusPresentation Status => Fixture.Status;
+    public IReadOnlyList<BackupPresentation> Backups => HomePolicy.Preview(Fixture.Backups);
+    public IReadOnlyList<ActivityPresentation> Activity => Fixture.Activity.Take(HomePolicy.RecentActivityLimit).ToArray();
+    public bool IsEmpty => Fixture.Backups.Count == 0;
+    public bool CompactBackups => Fixture.Backups.Count > 1;
+    public bool ShowAllBackups => Fixture.Backups.Count > 3;
+    public bool ShowDecoration => HomePolicy.DecorationsEnabled && (IsEmpty || Status.Tone == StatusTone.Success);
+    public string BackupHeading => ShowAllBackups ? "Backups at a glance" : CompactBackups ? "Your backups" : "Your backup";
+    public string PrototypeMessage { get; private set; } = "";
     public event PropertyChangedEventHandler? PropertyChanged;
-
-    // Called by the view's UI dispatcher; this model has no WinUI dependency.
-    public void UpdateStatus(WorkerStatus value)
+    public void SelectFixture(HomeScenario scenario)
     {
-        status = value;
-        PropertyChanged?.Invoke(this, new(nameof(StatusText)));
-        PropertyChanged?.Invoke(this, new(nameof(Detail)));
-        PropertyChanged?.Invoke(this, new(nameof(CanRequest)));
+        Scenario = scenario;
+        Fixture = HomeFixtures.Create(scenario);
+        PrototypeMessage = "";
+        PropertyChanged?.Invoke(this, new(null));
     }
-
-    public void ShowEvent(string text)
+    public void ShowPrototypeAction(string action)
     {
-        LastEvent = text;
-        PropertyChanged?.Invoke(this, new(nameof(LastEvent)));
+        PrototypeMessage = $"{action} is a preview in Phase 1B. No files were read or changed.";
+        PropertyChanged?.Invoke(this, new(nameof(PrototypeMessage)));
     }
 }

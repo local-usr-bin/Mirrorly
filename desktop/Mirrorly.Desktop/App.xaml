@@ -6,7 +6,7 @@
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
         <controls:XamlControlsResources />
-        <ResourceDictionary Source="Themes/PrototypeResources.xaml" />
+        <ResourceDictionary Source="Themes/MirrorlyResources.xaml" />
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Application.Resources>

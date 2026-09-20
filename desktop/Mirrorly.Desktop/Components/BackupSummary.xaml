@@ -1,0 +1,57 @@
+<UserControl x:Class="Mirrorly.Desktop.Components.BackupSummary"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <Border x:Name="Card" Style="{StaticResource MirrorlyCard}">
+  <Grid>
+  <Grid x:Name="DetailedLayout" ColumnSpacing="{StaticResource MirrorlyCardSpacing}">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <FontIcon Glyph="&#xE8B7;" Foreground="{ThemeResource MirrorlyAccentBrush}" VerticalAlignment="Top" AutomationProperties.AccessibilityView="Raw" />
+   <StackPanel Grid.Column="1" Spacing="{StaticResource MirrorlyControlSpacing}">
+    <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}">
+     <TextBlock Text="{Binding Name}" Style="{StaticResource MirrorlySectionTitle}"/>
+     <TextBlock x:Name="Status" Text="{Binding Status}" />
+    </StackPanel>
+    <Grid x:Name="Paths" ColumnSpacing="{StaticResource MirrorlyCardSpacing}" RowSpacing="{StaticResource MirrorlyControlSpacing}">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="DestinationColumn" Width="*"/></Grid.ColumnDefinitions>
+     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <StackPanel x:Name="SourcePanel" Spacing="{StaticResource MirrorlyTextSpacing}">
+     <TextBlock x:Name="SourceLabel" Text="Folder to back up" Style="{StaticResource MirrorlyCaption}"/>
+     <TextBlock Text="{Binding Source}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Source}" AutomationProperties.Name="{Binding Source}"/>
+    </StackPanel>
+    <StackPanel x:Name="DestinationPanel" Grid.Column="1" Spacing="{StaticResource MirrorlyTextSpacing}">
+     <TextBlock Text="Backup location" Style="{StaticResource MirrorlyCaption}"/>
+     <TextBlock Text="{Binding Destination}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Destination}" AutomationProperties.Name="{Binding Destination}"/>
+    </StackPanel>
+    </Grid>
+    <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyTextSpacing}">
+     <TextBlock Text="Last backup:" Style="{StaticResource MirrorlyCaption}"/>
+     <TextBlock Text="{Binding LastBackup}" Style="{StaticResource MirrorlyCaption}"/>
+    </StackPanel>
+    <StackPanel x:Name="Actions" Spacing="{StaticResource MirrorlyControlSpacing}">
+     <Button x:Name="Explorer" Click="Explorer_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="Open in File Explorer" TextWrapping="Wrap"/></Button>
+     <Button Click="View_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="View backup" TextWrapping="Wrap"/></Button>
+    </StackPanel>
+   </StackPanel>
+  </Grid>
+  <StackPanel x:Name="CompactLayout" Visibility="Collapsed" Spacing="{StaticResource MirrorlyTextSpacing}">
+   <Grid ColumnSpacing="{StaticResource MirrorlyCardSpacing}">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <TextBlock Text="{Binding Name}" Style="{StaticResource MirrorlySectionTitle}"/>
+    <TextBlock x:Name="CompactStatus" Grid.Column="1" Text="{Binding Status}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+   </Grid>
+   <Grid ColumnSpacing="{StaticResource MirrorlyControlSpacing}" RowSpacing="{StaticResource MirrorlyTextSpacing}">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <TextBlock Text="From" Style="{StaticResource MirrorlyCaption}"/>
+    <TextBlock Grid.Column="1" Text="{Binding Source}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Source}" AutomationProperties.Name="{Binding Source}"/>
+    <TextBlock Grid.Row="1" Text="To" Style="{StaticResource MirrorlyCaption}"/>
+    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Destination}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Destination}" AutomationProperties.Name="{Binding Destination}"/>
+   </Grid>
+   <Grid ColumnSpacing="{StaticResource MirrorlyControlSpacing}">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <TextBlock Style="{StaticResource MirrorlyCaption}" VerticalAlignment="Center"><Run Text="Last backup: "/><Run Text="{Binding LastBackup}"/></TextBlock>
+    <HyperlinkButton Grid.Column="1" Content="View backup" Click="View_Click"/>
+   </Grid>
+  </StackPanel>
+  </Grid>
+ </Border>
+</UserControl>

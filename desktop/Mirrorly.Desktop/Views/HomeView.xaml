@@ -1,0 +1,81 @@
+<UserControl x:Class="Mirrorly.Desktop.Views.HomeView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:components="using:Mirrorly.Desktop.Components">
+ <StackPanel x:Name="Layout" Spacing="{StaticResource MirrorlySectionSpacing}" MaxWidth="{StaticResource MirrorlyContentMaxWidth}" HorizontalAlignment="Stretch">
+  <Grid ColumnSpacing="{StaticResource MirrorlyCardSpacing}">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}" VerticalAlignment="Center">
+    <TextBlock Text="Home" Style="{StaticResource MirrorlyPageTitle}"/>
+    <TextBlock Text="A little peace of mind for your everyday files." Style="{StaticResource MirrorlySecondary}"/>
+    <TextBlock Text="Design preview · Sample data" Style="{StaticResource MirrorlyCaption}"/>
+   </StackPanel>
+   <Border x:Name="HeaderDecoration" Grid.Column="1"><components:SpringSprig AssetName="spring-sprig-header" Style="{StaticResource MirrorlyHeaderDecoration}"/></Border>
+  </Grid>
+  <InfoBar x:Name="PreviewNotice" IsOpen="False" IsClosable="True" Visibility="Collapsed" Closed="PreviewNotice_Closed" Severity="Informational" Title="Prototype only" Message="{Binding PrototypeMessage}" />
+  <Border x:Name="EmptyCard" Style="{StaticResource MirrorlyCard}" Visibility="Collapsed">
+   <StackPanel Spacing="{StaticResource MirrorlyCardSpacing}">
+    <TextBlock Text="Set up your first backup" Style="{StaticResource MirrorlyStatusTitle}"/>
+    <TextBlock Text="Choose a folder to protect and where Mirrorly should keep its backup history." Style="{StaticResource MirrorlyBody}" />
+    <Button Click="Setup_Click" Style="{StaticResource MirrorlyPrimaryButton}"><TextBlock Text="Set up backup" TextWrapping="Wrap"/></Button>
+    <TextBlock Text="Backups are stored as ordinary files that you can browse with File Explorer." Style="{StaticResource MirrorlySecondary}" />
+   </StackPanel>
+  </Border>
+  <StackPanel x:Name="Populated" Spacing="{StaticResource MirrorlySectionSpacing}">
+   <Border Style="{StaticResource MirrorlyCard}" Background="{ThemeResource MirrorlySurfaceSubtleBrush}">
+    <Grid x:Name="StatusGrid" ColumnSpacing="{StaticResource MirrorlyCardSpacing}" RowSpacing="{StaticResource MirrorlyCardSpacing}">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="ActionColumn" Width="Auto"/></Grid.ColumnDefinitions>
+     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <StackPanel x:Name="StatusContent" Spacing="{StaticResource MirrorlyControlSpacing}">
+      <Grid ColumnSpacing="{StaticResource MirrorlyControlSpacing}">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+       <Border x:Name="StatusBadge" Style="{StaticResource MirrorlyStatusBadge}" AutomationProperties.AccessibilityView="Raw">
+        <TextBlock x:Name="StatusSymbol" Text="{Binding Status.Symbol}" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw"/>
+       </Border>
+       <TextBlock Grid.Column="1" Text="{Binding Status.Title}" Style="{StaticResource MirrorlyStatusTitle}" AutomationProperties.LiveSetting="Polite"/>
+      </Grid>
+      <TextBlock Text="{Binding Status.Detail}" Style="{StaticResource MirrorlyBody}"/>
+      <TextBlock Text="{Binding Status.NextStep}" Style="{StaticResource MirrorlySecondary}"/>
+      <ProgressBar x:Name="Progress" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Preparing backup, sample progress"/>
+     </StackPanel>
+     <StackPanel x:Name="StatusActions" Grid.Column="1" VerticalAlignment="Center" Spacing="{StaticResource MirrorlyControlSpacing}">
+      <Button x:Name="PrimaryAction" Click="Primary_Click" Style="{StaticResource MirrorlyPrimaryButton}" HorizontalAlignment="Stretch">
+       <TextBlock Text="{Binding Status.Action}" TextWrapping="Wrap"/>
+      </Button>
+      <Button x:Name="DetailsAction" Content="View details" Click="Details_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Stretch"/>
+     </StackPanel>
+    </Grid>
+   </Border>
+   <StackPanel Spacing="{StaticResource MirrorlyCardSpacing}">
+    <TextBlock Text="{Binding BackupHeading}" Style="{StaticResource MirrorlySectionTitle}"/>
+    <TextBlock x:Name="ManyHint" Text="Needs attention first, followed by recently used backups." Style="{StaticResource MirrorlySecondary}" Visibility="Collapsed"/>
+    <StackPanel x:Name="Backups" Spacing="{StaticResource MirrorlyControlSpacing}"/>
+    <HyperlinkButton x:Name="AllBackups" Content="View all backups →" Click="AllBackups_Click" Visibility="Collapsed"/>
+   </StackPanel>
+   <StackPanel Spacing="{StaticResource MirrorlyCardSpacing}">
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <TextBlock Text="Recent activity" Style="{StaticResource MirrorlySectionTitle}" VerticalAlignment="Center"/>
+     <HyperlinkButton Grid.Column="1" Content="View all" Click="Activity_Click"/>
+    </Grid>
+    <Border x:Name="ActivityCard" Style="{StaticResource MirrorlyCard}">
+     <ItemsControl ItemsSource="{Binding Activity}">
+      <ItemsControl.ItemTemplate>
+       <DataTemplate>
+        <Grid Margin="0,8" ColumnSpacing="{StaticResource MirrorlyCardSpacing}">
+         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+         <TextBlock Text="{Binding Symbol}" DataContextChanged="ActivitySymbol_DataContextChanged" AutomationProperties.AccessibilityView="Raw"/>
+         <StackPanel Grid.Column="1" Spacing="{StaticResource MirrorlyTextSpacing}">
+          <TextBlock Text="{Binding Title}" Style="{StaticResource MirrorlyBody}" FontWeight="SemiBold"/>
+          <TextBlock Text="{Binding Backup}" Style="{StaticResource MirrorlySecondary}"/>
+         </StackPanel>
+         <TextBlock Grid.Column="2" Text="{Binding When}" Style="{StaticResource MirrorlyCaption}" VerticalAlignment="Center"/>
+        </Grid>
+       </DataTemplate>
+      </ItemsControl.ItemTemplate>
+     </ItemsControl>
+    </Border>
+    <HyperlinkButton x:Name="CompactActivity" Content="View recent activity →" Click="Activity_Click" Visibility="Collapsed"/>
+   </StackPanel>
+  </StackPanel>
+ </StackPanel>
+</UserControl>

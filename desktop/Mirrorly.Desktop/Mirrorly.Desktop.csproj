@@ -26,6 +26,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <Manifest Include="$(ApplicationManifest)" />
     <Content Include="Assets\*.png" />
+    <Content Include="Assets\Decorations\*.svg" CopyToOutputDirectory="PreserveNewest" />
     <ProjectCapability Include="Msix" />
     <!-- Deliberately local prototype configuration; never resolves the editable core install. -->
     <AssemblyMetadata Include="Phase1AWorkerPath" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\phase1a_worker\worker.py'))" />

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Mirrorly.Desktop.Services;
 using Mirrorly.Desktop.ViewModels;
+using Mirrorly.Desktop.Presentation;
 
 // Deliberately dependency-free executable test harness. Failure returns exit code 1.
 var passed = 0;
@@ -51,7 +52,7 @@ await Test("Reject truncated, oversized and invalid UTF-8 frames", async () =>
 });
 await Test("ViewModel exposes disconnected/crashed states and request availability", () =>
 {
-    var model = new HomeViewModel();
+    var model = new WorkerDiagnosticsViewModel();
     foreach (var state in Enum.GetValues<WorkerState>())
     {
         model.UpdateStatus(new(state, "detail"));
@@ -97,6 +98,97 @@ await Test("Missing absolute interpreter remains Disconnected", async () =>
     await using var client = new FakeWorkerClient();
     await client.StartAsync(Path.Combine(Path.GetTempPath(), "missing-phase1a-python.exe"), PrototypeConfiguration.WorkerScript);
     Check(client.Status.State == WorkerState.Disconnected);
+});
+await Test("Healthy home describes past completion, not source freshness", () =>
+{
+    var home = new HomeViewModel();
+    Check(home.Status.Tone == StatusTone.Success && home.Status.Title.Contains("Last backup"));
+    Check(!home.Status.Title.Contains("up to date") && home.Status.Action == "Back up now");
+    Check(home.Backups.Count == 1 && !home.CompactBackups && !home.IsEmpty);
+    return Task.CompletedTask;
+});
+await Test("Warning, failure and post-commit facts stay distinct", () =>
+{
+    var home = new HomeViewModel();
+    home.SelectFixture(HomeScenario.DestinationUnavailable);
+    Check(home.Status.Tone == StatusTone.Warning && home.Status.NextStep.Contains("Connect the drive"));
+    home.SelectFixture(HomeScenario.Failed);
+    Check(home.Status.Tone == StatusTone.Error && home.Status.Detail.Contains("No new") && home.Status.NextStep.Contains("hasn't been confirmed"));
+    home.SelectFixture(HomeScenario.CompletedWithIssues);
+    Check(home.Status.Detail.Contains("saved") && home.Status.Detail.Contains("skipped"));
+    Check(home.Backups.Single().LastBackup == "Today, 14:32" && home.Activity[0].Tone == StatusTone.Warning);
+    home.SelectFixture(HomeScenario.FinalizationProblem);
+    Check(home.Status.Title.Contains("was saved") && home.Status.Detail.Contains("after"));
+    Check(!home.ShowDecoration);
+    return Task.CompletedTask;
+});
+await Test("Running and queued are display-only, with no fake ETA", () =>
+{
+    var home = new HomeViewModel();
+    foreach (var scenario in new[] { HomeScenario.Running, HomeScenario.Queued })
+    {
+        home.SelectFixture(scenario);
+        Check(home.Status.Busy && !home.ShowDecoration && !home.Status.Detail.Contains('%'));
+        Check(home.Backups.Single().LastBackup == "Yesterday, 21:04");
+    }
+    return Task.CompletedTask;
+});
+await Test("Two and three backups use compact summaries", () =>
+{
+    var home = new HomeViewModel();
+    foreach (var scenario in new[] { HomeScenario.TwoBackups, HomeScenario.ThreeBackups })
+    {
+        home.SelectFixture(scenario);
+        Check(home.CompactBackups && home.Backups.Count is 2 or 3 && !home.ShowAllBackups);
+    }
+    return Task.CompletedTask;
+});
+await Test("Many backups have bounded preview with attention before recency", () =>
+{
+    var home = new HomeViewModel();
+    home.SelectFixture(HomeScenario.ManyBackups);
+    Check(home.Fixture.Backups.Count == 20 && home.Backups.Count == HomePolicy.ManyBackupPreviewLimit && home.ShowAllBackups);
+    Check(home.Backups.Take(2).All(b => b.NeedsAttention));
+    Check(home.Backups.Skip(2).Select(b => b.Id).SequenceEqual(new[] { "documents", "photos" }));
+    Check(home.Activity.Count <= HomePolicy.RecentActivityLimit);
+    return Task.CompletedTask;
+});
+await Test("Empty state hides summaries and history", () =>
+{
+    var home = new HomeViewModel();
+    home.SelectFixture(HomeScenario.Empty);
+    Check(home.IsEmpty && home.Backups.Count == 0 && home.Activity.Count == 0 && !home.ShowAllBackups);
+    return Task.CompletedTask;
+});
+await Test("Long paths retain full accessible data, including actual repository leaf", () =>
+{
+    var home = new HomeViewModel();
+    home.SelectFixture(HomeScenario.LongPath);
+    Check(home.Backups[0].Source.Length > 140 && home.Backups[0].Destination.EndsWith("MirrorlyRepo"));
+    Check(!home.Backups[0].Source.Contains('…'));
+    return Task.CompletedTask;
+});
+await Test("Navigation and setup preserve explicit selection", () =>
+{
+    var shell = new ShellViewModel();
+    foreach (var page in Enum.GetValues<ShellPage>())
+    {
+        shell.Navigate(page);
+        Check(shell.SelectedPage == page && shell.IsHome == (page == ShellPage.Home));
+    }
+    shell.Navigate(ShellPage.BackupSetup);
+    Check(shell.Title == "Set up backup");
+    return Task.CompletedTask;
+});
+await Test("Responsive boundary stacks status; preview actions never advance fixtures", () =>
+{
+    Check(HomePolicy.StackStatus(320) && HomePolicy.StackStatus(HomePolicy.StackedStatusBelow - 1));
+    Check(!HomePolicy.StackStatus(HomePolicy.StackedStatusBelow) && !HomePolicy.StackStatus(1200));
+    var home = new HomeViewModel();
+    var original = home.Fixture;
+    home.ShowPrototypeAction("Back up now");
+    Check(ReferenceEquals(original, home.Fixture) && home.PrototypeMessage.Contains("No files"));
+    return Task.CompletedTask;
 });
 Console.WriteLine($"{passed} passed; {failed} failed.");
 return failed == 0 ? 0 : 1;

@@ -1,7 +1,8 @@
 # GUI 资源、交互骨架与可访问性
 
 > 2026-09-19 · 产品/资源原则 APPROVED；资源命名、组件拆分为 PROPOSED DESIGN。
-> Visual Baseline v0：文本方向已批准。本轮没有附加 mockup 图片，不假定已获取具体图像资产或像素参数。
+> Phase 0 当时没有附图。用户随后提供 v0，再提供 **Visual Baseline v1**；v1 取代 v0，现为最高优先级视觉参考。不是可直接复用的页面资产，也不要求像素复刻。
+> 2026-09-20 实施状态：[PHASE1B](PHASE1B.md)。下文仍是长期产品原则，不能把未来能力视为本阶段已实现。
 
 ## 信息与操作
 
@@ -15,7 +16,7 @@ Back up now 明显且由 queue coordinator 处理；已有其他 Backup Running 
 
 成功使用克制的 ✓ + 文字/时间，提供 Open backup / View details，不弹必须 OK 的庆功框。失败说明事实、已知原因、解决方向和可执行下一步；技术代码/trace 放二级。未知原因明说未知，不能给每种失败同一“重新插盘”诊断。危险确认说明具体后果，不能只有 Are you sure。
 
-## Visual Baseline v0 与资源结构
+## Visual Baseline v1 与资源结构
 
 **Modern Windows + Fresh Spring Garden**：Windows 11/Fluent 骨架，明亮清新的浅草绿 navigation，白/极淡绿白内容，清楚的稍深草绿主按钮，少量粉色小花与嫩绿枝叶。避免偏黄/奶油/橄榄/复古绿、蒲公英、大片花田及白花主调；保持桌面应用感，不做 enterprise dashboard、杀毒软件式巨型绿勾或恐吓红字。
 
@@ -35,7 +36,11 @@ Back up now 明显且由 queue coordinator 处理；已有其他 Backup Running 
 
 ## 独立装饰与主题
 
-花草保存在 `Assets/Decorations`，可独立换图、移动、缩放和隐藏；不是把背景/卡片/内容烙成整页图片。不占点击区、不遮挡文本/焦点、不进入 accessibility tree；不用承载功能信息。sidebar 下部/空态/页面边角是候选位置。Working/Failure 时弱化或隐藏，High Contrast 直接隐藏。
+花草是独立视觉层，可独立换图、移动、缩放和隐藏；不是把背景/卡片/内容烙成整页图片。Phase 1B fidelity pass 使用 `Assets/Decorations/spring-sprig-sidebar.svg` 与 `spring-sprig-header.svg` 两个原创静态矢量资产，由 `Components/SpringSprig` / 标准 `SvgImageSource` 呈现。资源定义占位尺寸及 render transform，资产本身不能撑开页面。不占点击区、不遮挡文本/焦点，以 Raw accessibility view 排除出常规 Control/Content 导航；不用承载功能信息。Working/Failure 时隐藏，High Contrast 直接隐藏。完整 screen reader 行为仍须实测。
+
+v1 植物方向：轻植物学插画、细弯枝、多种嫩绿、不同大小/角度/弯曲的叶片、轻叶脉和粉色花瓣层次。左下两朵花必须分处主枝两侧：靠枝梢的一朵在上侧向外舒展，另一朵在相对下侧；不做两朵都垂在枝条下方的构图。右上更小、更轻，不进入状态卡。
+
+**静态页面禁止游离/飘落花瓣**。未来仅真实任务开始时允许短暂一次性 flourish，不是进度，不循环；详见 [MOTION](MOTION.md)。本阶段只记录规范，不实现动画或假队列。
 
 长期 Theme 为 System / Light / Dark。Light 是首个完整招牌视觉；Dark 以后单独设计，不能反色或变黑绿荧光粉。资源架构现在支持 ThemeDictionaries，但未实现/验证 Dark 前不能把一个空的 Dark 选项宣称为完整支持。High Contrast 使用系统功能色/状态文字与边界，不用品牌颜色强盖。主题与 live system theme 变化需测试；不引入 skin marketplace、任意用户主题或主题插件。
 

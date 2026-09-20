@@ -1,97 +1,145 @@
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Mirrorly.Desktop.Presentation;
 using Mirrorly.Desktop.Services;
 using Mirrorly.Desktop.ViewModels;
+using Mirrorly.Desktop.Views;
 using Windows.Graphics;
-
 namespace Mirrorly.Desktop;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly HomeViewModel model = new();
+    private readonly ShellViewModel shell = new();
+    private readonly WorkerDiagnosticsViewModel diagnosticsModel = new();
     private readonly FakeWorkerClient worker = new();
     private readonly NotificationService notifications = new();
+    private readonly HomeView home = new();
     private TrayService? tray;
     private bool exiting;
+#if DEBUG
+    private DiagnosticsView? diagnostics;
+#endif
 
     public MainWindow()
     {
         InitializeComponent();
-        Navigation.DataContext = model;
         Navigation.RequestedTheme = ElementTheme.Light;
-        AppWindow.Resize(new SizeInt32(960, 720));
-        worker.StatusChanged += status => DispatcherQueue.TryEnqueue(() => model.UpdateStatus(status));
-        worker.EventReceived += message => DispatcherQueue.TryEnqueue(() => model.ShowEvent(message.Payload.ToString()));
+        Navigation.ExpandedModeThresholdWidth = HomePolicy.ExpandedNavigationAt;
+        Navigation.CompactModeThresholdWidth = HomePolicy.CompactNavigationAt;
+        home.Navigate += Navigate;
+        home.DecorationChanged += _ => UpdateShellLayout();
+        PageHost.Content = home;
+        worker.StatusChanged += status => DispatcherQueue.TryEnqueue(() => diagnosticsModel.UpdateStatus(status));
+        worker.EventReceived += message => DispatcherQueue.TryEnqueue(() => diagnosticsModel.ShowEvent(message.Payload.ToString()));
         worker.TechnicalLog += text => Debug.WriteLine(text);
+#if DEBUG
+        var diagnosticsItem = new NavigationViewItem { Content = "Developer diagnostics", Tag = "Diagnostics", Icon = new FontIcon { Glyph = "\uE943" } };
+        Navigation.FooterMenuItems.Add(diagnosticsItem);
+        diagnostics = new DiagnosticsView(diagnosticsModel);
+        diagnostics.FixtureSelected += scenario => { home.Model.SelectFixture(scenario); Navigate(ShellPage.Home); };
+        diagnostics.TestRequested += async command => {
+            try
+            {
+                if (command == "ping") await worker.PingAsync();
+                else if (command == "notification") diagnostics.ShowMessage(notifications.ShowTest());
+                else if (command == "exit") await ExitAsync();
+                else await worker.RequestAsync(command);
+            }
+            catch (Exception error) { diagnostics.ShowMessage(error.Message); }
+        };
+        diagnostics.ResizeRequested += ResizeForReview;
+#endif
         try
         {
             tray = new TrayService(WinRT.Interop.WindowNative.GetWindowHandle(this), Reopen,
                 () => DispatcherQueue.TryEnqueue(async () => await ExitAsync()));
         }
-        catch (Exception error) { model.ShowEvent($"Tray unavailable: {error.Message}. Close will exit."); }
-        AppWindow.Closing += (sender, args) =>
-        {
+        catch (Exception error) { diagnosticsModel.ShowEvent($"Tray unavailable: {error.Message}. Close will exit."); }
+        AppWindow.Closing += (sender, args) => {
             if (exiting) return;
             args.Cancel = true;
             if (tray is not null) AppWindow.Hide();
             else _ = ExitAsync();
         };
-        Navigation.Loaded += async (_, _) =>
-        {
-            Navigation.XamlRoot.Changed += (_, _) => UpdateDisplayStatus();
-            UpdateDisplayStatus();
+        Navigation.SizeChanged += (_, _) => UpdateShellLayout();
+        Navigation.PaneOpened += (_, _) => UpdateShellLayout();
+        Navigation.PaneClosed += (_, _) => UpdateShellLayout();
+        Navigation.Loaded += async (_, _) => {
+            ResizeForReview(1120, 840);
+            Navigation.XamlRoot.Changed += (_, _) => UpdateShellLayout();
+            UpdateShellLayout();
             await worker.StartAsync(PrototypeConfiguration.PythonInterpreter, PrototypeConfiguration.WorkerScript);
         };
     }
-
-    private void UpdateDisplayStatus() => DisplayStatus.Text =
-        $"Display scale: {Navigation.XamlRoot.RasterizationScale:P0} · content: {Navigation.ActualWidth:F0} × {Navigation.ActualHeight:F0} effective pixels";
-
+    private void ResizeForReview(double width, double height)
+    {
+        // Window geometry, not page dimensions. Respect the monitor's current work area.
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id,
+            Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
+        var scale = Navigation.XamlRoot.RasterizationScale;
+        var w = Math.Min((int)(width * scale), area.Width);
+        var h = Math.Min((int)(height * scale), area.Height);
+        AppWindow.MoveAndResize(new RectInt32(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h));
+    }
+    private void UpdateShellLayout()
+    {
+        if (PageHost is null) return;
+        PageHost.Margin = (Thickness)Application.Current.Resources[
+            Navigation.ActualWidth < HomePolicy.CompactNavigationAt ? "MirrorlyCompactPageMargin" : "MirrorlyPageMargin"];
+        Scroller.Margin = (Thickness)Application.Current.Resources[Navigation.DisplayMode == NavigationViewDisplayMode.Minimal
+            ? "MirrorlyMinimalNavigationInset" : "MirrorlyNavigationInset"];
+        SidebarDecoration.Visibility = Navigation.IsPaneOpen && Navigation.DisplayMode == NavigationViewDisplayMode.Expanded
+            && home.Model.ShowDecoration && shell.IsHome && Navigation.ActualHeight > 600 ? Visibility.Visible : Visibility.Collapsed;
+#if DEBUG
+        if (Navigation.XamlRoot is not null) diagnostics?.SetDisplay(
+            $"Actual DPI scale: {Navigation.XamlRoot.RasterizationScale:P0} · content {Navigation.ActualWidth:F0} × {Navigation.ActualHeight:F0} effective pixels");
+#endif
+    }
     private void Reopen()
     {
         AppWindow.Show();
         if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter) presenter.Restore();
         Activate();
     }
-
     private async Task ExitAsync()
     {
         if (exiting) return;
         exiting = true;
         try { await worker.DisposeAsync(); }
         catch (Exception error) { Debug.WriteLine(error); }
-        finally
+        finally { tray?.Dispose(); Close(); Application.Current.Exit(); }
+    }
+    private void Navigate(ShellPage page)
+    {
+        shell.Navigate(page);
+        PageHost.Content = page == ShellPage.Home ? home :
+#if DEBUG
+            page == ShellPage.Diagnostics ? diagnostics :
+#endif
+            new PlaceholderView(shell.Title);
+        if (page == ShellPage.Settings) Navigation.SelectedItem = Navigation.SettingsItem;
+        else
         {
-            tray?.Dispose();
-            Close();
-            Application.Current.Exit();
+            var tag = page == ShellPage.BackupSetup ? ShellPage.Backups : page;
+            var selected = Navigation.MenuItems.Concat(Navigation.FooterMenuItems)
+                .OfType<NavigationViewItem>().FirstOrDefault(item => item.Tag?.ToString() == tag.ToString());
+            // Do not let the selection callback replace the setup placeholder.
+            if (!ReferenceEquals(Navigation.SelectedItem, selected)) { suppressSelection = true; Navigation.SelectedItem = selected; suppressSelection = false; }
         }
+        PageHost.UpdateLayout();
+        Scroller.ChangeView(null, 0, null, true);
+        DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
+        if (Navigation.DisplayMode != NavigationViewDisplayMode.Expanded) Navigation.IsPaneOpen = false;
+        UpdateShellLayout();
     }
-
-    private async Task RunTestAsync(Func<Task> action)
-    {
-        try { await action(); }
-        catch (Exception error) { model.ShowEvent($"Test request ended: {error.Message}"); }
-    }
-
-    private async void Ping_Click(object sender, RoutedEventArgs e) => await RunTestAsync(worker.PingAsync);
-    private async void TestEvent_Click(object sender, RoutedEventArgs e) => await RunTestAsync(async () => await worker.RequestAsync("test_event"));
-    private async void Crash_Click(object sender, RoutedEventArgs e) => await RunTestAsync(async () => await worker.RequestAsync("test_crash"));
-    private async void Exit_Click(object sender, RoutedEventArgs e) => await ExitAsync();
-    private void Notification_Click(object sender, RoutedEventArgs e)
-    {
-        try { NotificationStatus.Text = notifications.ShowTest(); }
-        catch (Exception error) { NotificationStatus.Text = $"Test notification failed: {error.Message}"; }
-    }
-
+    private bool suppressSelection;
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        // Selection can fire while InitializeComponent is still constructing content.
-        if (PageTitle is null) return;
-        var page = args.IsSettingsSelected ? "Settings" : (args.SelectedItem as NavigationViewItem)?.Tag?.ToString() ?? "Home";
-        PageTitle.Text = page;
-        HomePanel.Visibility = page == "Home" ? Visibility.Visible : Visibility.Collapsed;
-        Placeholder.Visibility = page == "Home" ? Visibility.Collapsed : Visibility.Visible;
+        if (PageHost is null || suppressSelection) return;
+        var page = args.IsSettingsSelected ? ShellPage.Settings :
+            Enum.TryParse<ShellPage>((args.SelectedItem as NavigationViewItem)?.Tag?.ToString(), out var parsed) ? parsed : ShellPage.Home;
+        if (shell.SelectedPage != page) Navigate(page);
     }
+    private void Navigation_DisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => UpdateShellLayout();
 }
