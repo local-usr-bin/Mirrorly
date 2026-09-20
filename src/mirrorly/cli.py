@@ -1,7 +1,7 @@
 """Mirrorly 命令行接口（T-09，CLI_SPEC v1.0 / MVP_TASKS T-09）。
 
 职责边界：本模块保留参数解析、确认流程、输出与退出码映射、命令编排，
-setup/init、backup 事务、配置/仓库解析、锁与报告落盘由 application 层提供；
+setup/init、backup、list/verify/restore 编排、解析、锁与报告落盘由 application 层提供；
 把 T-01~T-08 的 library API 编排成五个命令；不重新实现任何业务逻辑，
 不绕过底层模块的安全边界（Restore plan/apply、Retention 执行前复核、
 incomplete 不当 complete 等语义全部在底层模块内强制执行）。
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import __version__
 from .application import backup as app_backup
-from .application import locking, repositories, setup, tasks
+from .application import locking, queries, repositories, restoration, setup, tasks, verification
 from .application import reports as app_reports
 from .config import (
     ConfigError,
@@ -36,9 +36,6 @@ from .config import (
 from .manifest import (
     STATUS_COMPLETE,
     ManifestError,
-    ManifestSummary,
-    list_manifests,
-    select_default_complete,
 )
 from .recovery import RecoveryError
 from .repo import (
@@ -46,12 +43,12 @@ from .repo import (
     RepoFormatError,
     RepoInfo,
 )
-from .restore import RestoreError, apply_restore, plan_restore
+from .restore import RestoreError
 from .retention import RetentionError
 from .snapshot import (
     SnapshotError,
 )
-from .verify import verify_snapshot
+from .verify import VerifyReport
 
 # ---------------------------------------------------------------------------
 # 退出码（CLI_SPEC 第 6 节）
@@ -155,15 +152,6 @@ def _human_bytes(n: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_task_config(args: argparse.Namespace) -> TaskConfig:
-    """Adapt CLI defaults/arguments and task-selection errors to the shared loader."""
-    config_root = Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT)
-    try:
-        return tasks.resolve_task_config(config_root, getattr(args, "task", None))
-    except tasks.TaskSelectionError as e:
-        raise _UsageError(str(e)) from e
-
-
 def _notify_relocation(cfg: TaskConfig, repo: RepoInfo) -> None:
     """重定位提示：始终走 stderr（--json 下 stdout 仍保持单一 JSON 文档）。"""
     print(
@@ -172,17 +160,16 @@ def _notify_relocation(cfg: TaskConfig, repo: RepoInfo) -> None:
     )
 
 
-def _resolve_repo(cfg: TaskConfig) -> RepoInfo:
-    """Present relocation facts while leaving identity resolution in application."""
-    result = repositories.resolve_repo(cfg)
-    if result.relocated:
-        _notify_relocation(cfg, result.repo)
-    return result.repo
-
-
-def _latest_complete(repo: RepoInfo) -> ManifestSummary | None:
-    """选择默认 complete；multiple-legacy ambiguity 由 manifest helper 拒绝。"""
-    return select_default_complete(list_manifests(repo))
+def _resolve_query_context(args: argparse.Namespace) -> queries.TaskRepository:
+    """CLI defaults, selection-error mapping and relocation presentation only."""
+    config_root = Path(getattr(args, "config", None) or DEFAULT_CONFIG_ROOT)
+    try:
+        context = queries.resolve_task_repository(config_root, getattr(args, "task", None))
+    except tasks.TaskSelectionError as exc:
+        raise _UsageError(str(exc)) from exc
+    if context.relocated:
+        _notify_relocation(context.task, context.repo)
+    return context
 
 
 # ---------------------------------------------------------------------------
@@ -402,76 +389,51 @@ def _finish_dry_run(
 # ---------------------------------------------------------------------------
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
-    cfg = _resolve_task_config(args)
-    repo = _resolve_repo(cfg)
-
-    if args.all:
-        targets = [s.snapshot_id for s in list_manifests(repo) if s.status == STATUS_COMPLETE]
-        if not targets:
-            _err("仓库中没有 complete 快照可校验")
-            return EXIT_ERROR
-    elif args.snapshot:
-        targets = [args.snapshot]
-    else:
-        latest = _latest_complete(repo)
-        if latest is None:
-            _err("仓库中没有 complete 快照可校验")
-            return EXIT_ERROR
-        targets = [latest.snapshot_id]
-
-    reports = [verify_snapshot(repo, sid, quick=args.quick) for sid in targets]
-
-    failed = False
-    report_entries = []
-    for rep in reports:
-        failed = failed or not rep.ok
-        report_entries.append(
-            {
-                "snapshot_id": rep.snapshot_id,
-                "quick": rep.quick,
-                "ok": rep.ok,
-                "checked_files": rep.checked_files,
-                "checked_dirs": rep.checked_dirs,
-                "hashed_files": rep.hashed_files,
-                "unhashed_entries": rep.unhashed_entries,
-                "issues": [
-                    {"path": i.path, "kind": i.kind, "detail": i.detail} for i in rep.issues
-                ],
-                "extras": list(rep.extras),
-            }
+def _present_verification(args: argparse.Namespace, rep: VerifyReport) -> None:
+    # 逐项人类可读结果（--json 模式下 _info 自动走 stderr，stdout 保持纯净）
+    mode = "quick" if rep.quick else "full"
+    if rep.ok:
+        _info(
+            args,
+            f"{rep.snapshot_id}: 完整（{mode}，校验文件 {rep.checked_files}"
+            f"，哈希比对 {rep.hashed_files}）",
         )
-        # 逐项人类可读结果（--json 模式下 _info 自动走 stderr，stdout 保持纯净）
-        mode = "quick" if rep.quick else "full"
-        if rep.ok:
-            _info(
-                args,
-                f"{rep.snapshot_id}: 完整（{mode}，校验文件 {rep.checked_files}"
-                f"，哈希比对 {rep.hashed_files}）",
-            )
-        else:
-            _info(args, f"{rep.snapshot_id}: 校验失败（{len(rep.issues)} 项问题）:")
-            for issue in rep.issues[:20]:
-                _info(args, f"    - [{issue.kind}] {issue.path} {issue.detail}")
-        if rep.unhashed_entries:
-            _detail(args, f"    （{rep.unhashed_entries} 个条目无哈希记录，已跳过哈希比对）")
-        if rep.extras:
-            _detail(args, f"    （{len(rep.extras)} 个清单外文件，仅报告不影响结论）")
+    else:
+        _info(args, f"{rep.snapshot_id}: 校验失败（{len(rep.issues)} 项问题）:")
+        for issue in rep.issues[:20]:
+            _info(args, f"    - [{issue.kind}] {issue.path} {issue.detail}")
+    if rep.unhashed_entries:
+        _detail(args, f"    （{rep.unhashed_entries} 个条目无哈希记录，已跳过哈希比对）")
+    if rep.extras:
+        _detail(args, f"    （{len(rep.extras)} 个清单外文件，仅报告不影响结论）")
 
-    report = {
-        "command": "verify",
-        "quick": bool(args.quick),
-        "snapshots": report_entries,
-        "ok": not failed,
-    }
-    name = f"verify-{targets[0]}" if len(targets) == 1 else "verify-all"
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    context = _resolve_query_context(args)
     try:
-        report_path = app_reports.write_report(repo, name, report)
-    except app_reports.ReportPublicationError as exc:
-        outcome = "失败" if failed else "通过"
-        raise RepoError(
-            f"校验已完成（结果: {outcome}），但必需报告发布失败；verify 命令返回错误: {exc}"
-        ) from exc
+        result = verification.verify_snapshots(
+            context,
+            snapshot=args.snapshot,
+            all_snapshots=args.all,
+            quick=args.quick,
+            on_verified=lambda rep: _present_verification(args, rep),
+        )
+    except verification.VerificationFailure as failure:
+        if failure.stage == "selection" and isinstance(failure.cause, queries.NoCompleteSnapshot):
+            _err("仓库中没有 complete 快照可校验")
+            return EXIT_ERROR
+        if failure.stage == "report" and isinstance(
+            failure.cause, app_reports.ReportPublicationError
+        ):
+            outcome = "失败" if not failure.facts.ok else "通过"
+            raise RepoError(
+                f"校验已完成（结果: {outcome}），但必需报告发布失败；"
+                f"verify 命令返回错误: {failure.cause}"
+            ) from failure.cause
+        raise failure.cause from None
+    report = dict(result.report)
+    report_path = result.facts.report_path
+    failed = not result.facts.ok
     if _flag(args, "json"):
         report["report_path"] = str(report_path)
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -486,38 +448,35 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_restore(args: argparse.Namespace) -> int:
-    cfg = _resolve_task_config(args)
-    repo = _resolve_repo(cfg)
+    context = _resolve_query_context(args)
 
     # CLI_SPEC §4：--in-place 为危险操作，必须显式 --yes（非法组合 → 用法错误）
     if args.in_place and not _flag(args, "yes"):
         _err("--in-place 是危险操作，必须显式提供 --yes")
         return EXIT_USAGE
 
-    snapshot_id = args.snapshot
-    if snapshot_id is None:
-        latest = _latest_complete(repo)
-        if latest is None:
-            _err("仓库中没有 complete 快照可恢复")
-            return EXIT_ERROR
-        snapshot_id = latest.snapshot_id
-
-    plan = plan_restore(
-        repo,
-        snapshot_id,
-        args.to,
-        paths=tuple(args.path or ()),
-        overwrite=args.overwrite,
-        in_place=args.in_place,
-    )
-
-    counts = {"create": 0, "overwrite": 0, "skip": 0, "conflict": 0}
-    dirs = 0
-    for e in plan.entries:
-        if e.is_dir:
-            dirs += 1
-        else:
-            counts[e.action] += 1
+    try:
+        prepared = restoration.prepare_restore(
+            context,
+            args.to,
+            snapshot=args.snapshot,
+            paths=tuple(args.path or ()),
+            overwrite=args.overwrite,
+            in_place=args.in_place,
+        )
+    except queries.NoCompleteSnapshot:
+        _err("仓库中没有 complete 快照可恢复")
+        return EXIT_ERROR
+    plan = prepared.plan
+    snapshot_id = plan.snapshot_id
+    facts = prepared.summary
+    counts = {
+        "create": facts.create,
+        "overwrite": facts.overwrite,
+        "skip": facts.skip,
+        "conflict": facts.conflict,
+    }
+    dirs = facts.dirs
 
     # 计划展示（_info/_detail 在 --json 模式下自动走 stderr，stdout 保持纯净）
     _info(args, f"恢复计划: 快照 {snapshot_id} → {plan.destination}")
@@ -535,15 +494,20 @@ def cmd_restore(args: argparse.Namespace) -> int:
             _detail(args, f"    [{e.action}] {e.rel_path} {e.reason}")
 
     # 破坏性确认：存在覆盖项时必须显式确认或 --yes（CLI_SPEC §0）
+    overwrite_approved = False
     if counts["overwrite"]:
         _confirm(
             args,
             f"将覆盖 {counts['overwrite']} 个已存在文件（策略 {args.overwrite}），确认执行？",
         )
+        overwrite_approved = True
 
-    result = apply_restore(repo, plan)
-
-    has_issues = bool(result.skipped or result.conflicts or result.errors or result.leftovers)
+    try:
+        outcome = restoration.execute_restore(prepared, overwrite_approved=overwrite_approved)
+    except restoration.RestoreExecutionFailure as failure:
+        raise failure.cause from None
+    result = outcome.result
+    has_issues = outcome.has_issues
     summary = {
         "command": "restore",
         "snapshot_id": result.snapshot_id,
@@ -586,9 +550,8 @@ def cmd_restore(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    cfg = _resolve_task_config(args)
-    repo = _resolve_repo(cfg)
-    summaries = list_manifests(repo)
+    context = _resolve_query_context(args)
+    summaries = queries.list_snapshots(context)
 
     if _flag(args, "json"):
         payload = [

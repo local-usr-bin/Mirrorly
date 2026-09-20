@@ -32,9 +32,11 @@ from mirrorly import manifest as manifest_mod
 from mirrorly import snapshot as snapshot_mod
 from mirrorly.application import backup as backup_mod
 from mirrorly.application import locking as locking_mod
+from mirrorly.application import queries as queries_mod
 from mirrorly.application import reports as reports_mod
 from mirrorly.application import repositories as repositories_mod
 from mirrorly.application import setup as setup_mod
+from mirrorly.application import verification as verification_mod
 from mirrorly.cli import main
 from mirrorly.config import (
     ConfigError,
@@ -706,7 +708,7 @@ class TestVerify:
         self, backed_up, monkeypatch, capsys
     ) -> None:
         calls = []
-        real_verify = cli.verify_snapshot
+        real_verify = verification_mod.verify_snapshot
 
         def tracked_verify(*args, **kwargs):
             calls.append(args[1])
@@ -715,7 +717,7 @@ class TestVerify:
         def fail_report(*args, **kwargs):
             raise reports_mod.ReportPublicationError("simulated report publication failure")
 
-        monkeypatch.setattr(cli, "verify_snapshot", tracked_verify)
+        monkeypatch.setattr(verification_mod, "verify_snapshot", tracked_verify)
         monkeypatch.setattr(reports_mod, "write_report", fail_report)
         capsys.readouterr()
 
@@ -1301,7 +1303,7 @@ class TestSnapshotIdCollision:
             )
             write_manifest(repo, mark_complete(replace(manifest, created_at=created_at)))
 
-        assert cli._latest_complete(repo).snapshot_id == ids[-1]
+        assert queries_mod.latest_complete(repo).snapshot_id == ids[-1]
         plan = build_retention_plan(repo, keep_last=2, keep_monthly=0)
         assert plan.keep == (*ids[:3], *ids[-2:])
         assert plan.delete == ()
@@ -1337,7 +1339,7 @@ class TestSnapshotIdCollision:
             assert _run(ws, "backup", "--yes") == 0
 
         assert len({load_manifest(repo, sid).created_at for sid in ids[:3]}) == 1
-        assert cli._latest_complete(repo).snapshot_id == ids[2]
+        assert queries_mod.latest_complete(repo).snapshot_id == ids[2]
         plan = build_retention_plan(repo, keep_last=2, keep_monthly=0)
         assert plan.keep == (ids[1], ids[2])
         assert plan.delete == (ids[0],)
@@ -1406,7 +1408,7 @@ class TestAuthoritativeLifecycleOrdering:
         b = load_manifest(repo, b_id, require_complete=True)
         c = load_manifest(repo, c_id, require_complete=True)
         assert [a.lifecycle_seq, b.lifecycle_seq, c.lifecycle_seq] == [0, 1, 2]
-        assert cli._latest_complete(repo).snapshot_id == c_id
+        assert queries_mod.latest_complete(repo).snapshot_id == c_id
 
         keep_last = build_retention_plan(repo, keep_last=2, keep_monthly=0)
         assert keep_last.keep == (b_id, c_id)
@@ -1553,7 +1555,7 @@ class TestAuthoritativeLifecycleOrdering:
         verification = verify_snapshot(migrated, sequenced.snapshot_id)
         assert verification.ok
         assert verification.unhashed_entries == (0 if verify_writes else 1)
-        assert cli._latest_complete(migrated).snapshot_id == sequenced.snapshot_id
+        assert queries_mod.latest_complete(migrated).snapshot_id == sequenced.snapshot_id
         plan = build_retention_plan(migrated, keep_last=1, keep_monthly=0)
         assert set(legacy_ids) <= set(plan.keep)
 
@@ -2915,7 +2917,7 @@ class TestM10Resolver:
         target = tmp_path / "t" / "Backup"
         info = _make_repo_at(target)
         cfg = _anchor_cfg(target, info.volume.guid, info.repo_id, _rel_repo_dir(target))
-        repo = cli._resolve_repo(cfg)
+        repo = repositories_mod.resolve_repo(cfg).repo
         assert repo.path == target / "MirrorlyRepo"
         assert repo.repo_id == info.repo_id
 
@@ -2925,7 +2927,7 @@ class TestM10Resolver:
         info = _make_repo_at(target)
         stale = tmp_path / "t" / "gone"  # 旧盘符位置（已不存在）
         cfg = _anchor_cfg(stale, info.volume.guid, info.repo_id, _rel_repo_dir(target))
-        repo = cli._resolve_repo(cfg)  # 真实 get_mount_roots：C:\ → 原位置
+        repo = repositories_mod.resolve_repo(cfg).repo  # 真实 get_mount_roots：C:\ → 原位置
         assert repo.path == target / "MirrorlyRepo"
 
     def test_case2_fake_mount_root_relocation(self, tmp_path, monkeypatch) -> None:
@@ -2934,7 +2936,7 @@ class TestM10Resolver:
         info = _make_repo_at(fake_e / "Backup")
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, info.repo_id, "Backup")
-        repo = cli._resolve_repo(cfg)
+        repo = repositories_mod.resolve_repo(cfg).repo
         assert repo.path == fake_e / "Backup" / "MirrorlyRepo"
 
     def test_case3_wrong_volume_at_old_path_zero_write(self, tmp_path, monkeypatch) -> None:
@@ -2948,7 +2950,7 @@ class TestM10Resolver:
         monkeypatch.setattr("mirrorly.volume.get_volume_guid_for_path", lambda p: _FAKE_GUID_B)
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
         cfg = _anchor_cfg(occupied, _FAKE_GUID_A, expected.repo_id, "Backup")
-        repo = cli._resolve_repo(cfg)
+        repo = repositories_mod.resolve_repo(cfg).repo
         assert repo.path == fake_e / "Backup" / "MirrorlyRepo"
         assert _tree_fp(occupied) == before  # 旧路径零写入
 
@@ -2958,7 +2960,7 @@ class TestM10Resolver:
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "Backup")
         with pytest.raises(repositories_mod.IdentityMismatch, match="仓库 id 不匹配"):
-            cli._resolve_repo(cfg)
+            repositories_mod.resolve_repo(cfg)
 
     def test_case5_multiple_distinct_candidates_rejected(self, tmp_path, monkeypatch) -> None:
         """两个不同 repo 候选（同 repo_id 的仓库副本）→ 拒绝猜测。"""
@@ -2973,7 +2975,7 @@ class TestM10Resolver:
         )
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, info.repo_id, "Backup")
         with pytest.raises(repositories_mod.IdentityMismatch, match="不唯一"):
-            cli._resolve_repo(cfg)
+            repositories_mod.resolve_repo(cfg)
 
     def test_case5f_same_repo_two_mount_roots_not_ambiguous(self, tmp_path, monkeypatch) -> None:
         """同一卷多个挂载点指向同一 repo（samefile 去重）→ 不视为歧义。"""
@@ -2982,7 +2984,7 @@ class TestM10Resolver:
         roots = [str(fake_e) + "\\", str(fake_e).upper() + "\\"]
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: roots)
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, info.repo_id, "Backup")
-        repo = cli._resolve_repo(cfg)
+        repo = repositories_mod.resolve_repo(cfg).repo
         assert repo.path == fake_e / "Backup" / "MirrorlyRepo"
 
     def test_case6_and_e_no_downgrade_real_api(self, tmp_path) -> None:
@@ -2995,7 +2997,7 @@ class TestM10Resolver:
         info = _make_repo_at(target)
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_B, info.repo_id, _rel_repo_dir(target))
         with pytest.raises(repositories_mod.IdentityMismatch, match="未连接或卷锚已失效"):
-            cli._resolve_repo(cfg)
+            repositories_mod.resolve_repo(cfg)
 
     def test_case7_volume_found_repo_missing(self, tmp_path, monkeypatch) -> None:
         fake_e = tmp_path / "fakeE"
@@ -3003,13 +3005,13 @@ class TestM10Resolver:
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "Backup")
         with pytest.raises(RepoError, match="预期仓库路径缺失"):
-            cli._resolve_repo(cfg)
+            repositories_mod.resolve_repo(cfg)
         assert list((fake_e / "Backup").iterdir()) == []  # 不自动 init：零新增
 
     def test_legacy_missing_path_fail_closed_with_hint(self, tmp_path) -> None:
         cfg = _anchor_cfg(tmp_path / "gone", None, None, None)
         with pytest.raises(RepoError, match="legacy"):
-            cli._resolve_repo(cfg)
+            repositories_mod.resolve_repo(cfg)
 
     def test_d_runtime_repo_dir_escape_containment(self, tmp_path, monkeypatch) -> None:
         """直接构造 TaskConfig 篡改 repo_dir：入口校验 + join 后 containment 双防线。"""
@@ -3018,7 +3020,7 @@ class TestM10Resolver:
         # 防线 1：_resolve_repo 入口 validate_anchor（防 library API 绕过 load/write）
         cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "../escape")
         with pytest.raises(ConfigError, match="repo_dir"):
-            cli._resolve_repo(cfg)
+            repositories_mod.resolve_repo(cfg)
         # 防线 2：_search_anchored join 后 containment 复验（不信任单次校验）
         monkeypatch.setattr("mirrorly.volume.get_mount_roots", lambda g: [str(fake_e) + "\\"])
         bad_cfg = _anchor_cfg(Path("D:/Backup"), _FAKE_GUID_A, _OTHER_REPO_ID, "..\\escape")
@@ -3395,7 +3397,7 @@ class TestExtractionFinalization:
         reports_before = set((repo.path / "logs").iterdir())
         capsys.readouterr()
         completed = []
-        original = cli.verify_snapshot
+        original = verification_mod.verify_snapshot
 
         def verify(*args, **kwargs):
             result = original(*args, **kwargs)
@@ -3406,7 +3408,7 @@ class TestExtractionFinalization:
             assert len(completed) == 1 and completed[0].ok is (not missing)
             raise reports_mod.ReportPublicationError("injected verify report failure")
 
-        monkeypatch.setattr(cli, "verify_snapshot", verify)
+        monkeypatch.setattr(verification_mod, "verify_snapshot", verify)
         monkeypatch.setattr(reports_mod, "write_report", fail_report)
         assert _run(ws, "verify", "--json") == 1  # neither normal 0 nor integrity-failure 4
         captured = capsys.readouterr()

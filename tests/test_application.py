@@ -123,9 +123,10 @@ def test_cli_adapter_keeps_dot_mirrorly_relative_to_cwd(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     cfg = TaskConfig(name="local", source="relative-source", target_path="relative-target")
+    init_repo(Path("relative-target"))
     write_task_config(cfg, Path(".mirrorly"))
-    assert cli._resolve_task_config(Namespace()) == cfg
-    assert cli._resolve_task_config(Namespace(config="", task="")) == cfg
+    assert cli._resolve_query_context(Namespace()).task == cfg
+    assert cli._resolve_query_context(Namespace(config="", task="")).task == cfg
 
 
 @pytest.mark.parametrize("mode", ["legacy", "anchored", "relocated"])

@@ -100,7 +100,7 @@ Phase 2C 验证（2026-09-21，Windows；独立 worktree interpreter）：
 
 源码结构对比也确认：除 init adapter 外的 CLI 函数、init 成功输出块、既有 CLI 685 条断言保持不变；repo 初始化的写入序列和限制提示文本未变。没有 desktop 输入变化，未重建 WinUI。
 
-## 当前事实：Phase 2D 共享 Backup 事务
+## Phase 2D 共享 Backup 事务
 
 以 Phase 2C `37efaa0050821fa5eb112816dbec333d5f65465e` 为起点，新增 [application/backup.py](../../src/mirrorly/application/backup.py)，移入原 `cmd_backup` 的完整业务事务。它是 CLI 与未来 worker 共用的唯一 Backup 编排；底层算法没有复制或改写。没有新增依赖。
 
@@ -172,8 +172,80 @@ Phase 2D 验证（2026-09-21，Windows；所有 Python 命令显式使用已 qua
 
 测试开发中发现两个多行 snapshot-ID monkeypatch 仍指向旧 CLI 符号，已迁到真实 application 调用点；没有改变预期行为或弱化断言。没有修改底层 core 算法、格式、版本、desktop/fake-worker 或环境依赖；未重建 WinUI。
 
+## 当前事实：Phase 2E 共享 list / verify / restore 编排
+
+以 Phase 2D `2c7fee2d509860d3fea29291d5ab88af82aa17a6` 为起点，补齐三个同步模块；CLI 五个命令均通过共享 application 层执行业务。原 setup/Backup 服务及底层 core 未修改，不增加依赖、锁、并发或格式变化。
+
+| 原 CLI 职责 | 当前 Python API |
+| --- | --- |
+| list/verify/restore 开头的 task → repo resolution | [queries.resolve_task_repository](../../src/mirrorly/application/queries.py)`(config_root, task=None) -> TaskRepository` |
+| `cmd_list` 的 snapshot discovery | `queries.list_snapshots(context) -> tuple[ManifestSummary, ...]` |
+| `_latest_complete` | `queries.latest_complete(repo) -> ManifestSummary \| None` |
+| `cmd_verify` 的选目标、校验与必需报告 | [verification.verify_snapshots](../../src/mirrorly/application/verification.py)`(context, *, snapshot=None, all_snapshots=False, quick=False, on_verified=None)` |
+| `cmd_restore` 的选 snapshot、规划和统计 | [restoration.prepare_restore](../../src/mirrorly/application/restoration.py)`(context, destination, *, snapshot=None, paths=(), overwrite="never", in_place=False)` |
+| `cmd_restore` 的获准执行和 partial interpretation | `restoration.execute_restore(prepared, *, overwrite_approved=False)` |
+
+### 显式解析边界与查询
+
+三个操作均先调用共享 `resolve_task_repository`，得到 `TaskRepository(task, repo, relocated)`，随后进入相应服务。把解析独立成第一步，允许 CLI 在**原顺序**输出 relocation，并在 restore snapshot selection 之前执行 `--in-place` 必须配 `--yes` 的 CLI 用法检查；无需增加新的 presentation callback。context 是本次解析事实，不是持久缓存、卷固定句柄或授权 token；新操作应重新解析。
+
+CLI `_resolve_query_context` 仅提供原 `./.mirrorly` 默认值、`TaskSelectionError` → usage mapping、`_notify_relocation` 原 stderr 文本。实际 task/repo 逻辑继续复用 Phase 2B 模块。旧 CLI 私有 resolution/default-selection helper 已移除，未保留供旧 monkeypatch 使用的空 alias。
+
+list 返回现有 `ManifestSummary`，不创建 CLI dictionary：完整保留 core 的 **manifest 文件名顺序**、complete/incomplete、stats、sequence/legacy facts 与校验/拒绝规则；不是按 lifecycle latest 排序。默认 verify/restore selection 则继续复用 core `select_default_complete`：最大 sequenced complete，或唯一 legacy complete；多个 legacy complete 不猜测。无可用默认目标用 `NoCompleteSnapshot` 标记，CLI 输出原各命令的中文提示与 exit 1。
+
+### Verify：完成事实与必需报告分离
+
+顺序保持：解析 → 选择显式/默认/all complete 目标 → 按既有顺序完成全部 `verify_snapshot` 调用 → 构造各 report entry 并输出原逐项结果 → 构造总报告 → `reports.write_report`。`--all` 沿用 list 顺序，不额外排序；单个目标仍使用 `verify-<id>`，多个目标使用 `verify-all`。无新增 mutation lock、repair 或历史数据库。
+
+`VerificationResult(facts, report)` 返回原 persisted payload 与 `VerificationFacts`：context、targets、已成功返回的 `VerifyReport`、`verification_completed`、report path。`facts.ok` 只在全部目标返回后提供 bool，否则为 None。它沿用 core `VerifyReport.ok`，**不代表所有文件都有 hash**；unhashed_entries、hashed_files、quick 和 extras 都保留。CLI 复制原 payload 后附加 `report_path`，不把 dataclass 序列化成新 CLI schema。
+
+普通异常用 `VerificationFailure(stage, cause, facts)` 保留原对象和已知事实。中途某个 target 抛错时，可保留已返回的前缀结果，但不生成整体 integrity 结论，也不提前打印逐项结果或发布报告。全部 verify 已返回、report publication 再失败时，`verification_completed=True` 和结果/coverage facts 保留；`report_path=None` 只表示未取得成功返回，不能断言磁盘没有部分或已发布报告。CLI 继续输出原“校验已完成（通过/失败），但必需报告发布失败”并返回 1，覆盖原本可能的 0/4。
+
+`on_verified(VerifyReport)` 只保留既有 terminal 输出在 mandatory report 之前的时机，并且全部校验完成后才调用；不是运行中 progress API。`_present_verification` 和 quiet/verbose/JSON channel 仍由 CLI 管理。KeyboardInterrupt 保持传播，不提供 cancellation。
+
+### Restore：意图、确认和 apply 重验
+
+`prepare_restore` 只读返回 `RestorePlanResult(context, plan)`，`.summary` 提供 create/overwrite/skip/conflict/dirs 数量。复用原 `plan_restore`，不自行复制文件或生成第二份恢复计划算法。
+
+CLI 显示原 plan/entry 信息；存在 overwrite 时在原位置调用 `_confirm()`，成功返回后才传 `overwrite_approved=True`。应用层无 input、terminal 或 WinUI 依赖；未批准已规划的覆盖时抛出 `OverwriteApprovalRequired`。`in_place=True` 是调用者明确表达的原地恢复意图；CLI 额外要求显式 `--yes` 的规则仍由 CLI 执行，且优先级没有前移到 task/repo resolution 之前。
+
+`execute_restore` 将**同一份计划**交给原 core `apply_restore`。审批不是“忽略 stale plan”的权限，也不在应用层重新规划成更危险的动作。底层继续执行：
+
+1. 校验 snapshot ID、overwrite、canonical selectors、合法 action、冻结的绝对 destination。
+2. 重载 complete manifest，全量验证路径，比较 manifest digest，确认 snapshot 目录存在。
+3. 复核 repo/source/destination 的实际路径边界与双侧 reparse，重跑条目分类；整批 no-upgrade 拒绝任何破坏性升级。
+4. 每条写入前再分类、检查 no-upgrade；文件 staging 完成后、`os.replace` 前再执行 final check，否决则清理本次 owned temp。
+
+保留原 final-check → replace 的残余 TOCTOU 窗口；未新增 repo writer lock，也未在 plan/apply 间重新解析 task/volume identity。未来 worker 不得把任意客户端 plan DTO 当成可信服务端授权，或在 stale 后静默重规划/升级；如何管理 plan reference 属下一阶段。
+
+`RestorationResult(result)` 保留原 core `RestoreResult` 的 restored、dirs_created、skipped、conflicts、errors、leftovers、bytes_written；`has_issues` 仍由 skipped/conflicts/errors/leftovers 判定。apply 未返回而抛错时，`RestoreExecutionFailure(cause, prepared)` 只保留原异常及准备的意图，不制造 partial counts 或 rollback/零副作用保证。core 正常返回的 partial restore 继续保留已恢复文件。
+
+Restore v1 不变：默认 never/Skip；显式批准的 always/Replace；原 older 语义保留。类型冲突不删除用户数据，目标额外文件不删除，无 Keep both、内容相同自动跳过、逐文件 policy、exact mirror 或自动 full verify。restore 仍不新增 report publication。
+
+### 兼容性验证与未来 worker 约束
+
+[test_query_operations.py](../../tests/test_query_operations.py) 覆盖只读 query/plan、filename vs lifecycle ordering、verify 顺序/coverage/报告失败/中途失败、restore approval/重验/partial/未知副作用、原 CLI 确认顺序与 fault seam、relocation/error 优先级、无新增锁，以及 isolated subprocess 下的 list/verify/report failure/restore/partial 调用（禁止 CLI import）。
+
+既有 CLI fault injection 的 `verify_snapshot` 已移到 verification 模块；default-selection 引用移到 queries，resolver 单元测试直接调用真实 repositories 实现；原 relocation stdout/stderr integration 断言保留。Phase 2B CLI 默认路径测试转向新的 CLI context adapter。无测试预期放宽，未修改 Phase 2A qualification。
+
+**生产 worker 的硬约束（仅记录，未实现）**：Backup 的 relocation/resume presentation hooks，以及类似 verify notice 的传递，不得让 IPC event delivery failure 改变业务事务结果。worker 必须在传输适配边界隔离通知发送异常，不能直接把可能抛错的 IPC send 接到 Backup hook。需要用户决策的 resume callback 是另一条安全边界，不能伪造默认同意。Phase 2D API/commit state/锁范围保持冻结；本轮没有实现传输、断连策略、progress 或 cancellation。
+
+Phase 2E 验证（2026-09-21，Windows；全部 Python 命令显式使用 `mirrorly-gui-dev` interpreter）：
+
+| 检查 | 结果 |
+| --- | --- |
+| Checkout qualification：普通/isolated import、editable origin、CLI console entry | PASS，均指向当前 GUI worktree |
+| query operations / CLI / application / qualification 聚焦测试 | 238 passed |
+| 完整 Python regression | 690 passed；无 skip/failure（Phase 2D 662 + 新增 28） |
+| Windows E2E 单独运行 | 13 passed（也包含在完整 regression 中） |
+| 默认 testpaths 外 fake-worker tests | 11 passed |
+| Ruff / format / pip check | PASS；77 Python files 格式通过 |
+| diff check / 更新文档相对链接 | PASS |
+
+结构对比确认：存续 CLI 函数仅 cmd_list/cmd_verify/cmd_restore 的 AST 改变；init/Backup、parser、main、prompt helpers 不变。既有 CLI 685 条断言仅有四处 latest helper 引用迁移，预期值/条件不变；list/restore JSON 构造和 verify report entry 序列化不变。application 无 CLI import，隔离子进程实际完成 query/verify/report failure/restore/partial 操作。底层 core、setup/Backup application、desktop/fake-worker、依赖/版本均未修改；未重建 WinUI。
+
 ## 尚未实现
 
-生产 Python worker、真实 GUI Create Backup / Back up now、progress、cooperative cancellation、queue 和 GUI 配置持久化均未实现。权威 setup preflight 与共享 Backup 目前只存在于 Python 侧；GUI Setup 仍是 Phase 1C prototype，Home 按钮仍使用 fixture。Phase 0–1C 文档继续作为各阶段历史记录。
+生产 Python worker、真实 GUI Create Backup / Back up now、progress、cooperative cancellation、queue 和 GUI 配置持久化均未实现。权威 setup preflight 与五类共享 application 操作目前只存在于 Python 侧；GUI 不执行真实 Mirrorly 操作，Setup 仍是 Phase 1C prototype，Home 按钮仍使用 fixture。Phase 0–1C 文档继续作为各阶段历史记录。
 
-O-01～O-09 保持 [OPEN](README.md#待决事项登记)，尤其 O-09 最终 Python worker packaging/distribution 未作决定。后续 worker 集成需要独立任务与 review；本轮不开始 Phase 2E。
+O-01～O-09 保持 [OPEN](README.md#待决事项登记)，尤其 O-09 最终 Python worker packaging/distribution 未作决定。后续 worker 集成需要独立任务与 review；本轮不开始 production worker。

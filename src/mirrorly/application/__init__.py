@@ -1,1 +1,1 @@
-"""Shared infrastructure, setup and Backup transaction; no frontend dependency."""
+"""Shared setup, Backup, query/verify/restore and infrastructure; no frontend dependency."""
