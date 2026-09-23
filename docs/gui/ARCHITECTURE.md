@@ -7,7 +7,8 @@
 > 当前共享 application 服务已由 Phase 2 完成；Phase 3B/3C 只读 worker、生命周期
 > gate 与去重契约见 [PRODUCTION_WORKER](PRODUCTION_WORKER.md)。O-07 的 GUI 配置根
 > 与 Python/C# 归属已冻结，见 [CONFIGURATION](CONFIGURATION.md)；历史 registry/identity
-> 提案不构成新增 task UUID 的授权。目前仍无 production mutation 或 GUI 业务绑定。
+> 提案不构成新增 task UUID 的授权。后续 Phase 3D 已接入唯一 production mutation
+> setup.create，包含 gate admission、显式 approval 和部分副作用事实；仍无 GUI 业务绑定。
 
 ## 背景与决定
 

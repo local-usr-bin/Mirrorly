@@ -11,19 +11,22 @@ Python [Phase 2E：共享 list/verify/restore 编排](PHASE2.md) 已完成（202
 [Phase 1A Technical Vertical Slice](PHASE1A.md) 已冻结为
 **PASS — Technical Vertical Slice validated**（`de1ed8626e0da563f212530327c762a87009b4c7`）。
 下文保留 Phase 0 设计与待决项；这些阶段不代表生产 worker、真实 backup 功能或最终分发已完成。
-当前 [Phase 3B/3C production contract](PRODUCTION_WORKER.md) 实现独立 worker/client、
-版本握手、单 operation slot 和真实只读 setup.preflight。没有 mutation、Resume、
-progress/cancel 或 GUI 业务绑定。Phase 0 IPC 草案保留为历史设计。
+当前 [Phase 3B–3D production contract](PRODUCTION_WORKER.md) 实现独立 worker/client、
+版本握手、单 operation slot、只读 setup.preflight，以及首个且唯一的 mutation：
+setup.create。真实 GUI 仍未绑定；没有 Backup/verify/restore execution、Resume 或
+progress/cancel。Phase 0 IPC 草案保留为历史设计。
 Phase 3C 改为 high-water 去重（无 4,096 请求寿命上限），实现 Windows user/logon
 范围的 worker lifecycle gate，并通过 [CONFIGURATION](CONFIGURATION.md) 冻结 O-07。
 GUI 配置根由单一 C# provider 选择，仍不创建 TOML，也不自动导入 CLI tasks。
+Phase 3D 由 Python application 创建 TOML/repository，使用真实临时目录验证 IPC；
+生命周期 gate 在 admission 时获取并保留至执行与收尾结束。失联不取消、不自动重放。
 O-09 继续 OPEN，后续阶段须另行批准。
 
 ## 阅读顺序与状态标记
 
 | 文档 | 内容 |
 | --- | --- |
-| [PRODUCTION_WORKER](PRODUCTION_WORKER.md) | 当前生产 v1 contract、Phase 3B/3C 只读实现、gate 与 mutation 前置门槛 |
+| [PRODUCTION_WORKER](PRODUCTION_WORKER.md) | 当前生产 v1 contract、只读 bridge、gate、setup.create 与 partial outcomes |
 | [CONFIGURATION](CONFIGURATION.md) | O-07 已批准归属、集中路径 provider、Python task truth 与 CLI 共存 |
 | [ARCHITECTURE](ARCHITECTURE.md) | GUI-ADR-001、分层、运行时、Backup/repository、Restore v1、未来目录 |
 | [OPERATIONS](OPERATIONS.md) | operation/result、health、queue、progress、cancellation/Exit 状态机 |
@@ -61,7 +64,7 @@ O-09 继续 OPEN，后续阶段须另行批准。
 | --- | --- | --- |
 | O-01 | APPROVED policy：确认 Exit 后清空等待队列，监督当前 operation 完成再退出；v1 不支持撤回已确认 Exit | 尚未实现；见 [production contract](PRODUCTION_WORKER.md) |
 | O-02 | 取消 checkpoint、publication 不可取消区、finalizing 策略、restore 部分写入提示的详细提案 | 单独的安全关键 cancellation 任务前 |
-| O-03 | APPROVED：stdio v1、无 reattach；idle 失联退出，active 非交互收尾；必需交互不可用则在该边界结束 | Phase 3C 已实现 user/logon lifecycle gate；首个 mutation 仍须接入 ownership guard，交互尚未实现 |
+| O-03 | APPROVED：stdio v1、无 reattach；idle 失联退出，active 非交互收尾；必需交互不可用则在该边界结束 | Phase 3D setup.create 已接入 ownership guard，并验证失联时持有至执行/收尾结束；交互尚未实现 |
 | O-04 | APPROVED：全部 application operation 共用 worker execution slot | Phase 3B 已实现 slot；不替代 GUI FIFO，不解决外部 CLI 竞争 |
 | O-05 | GUI 最低 Windows build/edition、Windows 10 支持范围、首发 CPU 架构；开发工具版本组合 | 创建正式工程前确认开发目标，发布前验证完整支持矩阵 |
 | O-06 | Packaged/MSIX 或 unpackaged；Python 分发形式、runtime 依赖、签名与更新方案 | Phase 1 明确开发形态；生产分发另行 review |

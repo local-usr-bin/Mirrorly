@@ -149,6 +149,7 @@ static class ProductionWorkerTests
                 check((await status.Terminal).Payload.GetProperty("result").GetProperty("request").GetProperty("terminal_available").GetBoolean());
                 var rejected = await client.RequestAsync("setup.create", Input(directory));
                 check((await rejected.Terminal).Payload.GetProperty("error").GetProperty("application_invoked").GetBoolean() == false);
+                check((await rejected.Terminal).Payload.GetProperty("error").GetProperty("code").GetString() == "invalid_parameters"); // explicit approval is required
                 check((await client.ShutdownIdleAsync()).Payload.GetProperty("result").GetProperty("shutdown").GetString() == "idle");
                 await client.Completion.WaitAsync(TimeSpan.FromSeconds(5));
             }
@@ -231,6 +232,7 @@ static class ProductionWorkerTests
             }
             finally { File.WriteAllText(Path.Combine(directory, "release"), "go"); Directory.Delete(directory, true); }
         });
+        await ProductionSetupTests.Run(test, check, launch);
     }
 
     static SetupPreflightInput Input(string directory) => new("documents", Path.Combine(directory, "source"), Path.Combine(directory, "target"), Path.Combine(directory, "config"));

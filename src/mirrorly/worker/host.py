@@ -1,4 +1,4 @@
-"""One synchronous readonly application slot, independent input and protocol output."""
+"""One synchronous application slot, independent input and protocol output."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from collections import OrderedDict
 
 from mirrorly.application import setup
 
-from . import preflight, protocol
+from . import creation, preflight, protocol
 from .lifecycle import LifecycleGate
 from .transport import Outbound
 
-METHODS = ["ping", "status", "worker.shutdown", "setup.preflight"]
+METHODS = ["ping", "status", "worker.shutdown", "setup.preflight", "setup.create"]
 CAPABILITIES = dict.fromkeys(
     [
         "resume_interaction",
@@ -38,10 +38,13 @@ LIMITS = {
 
 
 class WorkerHost:
-    def __init__(self, read, write, qualification, *, service=None, shutdown_seconds=1):
+    def __init__(
+        self, read, write, qualification, *, service=None, create_service=None, shutdown_seconds=1
+    ):
         self.read = read
         self.qualification = qualification
         self.service = service or setup.preflight_setup
+        self.create_service = create_service or setup.create_backup
         self.shutdown_seconds = shutdown_seconds
         self.session = uuid.uuid4().hex
         self.initialized = False
@@ -73,7 +76,7 @@ class WorkerHost:
         )
         return self.out.send(value, terminal=terminal)
 
-    def _reject(self, rid, code):
+    def _reject(self, rid, code, **facts):
         self._response(
             rid,
             "rejected",
@@ -81,6 +84,7 @@ class WorkerHost:
                 "kind": "admission",
                 "code": code,
                 "application_invoked": False,
+                **facts,
             },
         )
 
@@ -173,6 +177,36 @@ class WorkerHost:
                 }
         self.completion.put_nowait((rid, oid, payload, error))
 
+    def _execute_create(self, rid, oid, request, approved):
+        outcome, value = creation.invoke(self.create_service, request, approved)
+        try:
+            payload, error = creation.project(request, outcome, value)
+            protocol.encode(
+                self._message(
+                    "response",
+                    {
+                        "phase": "terminal",
+                        "result": payload,
+                        "error": error,
+                    },
+                    rid,
+                    oid,
+                )
+            )
+        except Exception as exc:
+            # Keep the acknowledged application outcome even if its full projection
+            # could not be encoded. No second call, filesystem inspection or rollback.
+            payload = {
+                "application_outcome": outcome,
+                "setup": creation.acknowledged_effects(outcome, value),
+            }
+            error = {
+                "kind": "worker",
+                "code": "result_projection_failed",
+                "technical": preflight.technical(exc),
+            }
+        self.completion.put_nowait((rid, oid, payload, error))
+
     def _finish_operation(self):
         try:
             rid, oid, result, error = self.completion.get_nowait()
@@ -243,24 +277,43 @@ class WorkerHost:
         if method not in METHODS:
             self._reject(rid, "unsupported_method")
             return False
-        if method == "setup.preflight":
-            if self.active:
+        if method in ("setup.preflight", "setup.create"):
+            if self.active and method == "setup.preflight":
                 self._reject(rid, "busy")
                 return False
             try:
-                request = preflight.request(params)
+                if method == "setup.create":
+                    request, approved = creation.request(params)
+                else:
+                    request = preflight.request(params)
             except ValueError:
                 self._reject(rid, "invalid_parameters")
                 return False
+            if self.active:
+                self._reject(rid, "busy")
+                return False
+            if method == "setup.create":
+                try:
+                    self.lifecycle_gate.require_ownership()
+                except RuntimeError:
+                    self._reject(
+                        rid,
+                        "mutation_gate_unavailable",
+                        lifecycle_gate=self.lifecycle_gate.observe(),
+                    )
+                    return False
             oid = uuid.uuid4().hex
             self.active = {"request_id": rid, "operation_id": oid}
             self._response(rid, "accepted", operation=oid)
-            if self.lost.is_set():
+            if self.lost.is_set() and method == "setup.preflight":
                 self.active = None
                 return False
-            self.executor = threading.Thread(
-                target=self._execute, args=(rid, oid, request), name="application-executor"
+            # Once create is admitted, failed accepted delivery cannot undo it.
+            execute = self._execute_create if method == "setup.create" else self._execute
+            args = (
+                (rid, oid, request, approved) if method == "setup.create" else (rid, oid, request)
             )
+            self.executor = threading.Thread(target=execute, args=args, name="application-executor")
             self.executor.start()
             return False
         if params and not (method == "status" and set(params) == {"request_id"}):
@@ -315,7 +368,7 @@ class WorkerHost:
                 "hello",
                 {
                     "supported_versions": [protocol.VERSION],
-                    "worker": "production-readonly",
+                    "worker": "production",
                     "qualification": self.qualification,
                     "limits": LIMITS,
                 },

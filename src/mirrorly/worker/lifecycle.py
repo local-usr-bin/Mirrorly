@@ -101,10 +101,10 @@ class _Windows:
 
 
 class LifecycleGate:
-    """A single host thread owns/releases; errors fail closed for future mutation.
+    """A single host thread owns/releases; errors fail closed for mutation.
 
     readonly startup remains usable even if platform/security prevents inspection.
-    observe() is only a point-in-time fact; require_ownership() is the future
+    observe() is only a point-in-time fact; require_ownership() is the
     admission check, on the control thread, before dispatch to the executor.
     """
 

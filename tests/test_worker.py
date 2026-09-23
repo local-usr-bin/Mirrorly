@@ -19,7 +19,7 @@ HOST = ROOT / "src/mirrorly/worker/launch.py"
 
 
 class Peer:
-    def __init__(self, process=None, service=None):
+    def __init__(self, process=None, service=None, create_service=None):
         self.process = process
         self.responses = queue.Queue()
         self.input = queue.Queue()
@@ -36,6 +36,7 @@ class Peer:
                 self.responses.put,
                 {},
                 service=service,
+                create_service=create_service,
                 shutdown_seconds=0.1,
             )
             self.thread = threading.Thread(target=self.host.run, daemon=True)
@@ -80,6 +81,7 @@ class Peer:
         result = self.receive()
         assert result["payload"]["phase"] == "terminal"
         assert all(value is False for value in result["payload"]["result"]["capabilities"].values())
+        return result
 
     def close(self):
         if self.process:
@@ -172,7 +174,7 @@ def test_preflight_problem_and_reject_untrusted_fields(peer, intent):
     ):
         peer.send("setup.preflight", params)
         assert peer.receive()["payload"]["error"]["application_invoked"] is False
-    for method in ("setup.create", "backup.run", "verify.run", "restore.execute", "test_crash"):
+    for method in ("snapshot.list", "backup.run", "verify.run", "restore.execute", "test_crash"):
         peer.send(method)
         assert peer.receive()["payload"]["error"]["code"] == "unsupported_method"
 

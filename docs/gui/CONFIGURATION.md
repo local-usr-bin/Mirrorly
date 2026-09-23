@@ -1,8 +1,8 @@
 # GUI configuration ownership — O-07 v1
 
 APPROVED / CURRENT FACT, Phase 3C, 2026-09-24. This living decision supersedes the
-configuration-ownership proposals in the historical Phase 0 documents. It does not
-enable real Create Backup or any production mutation.
+configuration-ownership proposals in the historical Phase 0 documents. Phase 3D now
+enables setup.create through worker/client; the actual GUI Create Backup remains unbound.
 
 ## Physical root and replaceable boundary
 
@@ -25,7 +25,8 @@ data base rather than falling back to cwd. Tests inject an absolute, isolated ba
 accepts this provider plus SetupPreflightIntent and projects an explicit absolute
 config_root into the existing readonly wire request. Its lower-level input also
 accepts explicit roots for tests/tools. Neither client nor ViewModels construct
-LocalAppData/package paths. No ViewModel is bound to production preflight yet.
+LocalAppData/package paths. Phase 3D adds a CreateAsync provider overload with
+explicit boolean approval. No ViewModel is bound to production preflight/create yet.
 
 The existing Python application alone computes config.d/task filename and the
 authoritative prospective repository path. Calling the provider/preflight does not
@@ -69,7 +70,11 @@ the provider's explicit root. No repository/task config is created by these test
 Source review confirms the sole LocalApplicationData construction is this provider;
 the C# production code contains no task TOML handling or CLI-root discovery.
 
-O-07 ownership is frozen. Before the first mutation, a separate task must connect
-worker lifecycle require_ownership to admission, expose setup.create with the
-existing execution revalidation/explicit decision/partial-side-effect contract,
-and prove no replay under transport uncertainty. No creation method is present now.
+O-07 ownership is frozen. Phase 3D connects worker lifecycle require_ownership to
+setup.create admission, preserving application revalidation, explicit approval and
+known/unknown partial effects. Mutation tests use isolated temporary roots through
+the provider and verify artifacts with existing Python config/repo readers; C# does
+not parse TOML. Tests never use the actual user's GUI config root for creation.
+
+GUI binding, registry, CLI import and uncertainty-reconciliation UX are still later
+scope. An unreported create result is unknown, not permission for an automatic retry.

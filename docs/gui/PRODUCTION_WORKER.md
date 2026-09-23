@@ -1,13 +1,14 @@
-# Production Worker Contract v1 — Phase 3C
+# Production Worker Contract v1 — Phase 3D
 
 Current implementation / frozen contract, 2026-09-24. This is the current production
 IPC source of truth. [Phase 0 IPC_CONTRACT](IPC_CONTRACT.md) remains a historical
 proposal, not an implemented API. [Phase 2](PHASE2.md) completed shared application
-orchestration; this slice exposes **only read-only setup preflight**. The real GUI
+orchestration; the worker now exposes setup preflight and **setup.create, its first
+and only production mutation**. The real GUI
 Home/Setup buttons remain prototypes. This is not production distribution readiness.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
-It does **not** enable any mutation method, including setup.create.
+Phase 3D enables setup.create under that gate; it does not bind any GUI page/button.
 
 ## Implemented scope and ownership
 
@@ -18,6 +19,8 @@ It does **not** enable any mutation method, including setup.create.
 - [worker/protocol.py](../../src/mirrorly/worker/protocol.py): framing/validation.
 - [worker/preflight.py](../../src/mirrorly/worker/preflight.py): intent validation
   and explicit projection of existing application facts; no setup policy copy.
+- [worker/creation.py](../../src/mirrorly/worker/creation.py): explicit setup-create
+  intent/approval and application success/decision/failure wire mapping.
 - [worker/transport.py](../../src/mirrorly/worker/transport.py): bounded output
   boundaries; only pumps perform protocol/diagnostic writes.
 - [worker/lifecycle.py](../../src/mirrorly/worker/lifecycle.py): Windows user/logon
@@ -28,7 +31,7 @@ It does **not** enable any mutation method, including setup.create.
 
 The Phase 1A worker, FakeWorkerClient, PrototypeConfiguration and GUI lifecycle
 are unchanged. The old fake interpreter still intentionally does not import core.
-There is no mutation method, Resume interaction, progress, cancellation, queue,
+There is no Backup/verify/restore execution, Resume interaction, progress, cancellation, queue,
 Activity, notification UX or stdio reattach. No application/core/CLI algorithm,
 configuration/repository format, version or dependency changed.
 
@@ -109,15 +112,15 @@ validated independently; invalid method input is a request rejection, not execut
 ## Handshake and currently callable methods
 
 1. Worker emits `hello`, version null, all correlation IDs null except session_id.
-   Payload: supported_versions, worker=`production-readonly`, qualification, limits.
+   Payload: supported_versions, worker=`production`, qualification, limits.
 2. Client emits `initialize`, selected version, new request_id, payload
    `{"required_capabilities":[]}`.
 3. Worker responds `response`, phase=`terminal`, result containing version,
    methods, capabilities and limits. Unsupported versions/capabilities are rejected.
 4. Only then can `request` messages be admitted.
 
-Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`.
-No repository.inspect or tasks.list was added. Unknown methods, including create,
+Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`, `setup.create`.
+No repository.inspect or tasks.list was added. Unknown methods, including
 backup, verify, restore, cancellation and test_crash, are rejected before application.
 
 All advertised capabilities are false: resume_interaction, phase_progress,
@@ -202,14 +205,17 @@ coordination, not a security boundary against hostile processes in the same acco
 
 Status includes lifecycle_gate: state (held/available/unavailable/error), identity,
 scope=windows_user_logon_session, owned, abandoned_observed and error. A contender
-stays readonly and does not kill or reattach to the owner. Its status probes an
+can use readonly preflight but cannot create while another worker owns the gate;
+it does not kill or reattach to the owner. Its status probes an
 available mutex with acquire/release; that observation is immediately stale-able
 and is **not** admission. It does not silently acquire retained ownership on status.
 
-Future mutation admission **must call require_ownership() on the host/control
-thread before invoking the service**. Failed acquisition must reject with no
+Create admission **calls require_ownership() on the host/control
+thread before invoking the service**. Failed acquisition rejects with no
 application invocation. Repeated checks by an owner do not recursively acquire.
-There is no mutation dispatcher to connect this guard to yet.
+The rejection code is mutation_gate_unavailable, application_invoked=false,
+operation_id=null, with a lifecycle_gate observation. That observation is sampled
+after the failed attempt and can already differ from the admission-time state.
 
 The owning host thread remains alive and retains ownership through channel loss,
 executor join, final result bookkeeping and transport cleanup. Only after no
@@ -225,8 +231,10 @@ barrier before observing worker exit and availability.
 
 This gate is independent from the worker operation slot and existing task/repository
 locks. It neither excludes external CLI execution nor coordinates other user/logon
-scopes. All four production methods remain readonly; a gate owner gains no extra
-method or advertised progress/cancellation capability.
+scopes. Ownership permits admission of setup.create only; it does not add Backup,
+progress or cancellation capability. WAIT_ABANDONED is successful ownership, not
+a clean prior release, permanent refusal or evidence of repository corruption.
+Normal application safety checks still run after abandoned acquisition.
 
 Windows semantics: [CreateMutexExW](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createmutexexw),
 [TOKEN_STATISTICS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_statistics),
@@ -256,8 +264,104 @@ kind worker/code result_projection_failed and `application_returned:true`; it do
 not reinterpret the application outcome. Technical messages are capped at 4,096
 characters with a truncation flag. Do not infer diagnosis from exception wording.
 
-There is no setup.create. Preflight never authorizes a future write and creates no
-repository/config/lock or test file. Future create must rerun application validation.
+Preflight never authorizes a future write and creates no
+repository/config/lock or test file. Create independently reruns application validation.
+
+## setup.create — first mutation (Phase 3D, CURRENT FACT)
+
+Request params contain exactly the five preflight intent strings plus an explicit
+JSON boolean copy_mode_approved. Missing approval, numeric/string coercion, or
+client TaskConfig/RepoInfo/repository_path/config contents/preflight tokens are
+rejected before application. C# exposes CreateAsync(SetupCreateInput) and
+CreateAsync(GuiDataPaths, SetupCreateIntent); approval has no implicit true/default.
+No ViewModel or GUI business button calls these APIs.
+
+Admission order: strict protocol/envelope/version/session/request-ID validation;
+initialization and method validation; create intent/approval validation; available
+application slot; nonblocking lifecycle require_ownership on the control thread;
+operation-ID allocation and accepted response; dispatch to the synchronous executor.
+Gate denial allocates no operation ID, does not call create_backup, does not write,
+wait, kill, retry or enqueue. Status/previous preflight is never authorization.
+
+Once admitted, even failure to deliver accepted must not suppress execution.
+The executor constructs its work from the freshly validated SetupRequest and
+calls the unchanged application.setup.create_backup with explicit approval.
+No saved preflight checks are consumed. Source/config/containment/volume/repository
+conditions are rechecked by the application in their existing order.
+
+Success terminal payload:
+
+```json
+{
+  "phase": "terminal",
+  "result": {
+    "outcome": "succeeded",
+    "setup": {
+      "task_name": "documents",
+      "source": "C:\\Example\\Source",
+      "repository_path": "E:\\Example\\MirrorlyRepo",
+      "config_path": "C:\\Example\\GuiTasks\\config.d\\documents.toml",
+      "repository_initialized": true,
+      "config_written": true,
+      "repo": {
+        "repo_id": "application-returned-id",
+        "format_version": 2,
+        "hash_algorithm": "blake3",
+        "filesystem_policy": "strict",
+        "hardlinks": true,
+        "volume": {"label": "Backup", "serial": "application-returned", "filesystem": "NTFS", "guid": "application-returned"}
+      }
+    }
+  },
+  "error": null
+}
+```
+
+Values come from SetupResult, not this illustrative example or Python object/TOML
+serialization. task_name is TaskConfig.name; config_path is the configuration
+reference. Their existing identity semantics are not generalized or redesigned.
+
+SetupFailure maps to outcome=failed, setup effects/paths/known repo, and error
+kind=application, code=setup_failure, stage from the exception, technical from its
+original cause. No exception-string diagnosis or post-failure disk probing occurs.
+
+| Application fact | repository_initialized | config_written | repo |
+| --- | --- | --- | --- |
+| Failure before init | false | false | null |
+| init_repo raised before successful return | null | false | null |
+| Repo acknowledged, config construction failed | true | false | known RepoInfo facts |
+| Config write raised, even if complete TOML exists | true | null | known RepoInfo facts |
+| Success | true | true | known RepoInfo facts |
+
+False means that step did not complete in this call, not that no prior artifact
+exists. Null means unknown. Initialization can leave artifacts before raising;
+config failure may leave partial or complete TOML. There is no rollback/deletion.
+Unstructured service exceptions map stage/effects to unknown with the original
+technical cause (setup_unexpected_failure); they are not synthetic SetupFailure.
+
+CopyModeApprovalRequired maps outcome=decision_required, error code
+copy_mode_approval_required, stage=volume and the queried volume. Both effect flags
+are false because this existing application boundary precedes writes. No automatic
+resubmission or silent approval follows. Even after an earlier NTFS preflight, a
+new approval requirement needs a fresh explicit decision and a new request; execution
+revalidates again. Approval cannot override strict filesystem policy.
+
+Projection/encoding failure is a worker result_projection_failed, distinct from
+application failure: preserve application_outcome and acknowledged boolean/null
+effects even when detailed result projection is unavailable. Never rerun to obtain
+details. Terminal delivery failure cannot alter application facts.
+
+Both setup methods use one slot. During create, ping/status work; another application
+call or shutdown gets busy. EOF/stdout loss stops new admission but lets create
+return/fail normally. The owning thread joins the executor, records terminal facts,
+finishes bounded transport cleanup, then releases the gate. No cancellation occurs.
+
+Client timeout only times out the wait. Late terminal remains correlated. EOF/crash/
+send uncertainty faults the pending request with WorkerTransportUncertainException;
+WorkerRequest.ResponseAvailable remains false without a received response. This
+never manufactures SetupFailure, no-write facts, or permission to retry. A received
+admission rejection also sets ResponseAvailable=true, which means response availability,
+not application success. There is no automatic replay or recovery workflow.
 
 ## Threads, backpressure and channel loss
 
@@ -272,7 +376,7 @@ Application code/callbacks never perform pipe writes or wait for delivery. Futur
 noncritical notices use the separate try-enqueue boundary; failure is isolated.
 Critical responses never enter that droppable queue. Queue overflow, write error,
 or a protocol write stalled for 30 seconds marks the channel lost and stops admission.
-No such fault is converted into application failure. An active read-only call returns
+No such fault is converted into application failure. An active application call returns
 normally before the host exits. There is no cancellation or process kill fallback.
 
 C# drains stdout and stderr concurrently for the process lifetime. After protocol
@@ -303,11 +407,11 @@ the service is still finishing, existing drain tasks continue. No supervisor res
   The decision stays inside existing locks, after migration and before scanning.
 - O-04: all application operations share one execution slot. This is separate
   from the future GUI FIFO and does not solve external CLI concurrency.
-- **Before any mutating method:** wire the Phase 3C lifecycle guard into mutation
-  admission before service invocation; retain ownership through all execution.
+- Phase 3D wires the lifecycle guard into setup.create admission before service
+  invocation and retains ownership through all execution and terminal bookkeeping.
 - O-07 ownership is APPROVED and centralized in Phase 3C; see
   [CONFIGURATION](CONFIGURATION.md). C# still must not parse/write task TOML.
-  Setup.create itself remains unimplemented and requires a separate approved slice.
+  Setup.create is implemented; GUI binding requires a separate approved slice.
 - O-02 cancellation and O-09 worker packaging remain open; no Job Object
   kill-on-close, mutation retry, GUI binding or production notification is added.
 
@@ -354,3 +458,22 @@ thread affinity/nonrecursive checks and OS-error fail-closed behavior.
 test-only parent; it does not add any production protocol method. Cross-process
 gate tests use the real stable identity, so do not run competing worker-owning
 test suites concurrently in the same Windows user/logon scope.
+
+Phase 3D validation: 771 full Python regression (no skips), 111 focused worker/
+protocol/lifecycle/Phase 2 setup tests (including 25 create cases and 6 lifecycle
+cases), 43 C# harness tests (7 new create groups), 13 Windows E2E and 11 unchanged
+fake-worker tests pass. WinUI Debug x64 build, Ruff/check/format, pip and diff checks
+pass. [test_worker_creation](../../tests/test_worker_creation.py) covers real create,
+stale preflight, approval, unknown partial effects, gate rejection/abandonment,
+duplicate mutation after cache eviction and accepted-delivery failure.
+[ProductionSetupTests](../../desktop/Mirrorly.Desktop.Tests/ProductionSetupTests.cs)
+verify actual C# IPC, late results, process/channel loss and no replay. C# calls
+[inspect_created_setup](../../tests/inspect_created_setup.py) to verify artifacts
+using Python's existing config/repo readers rather than parsing TOML itself.
+
+The lost-client tests now include a barrier after repo initialization and before
+config persistence: another worker cannot create until the original service and
+worker finish. All mutation artifacts are in test-owned temporary directories;
+the actual user's GUI config root and personal folders are not used for creation.
+No result here demonstrates GUI binding, Backup, Resume, cancellation, true
+Exit-running UI, reconciliation after uncertainty or final distribution.

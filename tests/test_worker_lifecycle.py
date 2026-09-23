@@ -68,7 +68,7 @@ def test_stable_gate_cross_process_release_and_readonly_contender(intent, crash)
         assert second.receive()["payload"]["phase"] == "accepted"
         result = second.receive()["payload"]["result"]["preflight"]
         assert result["problem"] is None
-        second.send("setup.create", intent)
+        second.send("backup.run", intent)
         assert second.receive()["payload"]["error"]["code"] == "unsupported_method"
         if crash:
             first.process.kill()  # Only this test-owned worker; never a production action.
@@ -92,13 +92,15 @@ def test_stable_gate_cross_process_release_and_readonly_contender(intent, crash)
             second.close()
 
 
-def test_parent_process_loss_does_not_release_surviving_worker_gate(intent, tmp_path):
+@pytest.mark.parametrize("method", ["setup.preflight", "setup.create"])
+def test_parent_process_loss_does_not_release_surviving_worker_gate(intent, tmp_path, method):
+    params = intent | {"copy_mode_approved": False} if method == "setup.create" else intent
     parent = subprocess.Popen(
         [sys.executable, "-I", "-u", str(ROOT / "tests/worker_parent_fixture.py")],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, "MIRRORLY_TEST_GATE": str(tmp_path)},
+        env={**os.environ, "MIRRORLY_TEST_GATE": str(tmp_path), "MIRRORLY_TEST_METHOD": method},
     )
     contender = None
     handle = None
@@ -110,7 +112,7 @@ def test_parent_process_loss_does_not_release_surviving_worker_gate(intent, tmp_
     kernel.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
     kernel.CloseHandle.argtypes = [w.HANDLE]
     try:
-        parent.stdin.write(json.dumps(intent).encode() + b"\n")
+        parent.stdin.write(json.dumps(params).encode() + b"\n")
         parent.stdin.flush()
         # Bounded reading, so startup failures cannot hang the regression suite.
         import queue
@@ -129,6 +131,9 @@ def test_parent_process_loss_does_not_release_surviving_worker_gate(intent, tmp_
             threading.Event().wait(0.01)
         parent.kill()
         parent.wait(timeout=5)
+        if method == "setup.create":
+            assert (tmp_path / "target/MirrorlyRepo/repo.json").is_file()
+            assert not (tmp_path / "config/config.d/documents.toml").exists()
         assert (
             kernel.WaitForSingleObject(handle, 0) == 0x102
         )  # Still alive after parent termination.
@@ -136,9 +141,22 @@ def test_parent_process_loss_does_not_release_surviving_worker_gate(intent, tmp_
         gate = status(contender)
         assert gate["identity"] == facts["gate"]["identity"]
         assert gate["state"] == "unavailable" and not gate["owned"]
+        if method == "setup.create":
+            contender.send("setup.create", params)
+            error = contender.receive()["payload"]["error"]
+            assert error["code"] == "mutation_gate_unavailable" and not error["application_invoked"]
+            assert not (tmp_path / "create_finished").exists()
         (tmp_path / "release").touch()
         assert kernel.WaitForSingleObject(handle, 5000) == 0
         assert status(contender)["state"] == "available"
+        if method == "setup.create":
+            from mirrorly.config import load_task_config
+            from mirrorly.repo import load_repo
+
+            cfg = load_task_config(tmp_path / "config/config.d/documents.toml")
+            assert cfg.repo_id == load_repo(intent["target"]).repo_id
+            assert (tmp_path / "create_calls").read_text().splitlines() == ["create"]
+            assert (tmp_path / "create_finished").exists()
     finally:
         (tmp_path / "release").touch()
         if handle:

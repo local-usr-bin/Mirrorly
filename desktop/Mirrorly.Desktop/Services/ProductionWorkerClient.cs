@@ -14,6 +14,8 @@ public sealed record WorkerDevelopmentLaunch(string Interpreter, string Checkout
 }
 public sealed record SetupPreflightInput(string task_name, string source, string target, string config_root, string filesystem_policy = "strict");
 public sealed record SetupPreflightIntent(string task_name, string source, string target, string filesystem_policy = "strict");
+public sealed record SetupCreateInput(string task_name, string source, string target, string config_root, string filesystem_policy, bool copy_mode_approved);
+public sealed record SetupCreateIntent(string task_name, string source, string target, string filesystem_policy, bool copy_mode_approved);
 public sealed record ProductionWorkerObservation(bool ProcessExists, bool TransportHealthy, bool Initialized, string? ActiveOperationId, string Detail);
 public sealed class WorkerTransportUncertainException(string message) : IOException(message);
 
@@ -25,6 +27,9 @@ public sealed class WorkerRequest
     public string? OperationId { get; internal set; }
     internal readonly TaskCompletionSource<ProductionMessage> Completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task<ProductionMessage> Terminal => Completion.Task;
+    // False after transport loss or a wait timeout without a received response.
+    // True means a response is available, not that the application succeeded.
+    public bool ResponseAvailable => Completion.Task.IsCompletedSuccessfully;
     // A wait timeout does not remove correlation, cancel the operation or resend it.
     public Task<ProductionMessage> WaitAsync(TimeSpan timeout) => Terminal.WaitAsync(timeout);
 }
@@ -114,6 +119,9 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> PreflightAsync(SetupPreflightInput request) => RequestAsync("setup.preflight", request);
     public Task<WorkerRequest> PreflightAsync(GuiDataPaths paths, SetupPreflightIntent intent) => PreflightAsync(
         new SetupPreflightInput(intent.task_name, intent.source, intent.target, paths.TaskConfigRoot, intent.filesystem_policy));
+    public Task<WorkerRequest> CreateAsync(SetupCreateInput request) => RequestAsync("setup.create", request);
+    public Task<WorkerRequest> CreateAsync(GuiDataPaths paths, SetupCreateIntent intent) => CreateAsync(
+        new SetupCreateInput(intent.task_name, intent.source, intent.target, paths.TaskConfigRoot, intent.filesystem_policy, intent.copy_mode_approved));
 
     internal static string AllocateRequestId(ref ulong highest)
     {
@@ -123,7 +131,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
-        return SendAsync("request", new { method, @params = parameters ?? new { } }, method == "setup.preflight");
+        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create");
     }
 
     private async Task<WorkerRequest> SendAsync(string kind, object payload, bool application = false)

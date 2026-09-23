@@ -10,6 +10,7 @@ from mirrorly.worker import protocol as p
 
 root = Path(__file__).resolve().parents[1]
 intent = json.loads(sys.stdin.readline())
+method = os.environ.get("MIRRORLY_TEST_METHOD", "setup.preflight")
 child = subprocess.Popen(
     [
         sys.executable,
@@ -24,13 +25,18 @@ child = subprocess.Popen(
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
-    env={**os.environ, "MIRRORLY_TEST_SCENARIO": "blocked"},
+    env={
+        **os.environ,
+        "MIRRORLY_TEST_SCENARIO": "create_blocked_config"
+        if method == "setup.create"
+        else "blocked",
+    },
 )
 session = p.parse(child.stdout.readline())["session_id"]
 for kind, rid, payload in (
     ("initialize", "1", {"required_capabilities": []}),
     ("request", "2", {"method": "status", "params": {}}),
-    ("request", "3", {"method": "setup.preflight", "params": intent}),
+    ("request", "3", {"method": method, "params": intent}),
 ):
     child.stdin.write(p.encode(p.message(kind, session, payload, rid)))
     child.stdin.flush()
