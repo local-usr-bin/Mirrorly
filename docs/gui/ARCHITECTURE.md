@@ -140,3 +140,7 @@ tests/gui_e2e/                    # Windows UI Automation + 隔离数据
 ```
 
 无需首版就创建全部目录或一层一个项目。资源/组件和 coordinator 各有明确 owner；不引入 universal event bus、generic workflow engine 或插件系统。
+
+## Phase 3E implementation addendum
+
+[Real Setup closed loop](PHASE3E.md) now uses an app-owned DesktopSession with lazy production startup. Preflight/create use shared Python setup; tasks.list uses application.tasks and durable GUI-root configurations. Normal Home has no fixture tasks/history. Explicit Exit supervises current work through factual result handling and idle worker shutdown; Close/Minimize preserve it. Fake-worker runtime ownership is retired, historical files/tests remain. No Backup/progress/cancel/Resume or final packaging is implemented.

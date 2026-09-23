@@ -7,7 +7,7 @@ static class SetupTests
     {
         await test("Setup initially lists drives without selecting a source or target", async () =>
         {
-            var setup = new BackupSetupViewModel(new FakeFolders());
+            var setup = new BackupSetupViewModel(new FakeFolders(), new FakeDesktopSession());
             await setup.InitializeAsync();
             check(setup.Source.Address == "This PC" && setup.Source.Folders.Count == 2);
             check(!setup.CanContinue && !setup.Source.CanBack && !setup.Source.CanUp);
@@ -39,28 +39,28 @@ static class SetupTests
         });
         await test("Source and destination selections enable review with name and repository preview", async () =>
         {
-            var setup = new BackupSetupViewModel(new FakeFolders());
+            var setup = new BackupSetupViewModel(new FakeFolders(), new FakeDesktopSession());
             await setup.Source.SelectAsync(@"C:\Source"); check(!setup.CanContinue);
             await setup.Destination.SelectAsync(@"E:\Backups");
             check(setup.CanContinue && setup.BackupName == "Source");
-            check(setup.RepositoryPreview == @"E:\Backups\MirrorlyRepo");
+            check(setup.RepositoryPreview.Contains("review"));
             await setup.ContinueAsync(); check(setup.IsReview && setup.CanCreate);
             setup.BackupName = ""; check(!setup.CanCreate);
             setup.BackupName = "My papers";
-            setup.CreatePrototype(); check(setup.ShowPrototypeNotice && !setup.CanCreate);
-            setup.Back(); check(!setup.IsReview && !setup.ShowPrototypeNotice);
+            check(!setup.CanCreate); // Name edits require fresh authoritative preflight.
+            setup.Back(); check(!setup.IsReview);
             await setup.Source.SelectAsync(@"C:\Source\Child"); check(setup.BackupName == "My papers");
         });
         await test("Continue rechecks paths that disappear or become inaccessible", async () =>
         {
             var service = new FakeFolders();
-            var setup = new BackupSetupViewModel(service);
+            var setup = new BackupSetupViewModel(service, new FakeDesktopSession());
             await setup.Source.SelectAsync(@"C:\Source");
             await setup.Destination.SelectAsync(@"E:\Backups");
             service.Unavailable.Add(@"E:\Backups");
             await setup.ContinueAsync();
             check(!setup.IsReview && !setup.CanContinue && setup.Destination.Error is not null);
-            setup.CreatePrototype(); check(!setup.ShowPrototypeNotice);
+            await setup.CreateAsync(() => Task.FromResult(true)); check(setup.State == SetupState.Choose);
         });
         await test("Late selection validation cannot override a later navigation", async () =>
         {
@@ -79,11 +79,13 @@ static class SetupTests
             var longPath = @"C:\Source\" + string.Join('\\', Enumerable.Repeat("ResearchDocuments", 25));
             service.Paths.Add(longPath);
             service.Paths.Add(@"\\server\share\Backups");
-            var setup = new BackupSetupViewModel(service);
+            var setup = new BackupSetupViewModel(service, new FakeDesktopSession());
             await setup.Source.SelectAsync(longPath);
             await setup.Destination.SelectAsync(@"\\server\share\Backups");
             check(setup.Source.SelectedPath == longPath && setup.CanContinue);
-            check(setup.RepositoryPreview == @"\\server\share\Backups\MirrorlyRepo");
+            check(setup.RepositoryPreview.Contains("review"));
+            await setup.ContinueAsync();
+            check(setup.RepositoryPreview == @"X:\authoritative");
             foreach (var width in new[] { 320d, 720, 880, 920, 959.9 })
                 check(SetupPreview.StackPanes(width));
             foreach (var width in new[] { 960d, 1008, 1200 })
@@ -91,7 +93,7 @@ static class SetupTests
         });
         await test("Display name follows new source until edited; same-path warning is limited", async () =>
         {
-            var setup = new BackupSetupViewModel(new FakeFolders());
+            var setup = new BackupSetupViewModel(new FakeFolders(), new FakeDesktopSession());
             await setup.Source.SelectAsync(@"C:\Source");
             await setup.Source.SelectAsync(@"C:\Source\Child"); check(setup.BackupName == "Child");
             await setup.Destination.SelectAsync(@"C:\Source\Child");

@@ -11,20 +11,24 @@ namespace Mirrorly.Desktop;
 public sealed partial class MainWindow : Window
 {
     private readonly ShellViewModel shell = new();
-    private readonly WorkerDiagnosticsViewModel diagnosticsModel = new();
-    private readonly FakeWorkerClient worker = new();
-    private readonly NotificationService notifications = new();
-    private readonly HomeView home = new();
-    private readonly BackupSetupView setup = new();
+    private readonly DesktopSession session;
+    private readonly HomeView home;
+    private readonly BackupSetupView setup;
     private TrayService? tray;
     private bool exiting;
 #if DEBUG
     private DiagnosticsView? diagnostics;
 #endif
 
-    public MainWindow()
+    public MainWindow(DesktopSession session)
     {
+        this.session = session;
+        home = new(session); setup = new(session);
+        setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
+        setup.ConfirmCopy = () => ConfirmAsync("Use full-file copies?",
+            "The selected location does not provide NTFS hardlink reuse. Mirrorly will use full-file copies, which may need more space. Continue with this location?",
+            "Use full-file copies", "Go back");
         Navigation.RequestedTheme = ElementTheme.Light;
         Navigation.ExpandedModeThresholdWidth = HomePolicy.ExpandedNavigationAt;
         Navigation.CompactModeThresholdWidth = HomePolicy.CompactNavigationAt;
@@ -33,21 +37,17 @@ public sealed partial class MainWindow : Window
         setup.StepChanged += () => DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
         home.DecorationChanged += _ => UpdateShellLayout();
         PageHost.Content = home;
-        worker.StatusChanged += status => DispatcherQueue.TryEnqueue(() => diagnosticsModel.UpdateStatus(status));
-        worker.EventReceived += message => DispatcherQueue.TryEnqueue(() => diagnosticsModel.ShowEvent(message.Payload.ToString()));
-        worker.TechnicalLog += text => Debug.WriteLine(text);
 #if DEBUG
         var diagnosticsItem = new NavigationViewItem { Content = "Developer diagnostics", Tag = "Diagnostics", Icon = new FontIcon { Glyph = "\uE943" } };
         Navigation.FooterMenuItems.Add(diagnosticsItem);
-        diagnostics = new DiagnosticsView(diagnosticsModel);
-        diagnostics.FixtureSelected += scenario => { home.Model.SelectFixture(scenario); Navigate(ShellPage.Home); };
+        diagnostics = new DiagnosticsView();
+        // Historical fixtures remain in tests; normal Home never displays sample tasks.
         diagnostics.TestRequested += async command => {
             try
             {
-                if (command == "ping") await worker.PingAsync();
-                else if (command == "notification") diagnostics.ShowMessage(notifications.ShowTest());
+                if (command == "ping") diagnostics.ShowMessage(session.Observation.ToString());
                 else if (command == "exit") await ExitAsync();
-                else await worker.RequestAsync(command);
+                else diagnostics.ShowMessage("Phase 1A test worker is isolated from the normal runtime.");
             }
             catch (Exception error) { diagnostics.ShowMessage(error.Message); }
         };
@@ -58,7 +58,7 @@ public sealed partial class MainWindow : Window
             tray = new TrayService(WinRT.Interop.WindowNative.GetWindowHandle(this), Reopen,
                 () => DispatcherQueue.TryEnqueue(async () => await ExitAsync()));
         }
-        catch (Exception error) { diagnosticsModel.ShowEvent($"Tray unavailable: {error.Message}. Close will exit."); }
+        catch (Exception error) { Debug.WriteLine($"Tray unavailable: {error.Message}. Close will use supervised Exit."); }
         AppWindow.Closing += (sender, args) => {
             if (exiting) return;
             args.Cancel = true;
@@ -72,7 +72,7 @@ public sealed partial class MainWindow : Window
             ResizeForReview(1120, 840);
             Navigation.XamlRoot.Changed += (_, _) => UpdateShellLayout();
             UpdateShellLayout();
-            await worker.StartAsync(PrototypeConfiguration.PythonInterpreter, PrototypeConfiguration.WorkerScript);
+            await home.Model.RefreshAsync(session);
         };
     }
     private void ResizeForReview(double width, double height)
@@ -105,13 +105,41 @@ public sealed partial class MainWindow : Window
         if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter) presenter.Restore();
         Activate();
     }
+    private bool exitDialog;
+    private readonly SemaphoreSlim dialogs = new(1);
+    private async Task<bool> ConfirmAsync(string title, string content, string primary, string close)
+    {
+        await dialogs.WaitAsync();
+        try
+        {
+            return await new ContentDialog { XamlRoot = Navigation.XamlRoot, Title = title, Content = content,
+                PrimaryButtonText = primary, CloseButtonText = close, DefaultButton = ContentDialogButton.Close }.ShowAsync() == ContentDialogResult.Primary;
+        }
+        finally { dialogs.Release(); }
+    }
     private async Task ExitAsync()
     {
-        if (exiting) return;
-        exiting = true;
-        try { await worker.DisposeAsync(); }
-        catch (Exception error) { Debug.WriteLine(error); }
-        finally { tray?.Dispose(); Close(); Application.Current.Exit(); }
+        if (exiting || exitDialog || session.ExitPending) return;
+        exitDialog = true;
+        try
+        {
+            var done = await session.ExitAsync(async () =>
+            {
+                Reopen();
+                return await ConfirmAsync("Mirrorly is still working",
+                    "Exit after the current operation finishes? Mirrorly will stay running until it has processed the result.",
+                    "Exit after it finishes", "Stay in Mirrorly");
+            });
+            if (!done) return;
+            exiting = true; tray?.Dispose(); Close(); Application.Current.Exit();
+        }
+        catch (Exception error)
+        {
+            Reopen();
+            await new ContentDialog { XamlRoot = Navigation.XamlRoot, Title = "Mirrorly has not finished exiting",
+                Content = "The service did not confirm shutdown. It has not been force-stopped. " + error.Message, CloseButtonText = "Close" }.ShowAsync();
+        }
+        finally { exitDialog = false; }
     }
     private void Navigate(ShellPage page)
     {

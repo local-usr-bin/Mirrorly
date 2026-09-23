@@ -33,6 +33,15 @@ public sealed class FolderBrowserViewModel(string title, IFolderBrowserService s
     }
     public void BeginEdit() { IsEditing = true; Changed(); }
     public void CancelEdit() { IsEditing = false; Changed(); }
+    public void ClearSelection()
+    {
+        selectionRevision++;
+        SelectedPath = null;
+        Error = null;
+        IsEditing = false;
+        IsValidating = false;
+        Changed();
+    }
     public Task NavigateAsync(string? path) => NavigateAsync(path, true);
     private async Task NavigateAsync(string? path, bool remember)
     {

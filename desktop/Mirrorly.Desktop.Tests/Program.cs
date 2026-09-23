@@ -102,6 +102,7 @@ await Test("Missing absolute interpreter remains Disconnected", async () =>
 await Test("Healthy home describes past completion, not source freshness", () =>
 {
     var home = new HomeViewModel();
+    home.SelectFixture(HomeScenario.Healthy);
     Check(home.Status.Tone == StatusTone.Success && home.Status.Title.Contains("Last backup"));
     Check(!home.Status.Title.Contains("up to date") && home.Status.Action == "Back up now");
     Check(home.Backups.Count == 1 && !home.CompactBackups && !home.IsEmpty);

@@ -2,7 +2,7 @@
 
 APPROVED / CURRENT FACT, Phase 3C, 2026-09-24. This living decision supersedes the
 configuration-ownership proposals in the historical Phase 0 documents. Phase 3D now
-enables setup.create through worker/client; the actual GUI Create Backup remains unbound.
+enables setup.create through worker/client. [Phase 3E](PHASE3E.md) connects the actual GUI Setup flow and Python-owned task catalog.
 
 ## Physical root and replaceable boundary
 
@@ -26,7 +26,7 @@ accepts this provider plus SetupPreflightIntent and projects an explicit absolut
 config_root into the existing readonly wire request. Its lower-level input also
 accepts explicit roots for tests/tools. Neither client nor ViewModels construct
 LocalAppData/package paths. Phase 3D adds a CreateAsync provider overload with
-explicit boolean approval. No ViewModel is bound to production preflight/create yet.
+explicit boolean approval. Phase 3E ViewModels use these through one app-owned DesktopSession.
 
 The existing Python application alone computes config.d/task filename and the
 authoritative prospective repository path. Calling the provider/preflight does not
@@ -76,5 +76,4 @@ known/unknown partial effects. Mutation tests use isolated temporary roots throu
 the provider and verify artifacts with existing Python config/repo readers; C# does
 not parse TOML. Tests never use the actual user's GUI config root for creation.
 
-GUI binding, registry, CLI import and uncertainty-reconciliation UX are still later
-scope. An unreported create result is unknown, not permission for an automatic retry.
+Full registry, CLI import and uncertainty reconciliation remain later scope. Phase 3E rereads Python task configurations after restart; it persists no second registry. Its Debug-only explicit smoke-test data-base argument is handled at the centralized development/provider boundary. An unreported create result is unknown, not permission for an automatic retry.

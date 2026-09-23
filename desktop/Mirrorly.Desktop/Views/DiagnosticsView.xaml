@@ -2,20 +2,12 @@
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
  <StackPanel Spacing="{StaticResource MirrorlyCardSpacing}">
   <TextBlock Text="Developer diagnostics" Style="{StaticResource MirrorlyPageTitle}"/>
-  <TextBlock Text="Debug only · fixtures and Phase 1A fake worker. No real backup operations." Style="{StaticResource MirrorlyBody}"/>
-  <ComboBox x:Name="FixtureSelector" Header="Home presentation fixture" SelectionChanged="Fixture_Changed" HorizontalAlignment="Stretch"/>
-  <TextBlock Text="{Binding StatusText}" Style="{StaticResource MirrorlyBody}" AutomationProperties.LiveSetting="Polite"/>
-  <TextBlock Text="{Binding Detail}" Style="{StaticResource MirrorlySecondary}"/>
-  <TextBlock Text="IPC: phase1a / 1 · UTF-8 NDJSON / stdio" Style="{StaticResource MirrorlyCaption}"/>
-  <Button Content="Ping worker" Tag="ping" Click="Test_Click" IsEnabled="{Binding CanRequest}"/>
-  <Button Content="Trigger test event" Tag="test_event" Click="Test_Click" IsEnabled="{Binding CanRequest}"/>
-  <Button Content="Crash test worker" Tag="test_crash" Click="Test_Click" IsEnabled="{Binding CanRequest}"/>
-  <Button Content="Show test notification" Tag="notification" Click="Test_Click"/>
-  <TextBlock Text="{Binding LastEvent}" Style="{StaticResource MirrorlyBody}"/>
-  <TextBlock x:Name="Message" Style="{StaticResource MirrorlyBody}" AutomationProperties.LiveSetting="Polite"/>
-  <TextBlock x:Name="Display" Style="{StaticResource MirrorlyBody}"/>
+  <TextBlock Text="Production session observations. Host responsiveness is not operation progress." Style="{StaticResource MirrorlyBody}"/>
+  <TextBlock x:Name="Message" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+  <Button Content="Refresh session observation" Click="Status_Click"/>
+  <TextBlock x:Name="Display" TextWrapping="Wrap"/>
   <Button Content="Small window (560 × 480 DIP)" Click="Small_Click"/>
   <Button Content="Review window (1120 × 860 DIP)" Click="Large_Click"/>
-  <Button Content="Exit prototype" Tag="exit" Click="Test_Click"/>
+  <Button Content="Exit Mirrorly" Click="Exit_Click"/>
  </StackPanel>
 </UserControl>

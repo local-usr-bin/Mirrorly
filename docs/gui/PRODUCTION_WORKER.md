@@ -1,14 +1,13 @@
-# Production Worker Contract v1 — Phase 3D
+# Production Worker Contract v1 — Phase 3E
 
 Current implementation / frozen contract, 2026-09-24. This is the current production
 IPC source of truth. [Phase 0 IPC_CONTRACT](IPC_CONTRACT.md) remains a historical
 proposal, not an implemented API. [Phase 2](PHASE2.md) completed shared application
 orchestration; the worker now exposes setup preflight and **setup.create, its first
-and only production mutation**. The real GUI
-Home/Setup buttons remain prototypes. This is not production distribution readiness.
+and only production mutation**. Phase 3E connects real GUI Setup and a readonly durable task catalog; Back up now remains unavailable. This is not production distribution readiness.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
-Phase 3D enables setup.create under that gate; it does not bind any GUI page/button.
+Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
 
 ## Implemented scope and ownership
 
@@ -27,10 +26,9 @@ Phase 3D enables setup.create under that gate; it does not bind any GUI page/but
   session mutex, retained by the host thread through executor completion.
 - [ProductionWorkerClient.cs](../../desktop/Mirrorly.Desktop/Services/ProductionWorkerClient.cs)
   and [ProductionProtocol.cs](../../desktop/Mirrorly.Desktop/Services/ProductionProtocol.cs):
-  separate C# client, not bound to any View/ViewModel.
+  separate C# client behind DesktopSession; ViewModels do not own processes.
 
-The Phase 1A worker, FakeWorkerClient, PrototypeConfiguration and GUI lifecycle
-are unchanged. The old fake interpreter still intentionally does not import core.
+The Phase 1A worker, FakeWorkerClient and PrototypeConfiguration remain unchanged test infrastructure. Normal GUI runtime no longer starts them. The old fake interpreter still intentionally does not import core.
 There is no Backup/verify/restore execution, Resume interaction, progress, cancellation, queue,
 Activity, notification UX or stdio reattach. No application/core/CLI algorithm,
 configuration/repository format, version or dependency changed.
@@ -49,7 +47,7 @@ $hostScript = Join-Path $checkout 'src\mirrorly\worker\launch.py'
 
 The client takes `WorkerDevelopmentLaunch(interpreter, checkout)`, derives the
 absolute host script, uses `ArgumentList`, and launches without a shell or console.
-Nothing auto-starts from Home. Each client owns one on-demand long-lived session;
+Home lazily starts the app-owned production session after the shell appears. Each client owns one on-demand long-lived session;
 no idle recycling, automatic restart or reattach is implemented.
 
 Before hello, Python checks sys.executable, mirrorly.__file__, setup.__file__,
@@ -119,8 +117,8 @@ validated independently; invalid method input is a request rejection, not execut
    methods, capabilities and limits. Unsupported versions/capabilities are rejected.
 4. Only then can `request` messages be admitted.
 
-Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`, `setup.create`.
-No repository.inspect or tasks.list was added. Unknown methods, including
+Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`, `setup.create`, `tasks.list`.
+No repository.inspect was added. The bounded readonly tasks.list contract is specified in [PHASE3E](PHASE3E.md#durable-task-catalog). Unknown methods, including
 backup, verify, restore, cancellation and test_crash, are rejected before application.
 
 All advertised capabilities are false: resume_interaction, phase_progress,
@@ -394,11 +392,11 @@ OS/process exit code is not an application result.
 Client disposal closes the channel, does not kill, and waits a bounded period; if
 the service is still finishing, existing drain tasks continue. No supervisor restart.
 
-## Approved policies for later mutation phases — NOT IMPLEMENTED
+## Approved lifecycle policies and remaining capabilities
 
 - O-01: confirmed true Exit clears not-started GUI queue items, supervises the
   current operation to completion, then exits worker/GUI. No withdrawal of a
-  confirmed Exit intent in v1. Close X/Minimize are not true Exit.
+  confirmed Exit intent in v1. Close X/Minimize are not true Exit. Phase 3E implements this supervision for setup/catalog workflows; no Backup queue exists.
 - O-03: unexpected parent loss exits idle worker; an active noninteractive call
   may finish before exit. Required interaction unavailable ends the operation at
   that existing decision boundary. Parent loss is not cancellation. No reattach.
@@ -411,9 +409,9 @@ the service is still finishing, existing drain tasks continue. No supervisor res
   invocation and retains ownership through all execution and terminal bookkeeping.
 - O-07 ownership is APPROVED and centralized in Phase 3C; see
   [CONFIGURATION](CONFIGURATION.md). C# still must not parse/write task TOML.
-  Setup.create is implemented; GUI binding requires a separate approved slice.
+  Setup.create is implemented and Phase 3E binds it to the reviewed Setup flow.
 - O-02 cancellation and O-09 worker packaging remain open; no Job Object
-  kill-on-close, mutation retry, GUI binding or production notification is added.
+  kill-on-close, mutation retry or production notification is added.
 
 Future result rules remain frozen: Backup preserves not_published/unknown/published;
 transport loss cannot manufacture a commit fact. Setup partial effects remain

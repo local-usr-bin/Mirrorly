@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Mirrorly.Desktop\Services\DesktopSession.cs" Link="Services\DesktopSession.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\GuiDataPaths.cs" Link="Services\GuiDataPaths.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\ProductionProtocol.cs" Link="Services\ProductionProtocol.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\ProductionWorkerClient.cs" Link="Services\ProductionWorkerClient.cs" />

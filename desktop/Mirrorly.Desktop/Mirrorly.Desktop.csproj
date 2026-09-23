@@ -22,6 +22,7 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyMetadata Include="CheckoutRoot" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <Manifest Include="$(ApplicationManifest)" />

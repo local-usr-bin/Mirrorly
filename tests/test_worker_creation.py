@@ -88,6 +88,7 @@ def test_real_create_without_preflight_and_exact_methods(tmp_path, intent):
             "worker.shutdown",
             "setup.preflight",
             "setup.create",
+            "tasks.list",
         ]
         assert peer.hello["payload"]["qualification"]["cli_imported"] is False
         assert_success(intent, create(peer, intent))

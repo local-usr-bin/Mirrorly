@@ -122,6 +122,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> CreateAsync(SetupCreateInput request) => RequestAsync("setup.create", request);
     public Task<WorkerRequest> CreateAsync(GuiDataPaths paths, SetupCreateIntent intent) => CreateAsync(
         new SetupCreateInput(intent.task_name, intent.source, intent.target, paths.TaskConfigRoot, intent.filesystem_policy, intent.copy_mode_approved));
+    public Task<WorkerRequest> ListTasksAsync(GuiDataPaths paths, string? after = null) => RequestAsync("tasks.list", new { config_root = paths.TaskConfigRoot, after });
 
     internal static string AllocateRequestId(ref ulong highest)
     {
@@ -131,7 +132,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
-        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create");
+        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list");
     }
 
     private async Task<WorkerRequest> SendAsync(string kind, object payload, bool application = false)

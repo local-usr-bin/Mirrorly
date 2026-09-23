@@ -4,7 +4,7 @@
   <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}">
    <TextBlock Text="Set up backup" Style="{StaticResource MirrorlyPageTitle}" />
    <TextBlock x:Name="StepText" Text="Step 1 of 2 · Choose folders" Style="{StaticResource MirrorlySecondary}" />
-   <TextBlock Text="Design preview · Read-only folder browsing" Style="{StaticResource MirrorlyCaption}" />
+   <TextBlock Text="Set up a repository and configuration. Files are backed up in a later step." Style="{StaticResource MirrorlyCaption}" />
   </StackPanel>
   <StackPanel x:Name="ChooseStep" Spacing="{StaticResource MirrorlyCardSpacing}">
    <TextBlock Text="Choose one folder to back up and one backup location. Select a folder, or double-click to open it. Click the address to type a path." Style="{StaticResource MirrorlyBody}" />
@@ -24,31 +24,33 @@
     </StackPanel>
    </Border>
    <InfoBar x:Name="SamePathNotice" Severity="Warning" IsClosable="False" Title="The same folder is selected on both sides"
-     Message="Choose a different backup location. Full backup safety checks will be provided when the backup engine is connected." />
+     Message="Choose a different backup location. Mirrorly will check setup when you review." />
    <Button x:Name="ContinueButton" Content="Continue" IsEnabled="{Binding CanContinue}" Click="Continue_Click" Style="{StaticResource MirrorlyPrimaryButton}" />
   </StackPanel>
   <StackPanel x:Name="ReviewStep" Visibility="Collapsed" Spacing="{StaticResource MirrorlyCardSpacing}">
    <Border Style="{StaticResource MirrorlyCard}">
     <StackPanel Spacing="{StaticResource MirrorlyCardSpacing}">
      <TextBlock Text="Review backup" Style="{StaticResource MirrorlySectionTitle}" />
-     <TextBox x:Name="NameInput" Header="Backup name" Text="{Binding BackupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+     <TextBox x:Name="NameInput" Header="Backup name" IsEnabled="{Binding CanEdit}" Text="{Binding BackupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
      <TextBlock x:Name="NameHint" Text="Enter a name for this backup." Style="{StaticResource MirrorlySecondary}" Visibility="Collapsed" />
      <TextBlock Text="Folder to back up" Style="{StaticResource MirrorlyCaption}" />
      <TextBlock Text="{Binding Source.SelectedPath}" Style="{StaticResource MirrorlyBody}" IsTextSelectionEnabled="True" />
      <TextBlock Text="Backup location" Style="{StaticResource MirrorlyCaption}" />
      <TextBlock Text="{Binding Destination.SelectedPath}" Style="{StaticResource MirrorlyBody}" IsTextSelectionEnabled="True" />
-     <TextBlock Text="Mirrorly repository · Path preview" Style="{StaticResource MirrorlyCaption}" />
+     <TextBlock Text="Mirrorly repository · Checked by Mirrorly" Style="{StaticResource MirrorlyCaption}" />
      <TextBlock Text="{Binding RepositoryPreview}" Style="{StaticResource MirrorlyBody}" IsTextSelectionEnabled="True" />
      <TextBlock Text="Backups are stored as ordinary files that you can browse with File Explorer." Style="{StaticResource MirrorlyBody}" />
-     <TextBlock Text="This prototype does not check backup safety or create a repository." Style="{StaticResource MirrorlyCaption}" />
+     <TextBlock Text="Create checks these details again before making changes." Style="{StaticResource MirrorlyCaption}" />
     </StackPanel>
    </Border>
    <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyControlSpacing}">
-    <Button Content="Back" Click="Back_Click" Style="{StaticResource MirrorlySecondaryButton}" />
+    <Button Content="Back" IsEnabled="{Binding CanEdit}" Click="Back_Click" Style="{StaticResource MirrorlySecondaryButton}" />
+    <Button Content="Check again" IsEnabled="{Binding CanCheck}" Click="Check_Click" Style="{StaticResource MirrorlySecondaryButton}" />
     <Button Content="Create backup" IsEnabled="{Binding CanCreate}" Click="Create_Click" Style="{StaticResource MirrorlyPrimaryButton}" />
    </StackPanel>
-   <InfoBar x:Name="PrototypeNotice" Severity="Informational" IsClosable="False" Title="Prototype only" AutomationProperties.LiveSetting="Polite" />
-   <Button x:Name="ReturnButton" Content="Return Home" Click="Return_Click" Visibility="Collapsed" Style="{StaticResource MirrorlySecondaryButton}" />
+   <InfoBar x:Name="SetupNotice" Severity="Informational" IsClosable="False" Title="Setup status" Message="{Binding Message}" AutomationProperties.LiveSetting="Polite" />
+   <Expander Header="View technical details" HorizontalAlignment="Stretch"><TextBlock Text="{Binding TechnicalDetails}" TextWrapping="Wrap" IsTextSelectionEnabled="True" /></Expander>
+   <Button Content="Return Home" Click="Return_Click" Style="{StaticResource MirrorlySecondaryButton}" />
   </StackPanel>
  </StackPanel>
 </UserControl>

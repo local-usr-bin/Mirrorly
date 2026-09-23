@@ -7,11 +7,17 @@
    <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}" VerticalAlignment="Center">
     <TextBlock Text="Home" Style="{StaticResource MirrorlyPageTitle}"/>
     <TextBlock Text="A little peace of mind for your everyday files." Style="{StaticResource MirrorlySecondary}"/>
-    <TextBlock Text="Design preview · Sample data" Style="{StaticResource MirrorlyCaption}"/>
+    <TextBlock Text="Configured backups · Backup execution is not available yet" Style="{StaticResource MirrorlyCaption}"/>
    </StackPanel>
    <Border x:Name="HeaderDecoration" Grid.Column="1"><components:SpringSprig AssetName="spring-sprig-header" Style="{StaticResource MirrorlyHeaderDecoration}"/></Border>
   </Grid>
-  <InfoBar x:Name="PreviewNotice" IsOpen="False" IsClosable="True" Visibility="Collapsed" Closed="PreviewNotice_Closed" Severity="Informational" Title="Prototype only" Message="{Binding PrototypeMessage}" />
+  <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyControlSpacing}">
+   <Button x:Name="AdditionalSetup" Content="Set up backup" Click="Setup_Click" Style="{StaticResource MirrorlySecondaryButton}"/>
+   <Button Content="Refresh" Click="Refresh_Click" Style="{StaticResource MirrorlySecondaryButton}"/>
+  </StackPanel>
+  <TextBlock x:Name="ProblemText" Text="{Binding Problem}" Style="{StaticResource MirrorlyBody}" AutomationProperties.LiveSetting="Polite"/>
+  <Expander x:Name="TechnicalPanel" Header="View technical details" HorizontalAlignment="Stretch"><TextBlock Text="{Binding TechnicalDetails}" TextWrapping="Wrap" IsTextSelectionEnabled="True"/></Expander>
+  <InfoBar x:Name="PreviewNotice" IsOpen="False" IsClosable="True" Visibility="Collapsed" Closed="PreviewNotice_Closed" Severity="Informational" Title="Not available" Message="{Binding PrototypeMessage}" />
   <Border x:Name="EmptyCard" Style="{StaticResource MirrorlyCard}" Visibility="Collapsed">
    <StackPanel Spacing="{StaticResource MirrorlyCardSpacing}">
     <TextBlock Text="Set up your first backup" Style="{StaticResource MirrorlyStatusTitle}"/>
@@ -38,7 +44,7 @@
       <ProgressBar x:Name="Progress" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Preparing backup, sample progress"/>
      </StackPanel>
      <StackPanel x:Name="StatusActions" Grid.Column="1" VerticalAlignment="Center" Spacing="{StaticResource MirrorlyControlSpacing}">
-      <Button x:Name="PrimaryAction" Click="Primary_Click" Style="{StaticResource MirrorlyPrimaryButton}" HorizontalAlignment="Stretch">
+      <Button x:Name="PrimaryAction" ToolTipService.ToolTip="Backup execution is not available in this version." AutomationProperties.HelpText="Backup execution is not available in this version." Click="Primary_Click" Style="{StaticResource MirrorlyPrimaryButton}" HorizontalAlignment="Stretch">
        <TextBlock Text="{Binding Status.Action}" TextWrapping="Wrap"/>
       </Button>
       <Button x:Name="DetailsAction" Content="View details" Click="Details_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Stretch"/>
@@ -47,7 +53,7 @@
    </Border>
    <StackPanel Spacing="{StaticResource MirrorlyCardSpacing}">
     <TextBlock Text="{Binding BackupHeading}" Style="{StaticResource MirrorlySectionTitle}"/>
-    <TextBlock x:Name="ManyHint" Text="Needs attention first, followed by recently used backups." Style="{StaticResource MirrorlySecondary}" Visibility="Collapsed"/>
+    <TextBlock x:Name="ManyHint" Text="Showing a preview of your configured backups." Style="{StaticResource MirrorlySecondary}" Visibility="Collapsed"/>
     <StackPanel x:Name="Backups" Spacing="{StaticResource MirrorlyControlSpacing}"/>
     <HyperlinkButton x:Name="AllBackups" Content="View all backups →" Click="AllBackups_Click" Visibility="Collapsed"/>
    </StackPanel>
@@ -58,7 +64,7 @@
      <HyperlinkButton Grid.Column="1" Content="View all" Click="Activity_Click"/>
     </Grid>
     <Border x:Name="ActivityCard" Style="{StaticResource MirrorlyCard}">
-     <ItemsControl ItemsSource="{Binding Activity}">
+     <StackPanel><TextBlock Text="No activity history is available yet." Style="{StaticResource MirrorlySecondary}"/><ItemsControl ItemsSource="{Binding Activity}">
       <ItemsControl.ItemTemplate>
        <DataTemplate>
         <Grid Margin="0,8" ColumnSpacing="{StaticResource MirrorlyCardSpacing}">
@@ -72,7 +78,7 @@
         </Grid>
        </DataTemplate>
       </ItemsControl.ItemTemplate>
-     </ItemsControl>
+     </ItemsControl></StackPanel>
     </Border>
     <HyperlinkButton x:Name="CompactActivity" Content="View recent activity →" Click="Activity_Click" Visibility="Collapsed"/>
    </StackPanel>

@@ -10,11 +10,11 @@ from collections import OrderedDict
 
 from mirrorly.application import setup
 
-from . import creation, preflight, protocol
+from . import catalog, creation, preflight, protocol
 from .lifecycle import LifecycleGate
 from .transport import Outbound
 
-METHODS = ["ping", "status", "worker.shutdown", "setup.preflight", "setup.create"]
+METHODS = ["ping", "status", "worker.shutdown", "setup.preflight", "setup.create", "tasks.list"]
 CAPABILITIES = dict.fromkeys(
     [
         "resume_interaction",
@@ -207,6 +207,24 @@ class WorkerHost:
             }
         self.completion.put_nowait((rid, oid, payload, error))
 
+    def _execute_catalog(self, rid, oid, request):
+        try:
+            payload = {"outcome": "succeeded", "catalog": catalog.execute(request)}
+            error = None
+            protocol.encode(
+                self._message(
+                    "response", {"phase": "terminal", "result": payload, "error": None}, rid, oid
+                )
+            )
+        except Exception as exc:
+            payload = {"outcome": "failed", "catalog": None}
+            error = {
+                "kind": "application",
+                "code": "catalog_unavailable",
+                "technical": preflight.technical(exc),
+            }
+        self.completion.put_nowait((rid, oid, payload, error))
+
     def _finish_operation(self):
         try:
             rid, oid, result, error = self.completion.get_nowait()
@@ -277,13 +295,15 @@ class WorkerHost:
         if method not in METHODS:
             self._reject(rid, "unsupported_method")
             return False
-        if method in ("setup.preflight", "setup.create"):
-            if self.active and method == "setup.preflight":
+        if method in ("setup.preflight", "setup.create", "tasks.list"):
+            if self.active and method != "setup.create":
                 self._reject(rid, "busy")
                 return False
             try:
                 if method == "setup.create":
                     request, approved = creation.request(params)
+                elif method == "tasks.list":
+                    request = catalog.request(params)
                 else:
                     request = preflight.request(params)
             except ValueError:
@@ -305,11 +325,17 @@ class WorkerHost:
             oid = uuid.uuid4().hex
             self.active = {"request_id": rid, "operation_id": oid}
             self._response(rid, "accepted", operation=oid)
-            if self.lost.is_set() and method == "setup.preflight":
+            if self.lost.is_set() and method != "setup.create":
                 self.active = None
                 return False
             # Once create is admitted, failed accepted delivery cannot undo it.
-            execute = self._execute_create if method == "setup.create" else self._execute
+            execute = (
+                self._execute_create
+                if method == "setup.create"
+                else self._execute_catalog
+                if method == "tasks.list"
+                else self._execute
+            )
             args = (
                 (rid, oid, request, approved) if method == "setup.create" else (rid, oid, request)
             )

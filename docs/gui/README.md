@@ -3,24 +3,9 @@
 > Phase 0 历史快照：2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
 > 当时 GUI、worker、共享 application service 均尚未实现；下文保留该阶段的产品边界与契约提案。当前实施状态见下方更新。
 
-**当前实施状态（2026-09-24）**：[Phase 1C Backup Setup UX Prototype](PHASE1C.md)
-**PASS — product review approved**，含最终 responsive policy；真实只读文件夹浏览 + 两步确认，Create 仅显示原型提示，不连接 core。
-Python [Phase 2E：共享 list/verify/restore 编排](PHASE2.md) 已完成（2026-09-21）：五个 CLI 命令均调用共享 application 服务。后续 Phase 3B 只读生产 IPC 见下方；GUI Create Backup / Back up now 和 fake worker 仍是原型，没有 progress 或 cooperative cancellation，O-09 未决定。
-[Phase 1B Visual Shell & Home Prototype](PHASE1B.md) 已冻结为
-**PASS — visual review approved**（`00d07da0bd8fe2e3350523c57eb6c2d2089e8683`）；v1 与当前 SVG 已获批准。Home 继续使用 presentation fixtures。
-[Phase 1A Technical Vertical Slice](PHASE1A.md) 已冻结为
-**PASS — Technical Vertical Slice validated**（`de1ed8626e0da563f212530327c762a87009b4c7`）。
-下文保留 Phase 0 设计与待决项；这些阶段不代表生产 worker、真实 backup 功能或最终分发已完成。
-当前 [Phase 3B–3D production contract](PRODUCTION_WORKER.md) 实现独立 worker/client、
-版本握手、单 operation slot、只读 setup.preflight，以及首个且唯一的 mutation：
-setup.create。真实 GUI 仍未绑定；没有 Backup/verify/restore execution、Resume 或
-progress/cancel。Phase 0 IPC 草案保留为历史设计。
-Phase 3C 改为 high-water 去重（无 4,096 请求寿命上限），实现 Windows user/logon
-范围的 worker lifecycle gate，并通过 [CONFIGURATION](CONFIGURATION.md) 冻结 O-07。
-GUI 配置根由单一 C# provider 选择，仍不创建 TOML，也不自动导入 CLI tasks。
-Phase 3D 由 Python application 创建 TOML/repository，使用真实临时目录验证 IPC；
-生命周期 gate 在 admission 时获取并保留至执行与收尾结束。失联不取消、不自动重放。
-O-09 继续 OPEN，后续阶段须另行批准。
+**当前实施状态（2026-09-24）**：[Phase 3E real Setup closed loop](PHASE3E.md) connects WinUI Setup to production preflight/create and a durable Python-owned GUI task catalog. Home uses real configurations; setup creates no snapshot. Back up now remains unavailable. No progress/cancel/Resume, Activity persistence or Backup queue; O-09 remains open.
+
+Phase 1A–1C documents preserve their reviewed historical prototype results. [Phase 2](PHASE2.md) completed shared application extraction; the current [production contract](PRODUCTION_WORKER.md) records Phase 3B–3E. Fake worker and fixtures remain test/design infrastructure, not normal runtime data.
 
 ## 阅读顺序与状态标记
 
@@ -62,7 +47,7 @@ O-09 继续 OPEN，后续阶段须另行批准。
 
 | ID | OPEN DECISION | 何时必须解决 |
 | --- | --- | --- |
-| O-01 | APPROVED policy：确认 Exit 后清空等待队列，监督当前 operation 完成再退出；v1 不支持撤回已确认 Exit | 尚未实现；见 [production contract](PRODUCTION_WORKER.md) |
+| O-01 | APPROVED policy：确认 Exit 后清空等待队列，监督当前 operation 完成再退出；v1 不支持撤回已确认 Exit | Phase 3E 已实现当前 Setup/catalog 的监督退出；尚无 Backup FIFO，见 [production contract](PRODUCTION_WORKER.md) |
 | O-02 | 取消 checkpoint、publication 不可取消区、finalizing 策略、restore 部分写入提示的详细提案 | 单独的安全关键 cancellation 任务前 |
 | O-03 | APPROVED：stdio v1、无 reattach；idle 失联退出，active 非交互收尾；必需交互不可用则在该边界结束 | Phase 3D setup.create 已接入 ownership guard，并验证失联时持有至执行/收尾结束；交互尚未实现 |
 | O-04 | APPROVED：全部 application operation 共用 worker execution slot | Phase 3B 已实现 slot；不替代 GUI FIFO，不解决外部 CLI 竞争 |

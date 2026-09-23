@@ -49,7 +49,7 @@
    <Grid ColumnSpacing="{StaticResource MirrorlyControlSpacing}">
     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
     <TextBlock Style="{StaticResource MirrorlyCaption}" VerticalAlignment="Center"><Run Text="Last backup: "/><Run Text="{Binding LastBackup}"/></TextBlock>
-    <HyperlinkButton Grid.Column="1" Content="View backup" Click="View_Click"/>
+    <HyperlinkButton x:Name="CompactView" Grid.Column="1" Content="View backup" Click="View_Click"/>
    </Grid>
   </StackPanel>
   </Grid>

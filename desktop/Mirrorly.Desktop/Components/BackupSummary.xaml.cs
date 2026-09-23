@@ -5,10 +5,13 @@ namespace Mirrorly.Desktop.Components;
 public sealed partial class BackupSummary : UserControl
 {
     public event Action<string>? PreviewAction;
-    public BackupSummary(BackupPresentation model, bool compact)
+    public BackupSummary(BackupPresentation model, bool compact, bool designPreview = false)
     {
         InitializeComponent();
         DataContext = model;
+        foreach (var button in Actions.Children.OfType<Button>()) button.IsEnabled = designPreview;
+        CompactView.IsEnabled = designPreview;
+        ToolTipService.SetToolTip(Actions, "Browsing backup versions is not available yet.");
         Status.Style = (Style)Application.Current.Resources[$"Mirrorly{model.Tone}Text"];
         CompactStatus.Style = Status.Style;
         DetailedLayout.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;

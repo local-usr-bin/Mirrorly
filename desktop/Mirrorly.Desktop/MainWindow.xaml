@@ -1,6 +1,6 @@
 <Window x:Class="Mirrorly.Desktop.MainWindow"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- xmlns:components="using:Mirrorly.Desktop.Components" Title="Mirrorly · Design preview">
+ xmlns:components="using:Mirrorly.Desktop.Components" Title="Mirrorly">
  <NavigationView x:Name="Navigation" IsBackButtonVisible="Collapsed" IsSettingsVisible="True"
   PaneDisplayMode="Auto" PaneTitle="Mirrorly" OpenPaneLength="{StaticResource MirrorlyNavigationWidth}"
   Background="{ThemeResource MirrorlyNavigationSurfaceBrush}" SelectionChanged="Navigation_SelectionChanged"
