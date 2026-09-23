@@ -3,6 +3,12 @@
 > 2026-09-19 · 技术路线及产品边界 APPROVED；生命周期细节和目录为 PROPOSED DESIGN。
 > 状态与待决事项以 [入口](README.md) 为准。
 
+> **后续实施更新（2026-09-24）**：下文保留 Phase 0 ADR 的历史事实与提案。
+> 当前共享 application 服务已由 Phase 2 完成；Phase 3B/3C 只读 worker、生命周期
+> gate 与去重契约见 [PRODUCTION_WORKER](PRODUCTION_WORKER.md)。O-07 的 GUI 配置根
+> 与 Python/C# 归属已冻结，见 [CONFIGURATION](CONFIGURATION.md)；历史 registry/identity
+> 提案不构成新增 task UUID 的授权。目前仍无 production mutation 或 GUI 业务绑定。
+
 ## 背景与决定
 
 **CURRENT FACT**：Mirrorly `0.1.0` 是 Python CLI；配置、repo identity、snapshot/manifest、retention、verify、restore 已存在。主要安全编排仍在 [cli.py](../../src/mirrorly/cli.py)，没有 GUI application API、worker 协议、运行进度 observer 或 cooperative cancel token。

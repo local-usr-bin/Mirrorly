@@ -11,6 +11,7 @@ from collections import OrderedDict
 from mirrorly.application import setup
 
 from . import preflight, protocol
+from .lifecycle import LifecycleGate
 from .transport import Outbound
 
 METHODS = ["ping", "status", "worker.shutdown", "setup.preflight"]
@@ -32,7 +33,6 @@ LIMITS = {
     "max_collection": protocol.MAX_COLLECTION,
     "max_nodes": protocol.MAX_NODES,
     "max_string": protocol.MAX_STRING,
-    "max_requests": protocol.MAX_REQUESTS,
     "terminal_cache": 32,
 }
 
@@ -50,12 +50,12 @@ class WorkerHost:
         self.completion = queue.Queue(1)
         self.out = Outbound(write, self.lost)
         self.high_water = 0
-        self.ledger = {}  # Bounded by MAX_REQUESTS; never evict admission knowledge.
         self.terminals = OrderedDict()
         self.active = None
         self.executor = None
         self.terminal_delivery = None
         self.protocol_failed = False
+        self.lifecycle_gate = None
 
     def _message(self, kind, payload, request=None, operation=None, *, version=protocol.VERSION):
         return protocol.message(kind, self.session, payload, request, operation, version=version)
@@ -74,8 +74,6 @@ class WorkerHost:
         return self.out.send(value, terminal=terminal)
 
     def _reject(self, rid, code):
-        if rid in self.ledger and code != "stale_request_id":
-            self.ledger[rid]["state"] = "rejected"
         self._response(
             rid,
             "rejected",
@@ -117,16 +115,25 @@ class WorkerHost:
             self.inbox.put(("fault", str(exc)))
 
     def _lookup(self, rid):
-        record = self.ledger.get(rid)
-        if record is None:
+        number = protocol.request_number(rid)
+        if self.active and self.active["request_id"] == rid:
+            return {"state": "accepted", "application_invoked": True, **self.active}
+        if rid in self.terminals:
             return {
-                "state": "never_seen",
-                "reusable": protocol.request_number(rid) > self.high_water,
+                "state": "terminal",
+                "application_invoked": True,
+                "operation_id": self.terminals[rid]["operation_id"],
+                "terminal_available": True,
+                "terminal": self.terminals[rid],
             }
+        # IDs skipped by an increasing client are also permanently inadmissible.
+        # Without cached detail, do not claim whether an old ID actually executed.
         return {
-            **record,
-            "terminal_available": rid in self.terminals,
-            "terminal": self.terminals.get(rid),
+            "state": "never_seen" if number > self.high_water else "stale_result_not_cached",
+            "reusable": number > self.high_water,
+            "application_invoked": False if number > self.high_water else None,
+            "terminal_available": False,
+            "terminal": None,
         }
 
     def _execute(self, rid, oid, request):
@@ -175,7 +182,6 @@ class WorkerHost:
         self.terminals[rid] = terminal
         if len(self.terminals) > LIMITS["terminal_cache"]:
             self.terminals.popitem(last=False)
-        self.ledger[rid]["state"] = "terminal"
         self.terminal_delivery = self._response(
             rid,
             "terminal",
@@ -198,10 +204,7 @@ class WorkerHost:
         if number <= self.high_water:
             self._reject(rid, "stale_request_id")
             return False
-        if len(self.ledger) >= protocol.MAX_REQUESTS:
-            raise protocol.ProtocolFault("Session request limit reached; no further admission")
         self.high_water = number
-        self.ledger[rid] = {"state": "received", "application_invoked": False, "operation_id": None}
         if message["protocol_version"] != protocol.VERSION:
             self._reject(rid, "unsupported_version")
             return False
@@ -213,7 +216,6 @@ class WorkerHost:
                 self._reject(rid, "unsupported_capability_or_initialize")
             else:
                 self.initialized = True
-                self.ledger[rid]["state"] = "control"
                 self._response(
                     rid,
                     "terminal",
@@ -252,14 +254,8 @@ class WorkerHost:
                 return False
             oid = uuid.uuid4().hex
             self.active = {"request_id": rid, "operation_id": oid}
-            self.ledger[rid] = {
-                "state": "accepted",
-                "application_invoked": True,
-                "operation_id": oid,
-            }
             self._response(rid, "accepted", operation=oid)
             if self.lost.is_set():
-                self.ledger[rid]["application_invoked"] = False
                 self.active = None
                 return False
             self.executor = threading.Thread(
@@ -270,7 +266,6 @@ class WorkerHost:
         if params and not (method == "status" and set(params) == {"request_id"}):
             self._reject(rid, "invalid_parameters")
             return False
-        self.ledger[rid]["state"] = "control"
         if method == "ping":
             self._response(rid, "terminal", result={"reply": "pong"})
         elif method == "status":
@@ -291,6 +286,8 @@ class WorkerHost:
                     if self.terminal_delivery
                     else "idle",
                     "active": self.active,
+                    "highest_seen_request_id": str(self.high_water),
+                    "lifecycle_gate": self.lifecycle_gate.observe(),
                     "request": lookup,
                 },
             )
@@ -298,13 +295,21 @@ class WorkerHost:
             self._reject(rid, "busy")
         else:
             self.terminals.clear()
-            self.ledger.clear()
             delivered = self._response(rid, "terminal", result={"shutdown": "idle"})
             delivered.wait(self.shutdown_seconds)
             return True
         return False
 
     def run(self):
+        # This thread retains ownership while joining any surviving executor on EOF.
+        self.lifecycle_gate = LifecycleGate()
+        self.lifecycle_gate.try_acquire()
+        try:
+            return self._run_session()
+        finally:
+            self.lifecycle_gate.close()
+
+    def _run_session(self):
         self.out.send(
             self._message(
                 "hello",

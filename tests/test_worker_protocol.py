@@ -66,10 +66,17 @@ def test_collection_depth_string_and_node_limits():
             p.parse(json.dumps(envelope(payload=payload)).encode())
 
 
-@pytest.mark.parametrize("value", [None, True, "0", "01", "-1", "1.0", str(2**64)])
+@pytest.mark.parametrize(
+    "value", [None, True, 1, "0", "01", "-1", "+1", "1.0", "1e2", "１", " 1", "1\n", str(2**64)]
+)
 def test_request_id(value):
     with pytest.raises(p.ProtocolFault):
         p.request_number(value)
+
+
+def test_request_id_valid_boundaries():
+    for value in (1, 2**63, 2**64 - 1):
+        assert p.request_number(str(value)) == value
 
 
 def test_empty_and_truncated_frames():

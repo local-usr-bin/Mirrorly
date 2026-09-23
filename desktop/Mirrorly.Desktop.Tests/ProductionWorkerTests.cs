@@ -13,6 +13,74 @@ static class ProductionWorkerTests
         var launch = new WorkerDevelopmentLaunch(interpreter, root);
         ProductionMessage Message(object payload) => new(ProductionProtocol.Identity, ProductionProtocol.Version, "request", "session", "1", null, null, JsonSerializer.SerializeToElement(payload));
 
+        await test("GUI config-root ownership is local, absolute, cwd-independent and non-persistent", () =>
+        {
+            var original = Environment.CurrentDirectory;
+            var directory = MakeWorkspace();
+            try
+            {
+                var paths = GuiDataPaths.ForCurrentUser();
+                var expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mirrorly", "Gui", "Tasks");
+                check(paths.TaskConfigRoot == expected && Path.IsPathFullyQualified(paths.TaskConfigRoot));
+                var isolated = new GuiDataPaths(directory);
+                check(!Directory.Exists(isolated.DataRoot));
+                Environment.CurrentDirectory = directory;
+                check(GuiDataPaths.ForCurrentUser().TaskConfigRoot == paths.TaskConfigRoot);
+                check(new GuiDataPaths(directory).TaskConfigRoot == isolated.TaskConfigRoot);
+                check(!Directory.Exists(isolated.DataRoot) && !Directory.Exists(Path.Combine(directory, ".mirrorly")));
+                try { _ = new GuiDataPaths("relative"); throw new Exception("Accepted cwd-dependent config root."); }
+                catch (ArgumentException) { }
+            }
+            finally { Environment.CurrentDirectory = original; Directory.Delete(directory, true); }
+            return Task.CompletedTask;
+        });
+
+        await test("GUI-owned preflight passes provider root explicitly without persistence or CLI import", async () =>
+        {
+            var directory = MakeWorkspace();
+            try
+            {
+                var paths = new GuiDataPaths(directory);
+                await using var client = new ProductionWorkerClient();
+                await client.StartAsync(launch);
+                var request = await client.PreflightAsync(paths, new SetupPreflightIntent("documents", Path.Combine(directory, "source"), Path.Combine(directory, "target")));
+                var facts = (await request.WaitAsync(TimeSpan.FromSeconds(10))).Payload.GetProperty("result").GetProperty("preflight");
+                check(facts.GetProperty("problem").ValueKind == JsonValueKind.Null);
+                check(facts.GetProperty("config_path").GetString() == Path.Combine(paths.TaskConfigRoot, "config.d", "documents.toml"));
+                check(!Directory.Exists(paths.DataRoot) && !Directory.Exists(Path.Combine(directory, "target", "MirrorlyRepo")));
+                var status = (await (await client.RequestAsync("status")).Terminal).Payload.GetProperty("result");
+                var gate = status.GetProperty("lifecycle_gate");
+                check(gate.GetProperty("state").GetString() == "held" && gate.GetProperty("owned").GetBoolean());
+                await client.ShutdownIdleAsync();
+                await client.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally { Directory.Delete(directory, true); }
+        });
+
+        await test("Production client survives 4096 controls and never wraps uint64 IDs", async () =>
+        {
+            ulong highest = ulong.MaxValue - 1;
+            check(ProductionWorkerClient.AllocateRequestId(ref highest) == "18446744073709551615");
+            try { ProductionWorkerClient.AllocateRequestId(ref highest); throw new Exception("Wrapped request ID."); }
+            catch (InvalidOperationException) { }
+            check(highest == ulong.MaxValue);
+            await using var client = new ProductionWorkerClient();
+            await client.StartAsync(launch);
+            string? session = null;
+            for (var index = 0; index < 4100; index++)
+            {
+                var request = await client.RequestAsync("ping");
+                var response = await request.WaitAsync(TimeSpan.FromSeconds(5));
+                session ??= response.SessionId;
+                check(response.SessionId == session && response.RequestId == request.RequestId);
+                check(response.Payload.GetProperty("result").GetProperty("reply").GetString() == "pong");
+            }
+            var status = await client.RequestAsync("status");
+            check((await status.Terminal).Payload.GetProperty("result").GetProperty("highest_seen_request_id").GetString() == status.RequestId);
+            await client.ShutdownIdleAsync();
+            await client.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        });
+
         await test("Production parser separates fake identity and rejects duplicate/depth/collection/type faults", () =>
         {
             var valid = Encoding.UTF8.GetString(ProductionProtocol.Encode(Message(new { text = "中文🌸" }))).TrimEnd();

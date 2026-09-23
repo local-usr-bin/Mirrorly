@@ -1,10 +1,13 @@
-# Production Worker Contract v1 — Phase 3B
+# Production Worker Contract v1 — Phase 3C
 
-Current implementation / frozen contract, 2026-09-21. This is the current production
+Current implementation / frozen contract, 2026-09-24. This is the current production
 IPC source of truth. [Phase 0 IPC_CONTRACT](IPC_CONTRACT.md) remains a historical
 proposal, not an implemented API. [Phase 2](PHASE2.md) completed shared application
 orchestration; this slice exposes **only read-only setup preflight**. The real GUI
 Home/Setup buttons remain prototypes. This is not production distribution readiness.
+Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
+adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
+It does **not** enable any mutation method, including setup.create.
 
 ## Implemented scope and ownership
 
@@ -17,6 +20,8 @@ Home/Setup buttons remain prototypes. This is not production distribution readin
   and explicit projection of existing application facts; no setup policy copy.
 - [worker/transport.py](../../src/mirrorly/worker/transport.py): bounded output
   boundaries; only pumps perform protocol/diagnostic writes.
+- [worker/lifecycle.py](../../src/mirrorly/worker/lifecycle.py): Windows user/logon
+  session mutex, retained by the host thread through executor completion.
 - [ProductionWorkerClient.cs](../../desktop/Mirrorly.Desktop/Services/ProductionWorkerClient.cs)
   and [ProductionProtocol.cs](../../desktop/Mirrorly.Desktop/Services/ProductionProtocol.cs):
   separate C# client, not bound to any View/ViewModel.
@@ -81,7 +86,7 @@ UTF-8, no BOM, one JSON object followed by LF. Limits include the LF:
 | Total JSON nodes, including property names | 16,384 |
 | String length, Unicode scalar values | 32,768 |
 | IDs | 1–128 characters, or null where permitted |
-| Session request ledger | 4,096 distinct increasing request IDs |
+| Request replay memory | One uint64 high-water mark + active operation |
 | Terminal result cache | Last 32 application results |
 | Protocol input queue | 32 frames |
 | Protocol output queue | 32 normal positions + 1 reserved terminal position |
@@ -89,12 +94,11 @@ UTF-8, no BOM, one JSON object followed by LF. Limits include the LF:
 | Diagnostics queue | 32 chunks, each at most 2,048 characters |
 | C# pending requests | 64 |
 
-Limits are centralized constants. The session ledger bound is an implementation
-detail added to make admission memory strictly bounded, not a disk journal. At
-exhaustion the session faults, admits no more work, lets an active call finish and
-exits. A new session never replays requests. Before enabling long-running mutation,
-account for this advertised budget in client control polling/session renewal;
-renew only while idle with known outcomes, never by retrying an uncertain operation.
+Limits are centralized constants. There is no 4,096-request lifetime budget or
+max_requests advertisement, and no automatic session renewal. Request IDs span
+1 through 18446744073709551615. C# fails before incrementing uint64.MaxValue;
+Python rejects values outside this canonical range without wrapping. Outcomes
+and deduplication are session-local, not a disk journal or restart replay service.
 
 Split/coalesced frames and multibyte boundaries are supported. Empty, truncated,
 oversized, invalid UTF-8/JSON, duplicate-key, non-finite-number, excessive-depth or
@@ -148,8 +152,11 @@ not an executor job queue. A second application call while that slot is occupied
 gets busy. Control input continues. The slot becomes available after the application
 returns and its terminal is retained/queued; it is not a filesystem mutation lock.
 
-The ledger records whether each seen request invoked application, its operation ID
-and lifecycle. Old/stale IDs never execute, even after terminal detail is evicted.
+The high-water mark advances on each new request ID before admission checks,
+including controls and rejected requests. IDs at/below it never execute, even after
+terminal detail is evicted. Active request facts and the last 32 application terminal
+results are retained; control requests do not evict application results. There is
+no per-request history growing with session lifetime.
 The `application_invoked:false` in a duplicate rejection describes that duplicate
 attempt, not an assertion that its original request never ran.
 
@@ -162,11 +169,68 @@ encoding rejection before any write is a local validation exception instead.
 
 `status` takes `{}` or `{"request_id":"earlier-id"}`. It returns initialized,
 channel_healthy, state (idle/busy/terminal_pending), active request/operation, and
-optional request lookup. Lookup distinguishes never_seen, rejected/control,
-accepted, terminal, and terminal with detail evicted (`terminal_available:false`).
+optional request lookup. **Phase 3C lookup:** an active request is accepted; a cached application result is
+terminal; an ID above highest_seen_request_id is never_seen/reusable. Any remaining
+ID at/below that mark is stale_result_not_cached, reusable=false,
+application_invoked=null, terminal_available=false. This may be an evicted result,
+an old control/rejection or an unused gap; do not invent past execution facts.
+The former unbounded rejected/control/evicted-terminal history is no longer available.
 Cached results do not survive process exit. A high-water mark is not exactly-once
 across sessions. No status claims scanning/publishing, file or byte progress.
 Host responsive does not mean filesystem IO is advancing.
+
+## Worker lifecycle admission (Phase 3C, CURRENT FACT)
+
+The standalone worker host attempts a nonblocking acquisition at startup. Its
+control thread owns a Windows named mutex via CreateMutexExW (no initial owner,
+SYNCHRONIZE | MUTEX_MODIFY_STATE), WaitForSingleObject(handle, 0), ReleaseMutex and
+CloseHandle. Only the Python worker owns this handle; it is not inheritable by a
+GUI process or tied to a pipe/request/operation ID.
+
+Stable name:
+
+```text
+Local\Mirrorly.ProductionWorker.v1.<TokenUser SID>.<AuthenticationId as 16 hex digits>
+```
+
+Local is the Windows session namespace. TokenStatistics.AuthenticationId identifies
+the current logon session; TokenUser SID identifies the Windows user. Different
+random GUI/stdio sessions in this scope share the gate. There is no PID in the name,
+no guessed stale file deletion, and no third-party dependency. Default token DACL
+applies; identity/open/wait errors fail closed for future mutation. This is lifecycle
+coordination, not a security boundary against hostile processes in the same account.
+
+Status includes lifecycle_gate: state (held/available/unavailable/error), identity,
+scope=windows_user_logon_session, owned, abandoned_observed and error. A contender
+stays readonly and does not kill or reattach to the owner. Its status probes an
+available mutex with acquire/release; that observation is immediately stale-able
+and is **not** admission. It does not silently acquire retained ownership on status.
+
+Future mutation admission **must call require_ownership() on the host/control
+thread before invoking the service**. Failed acquisition must reject with no
+application invocation. Repeated checks by an owner do not recursively acquire.
+There is no mutation dispatcher to connect this guard to yet.
+
+The owning host thread remains alive and retains ownership through channel loss,
+executor join, final result bookkeeping and transport cleanup. Only after no
+application call can continue does it release/close. Normal idle shutdown releases;
+process termination releases through Windows abandonment. WAIT_ABANDONED grants
+ownership and is recorded, but proves nothing about a previous operation's side
+effects or success. No rollback/replay follows abandonment.
+
+Unexpected GUI/client process loss does not release a surviving worker's ownership.
+Real tests terminate a disposable parent with a child blocked inside a test-only
+service, observe contention from a second production host, and release the service
+barrier before observing worker exit and availability.
+
+This gate is independent from the worker operation slot and existing task/repository
+locks. It neither excludes external CLI execution nor coordinates other user/logon
+scopes. All four production methods remain readonly; a gate owner gains no extra
+method or advertised progress/cancellation capability.
+
+Windows semantics: [CreateMutexExW](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createmutexexw),
+[TOKEN_STATISTICS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_statistics),
+[ReleaseMutex](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-releasemutex).
 
 ## setup.preflight mapping
 
@@ -239,10 +303,11 @@ the service is still finishing, existing drain tasks continue. No supervisor res
   The decision stays inside existing locks, after migration and before scanning.
 - O-04: all application operations share one execution slot. This is separate
   from the future GUI FIFO and does not solve external CLI concurrency.
-- **Before any mutating method:** implement a worker lifecycle admission gate
-  whose identity is stable for the relevant Mirrorly user/session scope, including
-  orphan lifetime. A random per-GUI-process key is insufficient. No gate exists yet.
-- O-07 config ownership blocks setup.create. C# must not parse/write task TOML.
+- **Before any mutating method:** wire the Phase 3C lifecycle guard into mutation
+  admission before service invocation; retain ownership through all execution.
+- O-07 ownership is APPROVED and centralized in Phase 3C; see
+  [CONFIGURATION](CONFIGURATION.md). C# still must not parse/write task TOML.
+  Setup.create itself remains unimplemented and requires a separate approved slice.
 - O-02 cancellation and O-09 worker packaging remain open; no Job Object
   kill-on-close, mutation retry, GUI binding or production notification is added.
 
@@ -274,3 +339,18 @@ Tests cover real preflight/qualification/no CLI import, parser limits, duplicate
 execution prevention, cache eviction, busy/no hidden queue, late response, large
 stderr, stdout loss/backpressure, EOF finishing and bounded shutdown. No passing
 test here demonstrates mutation, Resume, active Exit UX or final packaging.
+
+Phase 3C validation: 55 focused Python worker/protocol/lifecycle tests, 745 full
+Python regression (no skips), 36 C# harness tests, 13 Windows E2E, 11 unchanged
+fake-worker tests and WinUI Debug x64 build pass. Ruff/check/format, pip check,
+diff check and updated-document link checks pass. Python and C# real sessions
+survive respectively 4,200 mixed control requests and 4,100 pings without restart;
+cache eviction, stale gaps and uint64 boundaries remain protected.
+
+[test_worker_lifecycle](../../tests/test_worker_lifecycle.py) covers normal exit,
+forced termination, surviving child after actual client process termination,
+thread affinity/nonrecursive checks and OS-error fail-closed behavior.
+[worker_parent_fixture](../../tests/worker_parent_fixture.py) is a disposable
+test-only parent; it does not add any production protocol method. Cross-process
+gate tests use the real stable identity, so do not run competing worker-owning
+test suites concurrently in the same Windows user/logon scope.

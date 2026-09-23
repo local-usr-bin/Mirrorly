@@ -14,7 +14,6 @@ MAX_DEPTH = 32
 MAX_COLLECTION = 4096
 MAX_NODES = 16384
 MAX_STRING = 32768
-MAX_REQUESTS = 4096
 KINDS = {"hello", "initialize", "request", "response", "event", "protocol_error"}
 FIELDS = {
     "protocol",

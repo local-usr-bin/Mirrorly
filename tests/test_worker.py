@@ -360,11 +360,13 @@ def test_evicted_terminal_still_remembers_execution(intent):
             assert peer.receive()["payload"]["phase"] == "terminal"
         peer.send("status", {"request_id": first})
         record = peer.receive()["payload"]["result"]["request"]
-        assert record["state"] == "terminal" and record["application_invoked"]
+        assert record["state"] == "stale_result_not_cached"
+        assert record["application_invoked"] is None and record["reusable"] is False
         assert not record["terminal_available"] and record["terminal"] is None
         peer.send("setup.preflight", intent, rid=first)
         assert peer.receive()["payload"]["error"]["code"] == "stale_request_id"
         assert len(calls) == 33
+        assert len(peer.host.terminals) == 32
     finally:
         peer.close()
 
@@ -446,8 +448,34 @@ def test_normal_frame_limit_after_handshake(peer):
     assert peer.process.returncode == 2
 
 
-def test_session_ledger_limit_is_bounded_and_never_reexecutes(intent, monkeypatch):
-    monkeypatch.setattr(p, "MAX_REQUESTS", 3)
+def test_more_than_4096_requests_one_real_session(peer, intent):
+    peer.initialize()
+    session = peer.session
+    first = peer.send("setup.preflight", intent)
+    peer.receive()
+    peer.receive()
+    assert "max_requests" not in peer.hello["payload"]["limits"]
+    for index in range(4200):
+        rid = peer.send("status" if index % 2 else "ping")
+        reply = peer.receive()
+        assert reply["session_id"] == session and reply["request_id"] == rid
+        assert reply["payload"]["phase"] == "terminal"
+        if index % 2:
+            assert reply["payload"]["result"]["highest_seen_request_id"] == rid
+    peer.send("status", {"request_id": first})
+    assert peer.receive()["payload"]["result"]["request"]["terminal_available"]
+    peer.send("setup.preflight", intent, rid=first)
+    assert peer.receive()["payload"]["error"] == {
+        "kind": "admission",
+        "code": "stale_request_id",
+        "application_invoked": False,
+    }
+    peer.send("setup.preflight", intent)
+    assert peer.receive()["payload"]["phase"] == "accepted"
+    assert peer.receive()["payload"]["phase"] == "terminal"
+
+
+def test_high_water_gaps_uint64_and_no_replay(intent):
     calls = []
 
     def service(request):
@@ -457,13 +485,24 @@ def test_session_ledger_limit_is_bounded_and_never_reexecutes(intent, monkeypatc
     peer = Peer(service=service)
     try:
         peer.initialize()
-        peer.send("setup.preflight", intent)
+        peer.send("ping", rid="100")
         peer.receive()
-        peer.receive()
-        peer.send("ping")
-        peer.receive()
-        peer.send("setup.preflight", intent)
+        peer.send("setup.preflight", intent, rid="50")  # Never used, but now stale.
+        assert peer.receive()["payload"]["error"]["code"] == "stale_request_id"
+        peer.send("status", {"request_id": "50"}, rid="101")
+        record = peer.receive()["payload"]["result"]["request"]
+        assert (
+            record["state"] == "stale_result_not_cached" and record["application_invoked"] is None
+        )
+        maximum = str(2**64 - 1)
+        peer.send("ping", rid=maximum)
+        assert peer.receive()["payload"]["result"]["reply"] == "pong"
+        for rid in ("100", maximum, "1"):
+            peer.send("setup.preflight", intent, rid=rid)
+            assert peer.receive()["payload"]["error"]["application_invoked"] is False
+        assert peer.host.high_water == 2**64 - 1 and not calls
+        peer.send("ping", rid=str(2**64))
         assert peer.receive()["message_type"] == "protocol_error"
-        assert len(calls) == 1 and len(peer.host.ledger) == 3
+        assert peer.host.high_water == 2**64 - 1
     finally:
         peer.close()

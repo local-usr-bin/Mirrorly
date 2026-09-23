@@ -13,6 +13,7 @@ public sealed record WorkerDevelopmentLaunch(string Interpreter, string Checkout
     public string HostPath => TestHostPath ?? Path.Combine(Checkout, "src", "mirrorly", "worker", "launch.py");
 }
 public sealed record SetupPreflightInput(string task_name, string source, string target, string config_root, string filesystem_policy = "strict");
+public sealed record SetupPreflightIntent(string task_name, string source, string target, string filesystem_policy = "strict");
 public sealed record ProductionWorkerObservation(bool ProcessExists, bool TransportHealthy, bool Initialized, string? ActiveOperationId, string Detail);
 public sealed class WorkerTransportUncertainException(string message) : IOException(message);
 
@@ -111,6 +112,14 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     }
 
     public Task<WorkerRequest> PreflightAsync(SetupPreflightInput request) => RequestAsync("setup.preflight", request);
+    public Task<WorkerRequest> PreflightAsync(GuiDataPaths paths, SetupPreflightIntent intent) => PreflightAsync(
+        new SetupPreflightInput(intent.task_name, intent.source, intent.target, paths.TaskConfigRoot, intent.filesystem_policy));
+
+    internal static string AllocateRequestId(ref ulong highest)
+    {
+        if (highest == ulong.MaxValue) throw new InvalidOperationException("Session request ID space exhausted; no wrapping or automatic restart.");
+        return (++highest).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
@@ -125,7 +134,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
             if (process is null || process.HasExited || disconnected || session is null)
                 throw new WorkerTransportUncertainException("Worker channel is unavailable.");
             if (pending.Count >= 64) throw new InvalidOperationException("Client pending-request limit reached.");
-            var id = (++nextId).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var id = AllocateRequestId(ref nextId);
             var frame = new ProductionMessage(ProductionProtocol.Identity, ProductionProtocol.Version, kind, session, id, null, null, JsonSerializer.SerializeToElement(payload));
             // A local encoding rejection happens before any bytes/pending application request.
             var bytes = ProductionProtocol.Encode(frame, initialized ? ProductionProtocol.FrameBytes : ProductionProtocol.HandshakeBytes);
