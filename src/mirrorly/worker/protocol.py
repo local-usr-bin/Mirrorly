@@ -14,7 +14,16 @@ MAX_DEPTH = 32
 MAX_COLLECTION = 4096
 MAX_NODES = 16384
 MAX_STRING = 32768
-KINDS = {"hello", "initialize", "request", "response", "event", "protocol_error"}
+KINDS = {
+    "hello",
+    "initialize",
+    "request",
+    "response",
+    "event",
+    "protocol_error",
+    "interaction_request",
+    "interaction_response",
+}
 FIELDS = {
     "protocol",
     "protocol_version",
@@ -103,7 +112,9 @@ def request_number(value):
     return number
 
 
-def message(kind, session, payload, request=None, operation=None, *, version=VERSION):
+def message(
+    kind, session, payload, request=None, operation=None, *, interaction=None, version=VERSION
+):
     return {
         "protocol": IDENTITY,
         "protocol_version": version,
@@ -111,7 +122,7 @@ def message(kind, session, payload, request=None, operation=None, *, version=VER
         "session_id": session,
         "request_id": request,
         "operation_id": operation,
-        "interaction_id": None,
+        "interaction_id": interaction,
         "payload": payload,
     }
 

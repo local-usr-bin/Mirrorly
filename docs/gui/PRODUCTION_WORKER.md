@@ -1,13 +1,16 @@
-# Production Worker Contract v1 — Phase 3E
+# Production Worker Contract v1 — Phase 4A
 
 Current implementation / frozen contract, 2026-09-24. This is the current production
 IPC source of truth. [Phase 0 IPC_CONTRACT](IPC_CONTRACT.md) remains a historical
 proposal, not an implemented API. [Phase 2](PHASE2.md) completed shared application
-orchestration; the worker now exposes setup preflight and **setup.create, its first
-and only production mutation**. Phase 3E connects real GUI Setup and a readonly durable task catalog; Back up now remains unavailable. This is not production distribution readiness.
+orchestration. Phase 3E connected real GUI Setup and a readonly durable task catalog.
+Phase 4A adds production `backup.run` and the required Resume interaction at the
+worker/client boundary. The Home `Back up now` button remains disabled; no GUI Backup
+execution exists yet. This is not production distribution readiness.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
 Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
+Phase 4A reuses the unchanged shared Backup transaction and the same mutation gate.
 
 ## Implemented scope and ownership
 
@@ -20,6 +23,8 @@ Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds 
   and explicit projection of existing application facts; no setup policy copy.
 - [worker/creation.py](../../src/mirrorly/worker/creation.py): explicit setup-create
   intent/approval and application success/decision/failure wire mapping.
+- [worker/backup.py](../../src/mirrorly/worker/backup.py): strict Backup intent and
+  projection of the shared application transaction's known facts.
 - [worker/transport.py](../../src/mirrorly/worker/transport.py): bounded output
   boundaries; only pumps perform protocol/diagnostic writes.
 - [worker/lifecycle.py](../../src/mirrorly/worker/lifecycle.py): Windows user/logon
@@ -29,8 +34,8 @@ Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds 
   separate C# client behind DesktopSession; ViewModels do not own processes.
 
 The Phase 1A worker, FakeWorkerClient and PrototypeConfiguration remain unchanged test infrastructure. Normal GUI runtime no longer starts them. The old fake interpreter still intentionally does not import core.
-There is no Backup/verify/restore execution, Resume interaction, progress, cancellation, queue,
-Activity, notification UX or stdio reattach. No application/core/CLI algorithm,
+There is no GUI Backup binding, verify/restore execution, progress, cancellation,
+queue, Activity, notification UX or stdio reattach. No application/core/CLI algorithm,
 configuration/repository format, version or dependency changed.
 
 ## Development launch, not deployment design
@@ -117,15 +122,16 @@ validated independently; invalid method input is a request rejection, not execut
    methods, capabilities and limits. Unsupported versions/capabilities are rejected.
 4. Only then can `request` messages be admitted.
 
-Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`, `setup.create`, `tasks.list`.
+Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`,
+`setup.create`, `tasks.list`, `backup.run`.
 No repository.inspect was added. The bounded readonly tasks.list contract is specified in [PHASE3E](PHASE3E.md#durable-task-catalog). Unknown methods, including
-backup, verify, restore, cancellation and test_crash, are rejected before application.
+verify, restore, cancellation and test_crash, are rejected before application.
 
-All advertised capabilities are false: resume_interaction, phase_progress,
-item_progress, byte_progress, current_item, cooperative_cancel.
-`event` is an envelope kind and a reserved lossy output boundary; no business event
-stream is emitted yet. Interaction message kinds are not accepted/advertised;
-interaction_id must remain null. Adding a field is not adding a capability.
+`resume_interaction=true` after the tested `backup.resume` round-trip. The other
+capabilities remain false: phase_progress, item_progress, byte_progress,
+current_item, cooperative_cancel. `event` carries only bounded, lossy Backup
+relocation/resume notices. It is not progress. Interaction messages are required
+business decisions, never droppable notices.
 
 ## Correlation, admission, late results
 
@@ -229,8 +235,8 @@ barrier before observing worker exit and availability.
 
 This gate is independent from the worker operation slot and existing task/repository
 locks. It neither excludes external CLI execution nor coordinates other user/logon
-scopes. Ownership permits admission of setup.create only; it does not add Backup,
-progress or cancellation capability. WAIT_ABANDONED is successful ownership, not
+scopes. Ownership permits admission of setup.create and real backup.run; it does not
+add progress or cancellation capability. WAIT_ABANDONED is successful ownership, not
 a clean prior release, permanent refusal or evidence of repository corruption.
 Normal application safety checks still run after abandoned acquisition.
 
@@ -361,6 +367,71 @@ never manufactures SetupFailure, no-write facts, or permission to retry. A recei
 admission rejection also sets ResponseAvailable=true, which means response availability,
 not application success. There is no automatic replay or recovery workflow.
 
+## backup.run — Phase 4A backend contract
+
+Request params contain exactly `config_root` (explicit absolute path), `task`
+(selector string or null), `dry_run` (boolean), `full_hash` (boolean), and `exclude`
+(bounded array of strings). The worker builds `application.backup.BackupRequest`
+and calls the existing synchronous `run_backup`. It never accepts a client-selected
+baseline, snapshot/sequence ID, manifest, repository identity or change set.
+The C# production client exposes `BackupAsync`, but no ViewModel or Home command
+calls it. Current GUI Setup and catalog continue to use the same worker session.
+
+Real Backup admission validates protocol/session/intent and slot, requires the
+stable lifecycle gate on the control thread, then allocates operation_id, emits
+`accepted` and dispatches the existing transaction. Gate denial is a rejection
+with `application_invoked=false`; there is no wait or hidden queue. TaskLock then
+RepoWriterLock inside the application remain separately authoritative. A dry-run
+uses the one slot but requires no mutation-gate ownership; its existing zero-write
+application path remains unchanged and never authorizes later real execution.
+
+The only required interaction is `backup.resume`. The application callback still
+occurs at its existing point **inside both locks**. Worker sends
+`interaction_request` with the same request_id and operation_id, a new
+interaction_id, and payload `kind=backup.resume`, snapshot_id, created_at and
+deadline_seconds=600. C# dispatches its typed responder off the stdout reader and
+sends `interaction_response` with `kind=backup.resume` and answer `resume`,
+`decline_resume` or `unavailable`. Normal GUI has no responder/dialog yet. The
+deadline starts when the worker creates the pending interaction, not when a dialog
+renders. Invalid/mismatched response, explicit unavailable, timeout or channel
+loss makes the callback fail as interaction unavailable; no answer is inferred.
+Definitive channel loss wakes it immediately. Duplicate answer after consumption
+cannot change the decision. The existing application failure path releases locks.
+The approved 10-minute default is test-injected shorter only in test hosts.
+
+Terminal result `outcome` is `dry_run`, `succeeded`, `completed_with_issues` or
+`failed` where the application provides structured Backup facts. Facts include
+the exact application `commit_state`, known task/repository identity, lifecycle
+sequence, snapshot ID, resumed-from ID, change counts, skipped count,
+materialization counts/bytes, retention deletion count and report path where
+available. A success may still have issues. Failure includes application stage
+and original technical cause; no exception-string diagnosis or invented partial
+retention details. `report` is present only on successful real Backup. Projection
+failure has a separate worker error with the small acknowledged commit facts; it
+never triggers re-execution.
+
+`not_published` means the complete publisher was not entered, **not** zero side
+effects. `unknown` means complete publication was attempted but did not return
+successfully. `published` means complete publication returned successfully,
+**not** finalization success. Resume cleanup, retention and required report
+publication can fail afterward with `commit_state=published`; the snapshot is not
+rolled back. An application terminal carrying `unknown` differs from client
+transport uncertainty: when no terminal arrives, `WorkerRequest.ResponseAvailable`
+is false and the client has **no application commit-state fact**. Timeout only
+ends the caller's wait; late terminal remains correlated. Neither timeout nor
+disconnect automatically replays Backup, including after restart/cache eviction.
+
+Application relocation/resume notices enter the separate bounded lossy outbound
+notice queue. Callback-side enqueue/encoding failure cannot throw into the Backup
+transaction. A single writer owns stdout; a slow/failed consumer can mark the
+channel lost without rewriting application facts. Active noninteractive Backup
+continues under the lifecycle gate after channel loss, then the worker exits. If
+Resume is required after channel loss, it becomes unavailable at that boundary.
+Ping/status remain control-plane liveness only; other application calls and idle
+shutdown are rejected busy while Backup owns the slot. There is no progress,
+cooperative cancellation, process-kill control, GUI FIFO or true Exit-running
+Backup UI in Phase 4A. O-02 and O-09 remain open.
+
 ## Threads, backpressure and channel loss
 
 - One input reader parses bounded frames into a bounded control inbox.
@@ -370,8 +441,8 @@ not application success. There is no automatic replay or recovery workflow.
 - A separate bounded lossy diagnostic pump owns stderr. Accidental Python
   print/warnings are routed there rather than corrupting protocol stdout.
 
-Application code/callbacks never perform pipe writes or wait for delivery. Future
-noncritical notices use the separate try-enqueue boundary; failure is isolated.
+Application code/callbacks never perform pipe writes or wait for notice delivery.
+Backup notices use the separate try-enqueue boundary; failure is isolated.
 Critical responses never enter that droppable queue. Queue overflow, write error,
 or a protocol write stalled for 30 seconds marks the channel lost and stops admission.
 No such fault is converted into application failure. An active application call returns
@@ -400,7 +471,8 @@ the service is still finishing, existing drain tasks continue. No supervisor res
 - O-03: unexpected parent loss exits idle worker; an active noninteractive call
   may finish before exit. Required interaction unavailable ends the operation at
   that existing decision boundary. Parent loss is not cancellation. No reattach.
-- O-08 Resume: ten-minute default deadline. Timeout/disconnect/unavailable cannot
+- O-08 Resume: Phase 4A implements the ten-minute default deadline.
+  Timeout/disconnect/unavailable cannot
   become decline_resume (False would continue Backup), nor silent acceptance.
   The decision stays inside existing locks, after migration and before scanning.
 - O-04: all application operations share one execution slot. This is separate
@@ -413,10 +485,11 @@ the service is still finishing, existing drain tasks continue. No supervisor res
 - O-02 cancellation and O-09 worker packaging remain open; no Job Object
   kill-on-close, mutation retry or production notification is added.
 
-Future result rules remain frozen: Backup preserves not_published/unknown/published;
+Implemented Backup result rules preserve not_published/unknown/published;
 transport loss cannot manufacture a commit fact. Setup partial effects remain
-three-valued. Verify writes mandatory reports. Restore uses session-owned plans
-with existing apply revalidation, never a trusted plan reconstructed by C#.
+three-valued. Future verify IPC must preserve mandatory report publication;
+future restore IPC must use worker-owned plans and existing apply revalidation,
+never a trusted plan reconstructed by C#.
 
 ## Validation and review scope
 
@@ -473,5 +546,14 @@ The lost-client tests now include a barrier after repo initialization and before
 config persistence: another worker cannot create until the original service and
 worker finish. All mutation artifacts are in test-owned temporary directories;
 the actual user's GUI config root and personal folders are not used for creation.
-No result here demonstrates GUI binding, Backup, Resume, cancellation, true
-Exit-running UI, reconciliation after uncertainty or final distribution.
+Those historical Phase 3D results did not demonstrate GUI binding, Backup, Resume,
+cancellation, true Exit-running UI, reconciliation or final distribution.
+
+Phase 4A validation is in [test_worker_backup](../../tests/test_worker_backup.py),
+[ProductionBackupTests](../../desktop/Mirrorly.Desktop.Tests/ProductionBackupTests.cs)
+and the existing Phase 2 application tests. All production Backup integration
+fixtures use disposable test roots and the qualified worktree interpreter. They
+exercise first/incremental snapshots, Resume/Decline/unavailable, one-slot/gate,
+notice isolation, three commit states, post-publication failures, timeout and
+disconnect. The normal Home button remains disabled; these results do not prove
+GUI Backup UX, progress/cancellation, O-02 or O-09.

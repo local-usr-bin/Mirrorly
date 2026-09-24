@@ -35,7 +35,7 @@ public static class ProductionProtocol
             throw new InvalidDataException("Invalid production envelope fields.");
         if (root.GetProperty("protocol").GetString() != Identity) throw new InvalidDataException("Wrong protocol identity.");
         var kind = root.GetProperty("message_type").GetString();
-        if (kind is not ("hello" or "initialize" or "request" or "response" or "event" or "protocol_error"))
+        if (kind is not ("hello" or "initialize" or "request" or "response" or "event" or "protocol_error" or "interaction_request" or "interaction_response"))
             throw new InvalidDataException("Unknown message type.");
         var version = root.GetProperty("protocol_version");
         if (version.ValueKind != JsonValueKind.Null &&

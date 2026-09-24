@@ -89,11 +89,12 @@ def test_real_create_without_preflight_and_exact_methods(tmp_path, intent):
             "setup.preflight",
             "setup.create",
             "tasks.list",
+            "backup.run",
         ]
         assert peer.hello["payload"]["qualification"]["cli_imported"] is False
         assert_success(intent, create(peer, intent))
         assert status(peer)["owned"]
-        for method in ("backup.run", "verify", "restore.execute", "snapshot.list", "cancel"):
+        for method in ("verify", "restore.execute", "snapshot.list", "cancel"):
             peer.send(method)
             assert peer.receive()["payload"]["error"]["code"] == "unsupported_method"
 

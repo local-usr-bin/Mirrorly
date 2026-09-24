@@ -10,11 +10,20 @@ from collections import OrderedDict
 
 from mirrorly.application import setup
 
+from . import backup as backup_wire
 from . import catalog, creation, preflight, protocol
 from .lifecycle import LifecycleGate
 from .transport import Outbound
 
-METHODS = ["ping", "status", "worker.shutdown", "setup.preflight", "setup.create", "tasks.list"]
+METHODS = [
+    "ping",
+    "status",
+    "worker.shutdown",
+    "setup.preflight",
+    "setup.create",
+    "tasks.list",
+    "backup.run",
+]
 CAPABILITIES = dict.fromkeys(
     [
         "resume_interaction",
@@ -26,6 +35,14 @@ CAPABILITIES = dict.fromkeys(
     ],
     False,
 )
+CAPABILITIES["resume_interaction"] = True
+RESUME_SECONDS = 600
+
+
+class ResumeInteractionUnavailable(Exception):
+    """A required business answer was not available; never substitute a choice."""
+
+
 LIMITS = {
     "handshake_bytes": protocol.HANDSHAKE_BYTES,
     "frame_bytes": protocol.FRAME_BYTES,
@@ -39,12 +56,23 @@ LIMITS = {
 
 class WorkerHost:
     def __init__(
-        self, read, write, qualification, *, service=None, create_service=None, shutdown_seconds=1
+        self,
+        read,
+        write,
+        qualification,
+        *,
+        service=None,
+        create_service=None,
+        backup_service=None,
+        resume_seconds=RESUME_SECONDS,
+        shutdown_seconds=1,
     ):
         self.read = read
         self.qualification = qualification
         self.service = service or setup.preflight_setup
         self.create_service = create_service or setup.create_backup
+        self.backup_service = backup_service or backup_wire.backup.run_backup
+        self.resume_seconds = resume_seconds
         self.shutdown_seconds = shutdown_seconds
         self.session = uuid.uuid4().hex
         self.initialized = False
@@ -59,9 +87,142 @@ class WorkerHost:
         self.terminal_delivery = None
         self.protocol_failed = False
         self.lifecycle_gate = None
+        self.resume_lock = threading.Lock()
+        self.pending_resume = None
 
-    def _message(self, kind, payload, request=None, operation=None, *, version=protocol.VERSION):
-        return protocol.message(kind, self.session, payload, request, operation, version=version)
+    def _message(
+        self,
+        kind,
+        payload,
+        request=None,
+        operation=None,
+        *,
+        interaction=None,
+        version=protocol.VERSION,
+    ):
+        return protocol.message(
+            kind,
+            self.session,
+            payload,
+            request,
+            operation,
+            interaction=interaction,
+            version=version,
+        )
+
+    def _resume_decision(self, rid, oid, decision):
+        if self.lost.is_set():
+            raise ResumeInteractionUnavailable("Backup Resume interaction channel unavailable")
+        pending = {
+            "request_id": rid,
+            "operation_id": oid,
+            "interaction_id": uuid.uuid4().hex,
+            "event": threading.Event(),
+            "answer": None,
+        }
+        with self.resume_lock:
+            if self.pending_resume is not None:
+                raise ResumeInteractionUnavailable("Another Resume decision is pending")
+            self.pending_resume = pending
+        deadline = time.monotonic() + self.resume_seconds
+        try:
+            self.out.send(
+                self._message(
+                    "interaction_request",
+                    {
+                        "kind": "backup.resume",
+                        "snapshot_id": decision.snapshot_id,
+                        "created_at": decision.created_at,
+                        "deadline_seconds": self.resume_seconds,
+                    },
+                    rid,
+                    oid,
+                    interaction=pending["interaction_id"],
+                )
+            )
+            while not pending["event"].wait(0.05):
+                if self.lost.is_set() or time.monotonic() >= deadline:
+                    raise ResumeInteractionUnavailable("Backup Resume interaction unavailable")
+            if pending["answer"] not in ("resume", "decline_resume"):
+                raise ResumeInteractionUnavailable("Backup Resume interaction unavailable")
+            return pending["answer"] == "resume"
+        finally:
+            with self.resume_lock:
+                if self.pending_resume is pending:
+                    self.pending_resume = None
+
+    def _interaction_response(self, message):
+        with self.resume_lock:
+            pending = self.pending_resume
+            if pending is None or pending["event"].is_set():
+                return  # A duplicate after consumption cannot alter the answer.
+            if any(
+                message[key] != pending[key]
+                for key in ("request_id", "operation_id", "interaction_id")
+            ):
+                pending["answer"] = None
+            elif (
+                set(message["payload"]) != {"kind", "answer"}
+                or message["payload"]["kind"] != "backup.resume"
+            ):
+                pending["answer"] = None
+            else:
+                pending["answer"] = message["payload"]["answer"]
+            pending["event"].set()
+
+    def _backup_notice(self, rid, oid, kind, value):
+        try:
+            self.out.notice(self._message("event", {"kind": kind, "facts": value}, rid, oid))
+        except Exception:
+            pass  # No diagnostic delivery error may enter the Backup transaction.
+
+    def _execute_backup(self, rid, oid, request):
+        outcome, value = backup_wire.invoke(
+            self.backup_service,
+            request,
+            lambda decision: self._resume_decision(rid, oid, decision),
+            lambda cfg, repo: self._backup_notice(
+                rid,
+                oid,
+                "backup.relocated",
+                {"task_name": cfg.name, "repository_path": str(repo.path)},
+            ),
+            lambda notice: self._backup_notice(
+                rid,
+                oid,
+                "backup.resume_notice",
+                {
+                    "kind": notice.kind,
+                    "snapshot_id": notice.snapshot_id,
+                    "materialized": notice.materialized,
+                    "missing": notice.missing,
+                    "untrusted": notice.untrusted,
+                    "uncertified": notice.uncertified,
+                },
+            ),
+        )
+        try:
+            payload, error = backup_wire.project(request, outcome, value)
+            protocol.encode(
+                self._message(
+                    "response",
+                    {"phase": "terminal", "result": payload, "error": error},
+                    rid,
+                    oid,
+                )
+            )
+        except Exception as exc:
+            payload = {
+                "outcome": "unreported",
+                "dry_run": request.dry_run,
+                "facts": backup_wire.acknowledged(outcome, value),
+            }
+            error = {
+                "kind": "worker",
+                "code": "result_projection_failed",
+                "technical": preflight.technical(exc),
+            }
+        self.completion.put_nowait((rid, oid, payload, error))
 
     def _response(self, rid, phase, *, result=None, error=None, operation=None, terminal=False):
         value = self._message(
@@ -249,6 +410,11 @@ class WorkerHost:
     def _handle(self, message):
         if message["session_id"] != self.session:
             raise protocol.ProtocolFault("Wrong session")
+        if message["message_type"] == "interaction_response":
+            if not self.initialized or message["protocol_version"] != protocol.VERSION:
+                raise protocol.ProtocolFault("Interaction outside initialized session")
+            self._interaction_response(message)
+            return False
         if message["operation_id"] is not None or message["interaction_id"] is not None:
             raise protocol.ProtocolFault("Client operation/interaction IDs are unsupported")
         rid = message["request_id"]
@@ -295,13 +461,15 @@ class WorkerHost:
         if method not in METHODS:
             self._reject(rid, "unsupported_method")
             return False
-        if method in ("setup.preflight", "setup.create", "tasks.list"):
-            if self.active and method != "setup.create":
+        if method in ("setup.preflight", "setup.create", "tasks.list", "backup.run"):
+            if self.active and method not in ("setup.create", "backup.run"):
                 self._reject(rid, "busy")
                 return False
             try:
                 if method == "setup.create":
                     request, approved = creation.request(params)
+                elif method == "backup.run":
+                    request = backup_wire.request(params)
                 elif method == "tasks.list":
                     request = catalog.request(params)
                 else:
@@ -312,7 +480,7 @@ class WorkerHost:
             if self.active:
                 self._reject(rid, "busy")
                 return False
-            if method == "setup.create":
+            if method == "setup.create" or (method == "backup.run" and not request.dry_run):
                 try:
                     self.lifecycle_gate.require_ownership()
                 except RuntimeError:
@@ -325,13 +493,15 @@ class WorkerHost:
             oid = uuid.uuid4().hex
             self.active = {"request_id": rid, "operation_id": oid}
             self._response(rid, "accepted", operation=oid)
-            if self.lost.is_set() and method != "setup.create":
+            if self.lost.is_set() and method not in ("setup.create", "backup.run"):
                 self.active = None
                 return False
-            # Once create is admitted, failed accepted delivery cannot undo it.
+            # Once mutation is admitted, failed accepted delivery cannot undo it.
             execute = (
                 self._execute_create
                 if method == "setup.create"
+                else self._execute_backup
+                if method == "backup.run"
                 else self._execute_catalog
                 if method == "tasks.list"
                 else self._execute
@@ -428,6 +598,10 @@ class WorkerHost:
                         self._fault(str(exc))
         finally:
             # Channel loss never interrupts an active synchronous application call.
+            with self.resume_lock:
+                if self.pending_resume is not None:
+                    self.pending_resume["answer"] = None
+                    self.pending_resume["event"].set()
             if self.executor:
                 self.executor.join()
                 self._finish_operation()

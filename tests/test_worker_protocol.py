@@ -44,7 +44,7 @@ def test_malformed_json_and_utf8(raw):
         {"protocol_version": {"major": True, "minor": 0}},
         {"protocol_version": {"major": 1, "minor": 0.0}},
         {"payload": []},
-        {"message_type": "interaction_request"},
+        {"message_type": "unadvertised_future_kind"},
     ],
 )
 def test_strict_envelope(change):

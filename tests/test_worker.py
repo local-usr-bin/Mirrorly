@@ -80,7 +80,11 @@ class Peer:
         self.send(None, kind="initialize")
         result = self.receive()
         assert result["payload"]["phase"] == "terminal"
-        assert all(value is False for value in result["payload"]["result"]["capabilities"].values())
+        capabilities = result["payload"]["result"]["capabilities"]
+        assert capabilities["resume_interaction"] is True
+        assert all(
+            value is False for name, value in capabilities.items() if name != "resume_interaction"
+        )
         return result
 
     def close(self):
@@ -174,7 +178,7 @@ def test_preflight_problem_and_reject_untrusted_fields(peer, intent):
     ):
         peer.send("setup.preflight", params)
         assert peer.receive()["payload"]["error"]["application_invoked"] is False
-    for method in ("snapshot.list", "backup.run", "verify.run", "restore.execute", "test_crash"):
+    for method in ("snapshot.list", "verify.run", "restore.execute", "test_crash"):
         peer.send(method)
         assert peer.receive()["payload"]["error"]["code"] == "unsupported_method"
 

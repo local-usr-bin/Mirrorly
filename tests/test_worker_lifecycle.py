@@ -68,8 +68,33 @@ def test_stable_gate_cross_process_release_and_readonly_contender(intent, crash)
         assert second.receive()["payload"]["phase"] == "accepted"
         result = second.receive()["payload"]["result"]["preflight"]
         assert result["problem"] is None
-        second.send("backup.run", intent)
-        assert second.receive()["payload"]["error"]["code"] == "unsupported_method"
+        second.send(
+            "backup.run",
+            {
+                "config_root": intent["config_root"],
+                "task": None,
+                "dry_run": True,
+                "full_hash": False,
+                "exclude": [],
+            },
+        )
+        assert second.receive()["payload"]["phase"] == "accepted"
+        dry_run = second.receive()["payload"]
+        assert dry_run["phase"] == "terminal"
+        assert dry_run["error"]["code"] == "backup_failure"
+        second.send(
+            "backup.run",
+            {
+                "config_root": intent["config_root"],
+                "task": None,
+                "dry_run": False,
+                "full_hash": False,
+                "exclude": [],
+            },
+        )
+        blocked_backup = second.receive()["payload"]
+        assert blocked_backup["error"]["code"] == "mutation_gate_unavailable"
+        assert blocked_backup["error"]["application_invoked"] is False
         if crash:
             first.process.kill()  # Only this test-owned worker; never a production action.
             first.process.wait(timeout=5)

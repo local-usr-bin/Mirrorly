@@ -16,6 +16,10 @@ public sealed record SetupPreflightInput(string task_name, string source, string
 public sealed record SetupPreflightIntent(string task_name, string source, string target, string filesystem_policy = "strict");
 public sealed record SetupCreateInput(string task_name, string source, string target, string config_root, string filesystem_policy, bool copy_mode_approved);
 public sealed record SetupCreateIntent(string task_name, string source, string target, string filesystem_policy, bool copy_mode_approved);
+public sealed record BackupRunInput(string config_root, string? task, bool dry_run, bool full_hash, string[] exclude);
+public sealed record BackupRunIntent(string? task, bool dry_run = false, bool full_hash = false, string[]? exclude = null);
+public sealed record ResumeInteraction(string RequestId, string OperationId, string InteractionId, string SnapshotId, string CreatedAt, int DeadlineSeconds);
+public enum ResumeAnswer { Resume, DeclineResume, Unavailable }
 public sealed record ProductionWorkerObservation(bool ProcessExists, bool TransportHealthy, bool Initialized, string? ActiveOperationId, string Detail);
 public sealed class WorkerTransportUncertainException(string message) : IOException(message);
 
@@ -38,6 +42,15 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, WorkerRequest> pending = new();
     private readonly SemaphoreSlim writes = new(1);
+    private readonly ConcurrentQueue<ProductionMessage> notices = new();
+    // Caller dispatch is always off the stdout reader. Normal GUI does not bind this yet.
+    public Func<ResumeInteraction, Task<ResumeAnswer>>? ResumeResponder { get; set; }
+    public ProductionMessage[] DrainNotices()
+    {
+        var values = new List<ProductionMessage>();
+        while (notices.TryDequeue(out var value)) values.Add(value);
+        return values.ToArray();
+    }
     private readonly TaskCompletionSource<ProductionMessage> hello = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Process? process;
     private Task? lifetime;
@@ -87,7 +100,10 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
                 result.GetProperty("limits").GetProperty("frame_bytes").GetInt32() != ProductionProtocol.FrameBytes ||
                 !result.GetProperty("methods").EnumerateArray().Any(m => m.GetString() == "setup.preflight"))
                 throw new InvalidDataException("Unexpected negotiated contract.");
-            foreach (var capability in new[] { "resume_interaction", "phase_progress", "item_progress", "byte_progress", "current_item", "cooperative_cancel" })
+            if (!result.GetProperty("capabilities").GetProperty("resume_interaction").GetBoolean() ||
+                !result.GetProperty("methods").EnumerateArray().Any(m => m.GetString() == "backup.run"))
+                throw new InvalidDataException("Backup/Resume contract was not negotiated.");
+            foreach (var capability in new[] { "phase_progress", "item_progress", "byte_progress", "current_item", "cooperative_cancel" })
                 if (result.GetProperty("capabilities").GetProperty(capability).GetBoolean())
                     throw new InvalidDataException("Unsupported capability advertisement.");
             initialized = true;
@@ -123,6 +139,9 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> CreateAsync(GuiDataPaths paths, SetupCreateIntent intent) => CreateAsync(
         new SetupCreateInput(intent.task_name, intent.source, intent.target, paths.TaskConfigRoot, intent.filesystem_policy, intent.copy_mode_approved));
     public Task<WorkerRequest> ListTasksAsync(GuiDataPaths paths, string? after = null) => RequestAsync("tasks.list", new { config_root = paths.TaskConfigRoot, after });
+    public Task<WorkerRequest> BackupAsync(BackupRunInput request) => RequestAsync("backup.run", request);
+    public Task<WorkerRequest> BackupAsync(GuiDataPaths paths, BackupRunIntent intent) => BackupAsync(
+        new BackupRunInput(paths.TaskConfigRoot, intent.task, intent.dry_run, intent.full_hash, intent.exclude ?? []));
 
     internal static string AllocateRequestId(ref ulong highest)
     {
@@ -132,7 +151,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
-        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list");
+        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run");
     }
 
     private async Task<WorkerRequest> SendAsync(string kind, object payload, bool application = false)
@@ -180,9 +199,31 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
                     hello.TrySetResult(message);
                     continue;
                 }
-                if (message.SessionId != session || message.Version != ProductionProtocol.Version || message.InteractionId is not null)
+                if (message.SessionId != session || message.Version != ProductionProtocol.Version)
                     throw new InvalidDataException("Session/version mismatch.");
                 if (message.MessageType == "protocol_error") throw new InvalidDataException(message.Payload.ToString());
+                if (message.MessageType == "event")
+                {
+                    if (message.InteractionId is not null || message.RequestId is null || message.OperationId is null)
+                        throw new InvalidDataException("Invalid Backup notice correlation.");
+                    notices.Enqueue(message);
+                    while (notices.Count > 16) notices.TryDequeue(out _);
+                    continue;
+                }
+                if (message.MessageType == "interaction_request")
+                {
+                    if (message.RequestId is null || message.OperationId is null || message.InteractionId is null ||
+                        !pending.TryGetValue(message.RequestId, out var owner) || owner.OperationId != message.OperationId ||
+                        message.Payload.GetProperty("kind").GetString() != "backup.resume")
+                        throw new InvalidDataException("Invalid Resume interaction correlation.");
+                    var interaction = new ResumeInteraction(message.RequestId, message.OperationId, message.InteractionId,
+                        message.Payload.GetProperty("snapshot_id").GetString()!,
+                        message.Payload.GetProperty("created_at").GetString()!,
+                        message.Payload.GetProperty("deadline_seconds").GetInt32());
+                    _ = Task.Run(() => AnswerResumeAsync(interaction)); // Keep stdout draining.
+                    continue;
+                }
+                if (message.InteractionId is not null) throw new InvalidDataException("Unexpected interaction ID.");
                 if (message.MessageType != "response" || message.RequestId is null || !pending.TryGetValue(message.RequestId, out var request))
                     throw new InvalidDataException("Unexpected correlation/message.");
                 var phase = message.Payload.GetProperty("phase").GetString();
@@ -217,6 +258,35 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
             try { while (await child.StandardOutput.BaseStream.ReadAsync(discard).ConfigureAwait(false) != 0) { } }
             catch (IOException) { }
         }
+    }
+
+    private async Task AnswerResumeAsync(ResumeInteraction interaction)
+    {
+        var answer = ResumeAnswer.Unavailable;
+        try
+        {
+            if (ResumeResponder is { } responder) answer = await responder(interaction).ConfigureAwait(false);
+        }
+        catch (Exception) { /* A UI/test handler failure cannot invent a business answer. */ }
+        var choice = answer switch
+        {
+            ResumeAnswer.Resume => "resume",
+            ResumeAnswer.DeclineResume => "decline_resume",
+            _ => "unavailable",
+        };
+        await writes.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (process is null || process.HasExited || disconnected || session is null) return;
+            var frame = new ProductionMessage(ProductionProtocol.Identity, ProductionProtocol.Version,
+                "interaction_response", session, interaction.RequestId, interaction.OperationId,
+                interaction.InteractionId, JsonSerializer.SerializeToElement(new { kind = "backup.resume", answer = choice }));
+            var bytes = ProductionProtocol.Encode(frame);
+            await process.StandardInput.BaseStream.WriteAsync(bytes).AsTask().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            await process.StandardInput.BaseStream.FlushAsync().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+        catch (Exception error) { Disconnect($"Resume interaction send uncertainty: {error.Message}"); }
+        finally { writes.Release(); }
     }
 
     private async Task DrainErrorsAsync(Process child)
