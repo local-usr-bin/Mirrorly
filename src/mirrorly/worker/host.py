@@ -11,7 +11,7 @@ from collections import OrderedDict
 from mirrorly.application import setup
 
 from . import backup as backup_wire
-from . import catalog, creation, preflight, protocol
+from . import catalog, creation, preflight, protocol, summary
 from .lifecycle import LifecycleGate
 from .transport import Outbound
 
@@ -23,6 +23,7 @@ METHODS = [
     "setup.create",
     "tasks.list",
     "backup.run",
+    "backup.summary",
 ]
 CAPABILITIES = dict.fromkeys(
     [
@@ -386,6 +387,24 @@ class WorkerHost:
             }
         self.completion.put_nowait((rid, oid, payload, error))
 
+    def _execute_summary(self, rid, oid, request):
+        try:
+            payload = {"outcome": "succeeded", "summary": summary.execute(request)}
+            error = None
+            protocol.encode(
+                self._message(
+                    "response", {"phase": "terminal", "result": payload, "error": None}, rid, oid
+                )
+            )
+        except Exception as exc:
+            payload = {"outcome": "failed", "summary": None}
+            error = {
+                "kind": "application",
+                "code": "summary_unavailable",
+                "technical": preflight.technical(exc),
+            }
+        self.completion.put_nowait((rid, oid, payload, error))
+
     def _finish_operation(self):
         try:
             rid, oid, result, error = self.completion.get_nowait()
@@ -461,7 +480,13 @@ class WorkerHost:
         if method not in METHODS:
             self._reject(rid, "unsupported_method")
             return False
-        if method in ("setup.preflight", "setup.create", "tasks.list", "backup.run"):
+        if method in (
+            "setup.preflight",
+            "setup.create",
+            "tasks.list",
+            "backup.run",
+            "backup.summary",
+        ):
             if self.active and method not in ("setup.create", "backup.run"):
                 self._reject(rid, "busy")
                 return False
@@ -470,6 +495,8 @@ class WorkerHost:
                     request, approved = creation.request(params)
                 elif method == "backup.run":
                     request = backup_wire.request(params)
+                elif method == "backup.summary":
+                    request = summary.request(params)
                 elif method == "tasks.list":
                     request = catalog.request(params)
                 else:
@@ -504,6 +531,8 @@ class WorkerHost:
                 if method == "backup.run"
                 else self._execute_catalog
                 if method == "tasks.list"
+                else self._execute_summary
+                if method == "backup.summary"
                 else self._execute
             )
             args = (

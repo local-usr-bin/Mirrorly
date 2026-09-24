@@ -74,10 +74,20 @@ def test_list_is_read_only_and_preserves_filename_order_distinct_from_default_se
     assert [s.snapshot_id for s in summaries] == [second.facts.snapshot_id, first.facts.snapshot_id]
     assert [s.lifecycle_seq for s in summaries] == [1, 0]
     assert queries.latest_complete(context.repo).snapshot_id == second.facts.snapshot_id
+    saved = queries.saved_backup_summary(config, "documents")
+    assert saved.latest.snapshot_id == second.facts.snapshot_id
+    assert saved.snapshot_path == initialized.repo.path / "snapshots" / second.facts.snapshot_id
     assert context.task == initialized.task and context.repo.repo_id == initialized.repo.repo_id
     assert context.relocated is False
     assert _tree(tmp_path) == before
     assert capsys.readouterr() == ("", "")
+
+
+def test_saved_backup_summary_has_no_snapshot_before_first_backup(workspace):
+    config, initialized = workspace
+    saved = queries.saved_backup_summary(config, "documents")
+    assert saved.context.repo.repo_id == initialized.repo.repo_id
+    assert saved.latest is None and saved.snapshot_path is None
 
 
 def test_all_verification_calls_precede_notices_and_mandatory_report(workspace, monkeypatch):

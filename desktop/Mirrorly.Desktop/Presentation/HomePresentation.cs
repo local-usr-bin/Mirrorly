@@ -5,7 +5,7 @@ public enum HomeScenario { Healthy, DestinationUnavailable, Failed, CompletedWit
 public enum StatusTone { Success, Warning, Error, Working, Neutral }
 public enum ShellPage { Home, Backups, Restore, Activity, Settings, BackupSetup, Diagnostics }
 public record StatusPresentation(string Title, string Detail, string NextStep, string Action, StatusTone Tone, string Symbol, bool Busy = false);
-public record BackupPresentation(string Id, string Name, string Source, string Destination, string LastBackup, string Status, StatusTone Tone, int Recency)
+public record BackupPresentation(string Id, string Name, string Source, string Destination, string LastBackup, string Status, StatusTone Tone, int Recency, string? SavedSnapshotPath = null, string LastBackupLabel = "Last backup:")
 {
     public bool NeedsAttention => Tone is StatusTone.Warning or StatusTone.Error;
 }

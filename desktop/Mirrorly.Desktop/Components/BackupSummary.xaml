@@ -23,10 +23,11 @@
     </StackPanel>
     </Grid>
     <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyTextSpacing}">
-     <TextBlock Text="Last backup:" Style="{StaticResource MirrorlyCaption}"/>
+     <TextBlock Text="{Binding LastBackupLabel}" Style="{StaticResource MirrorlyCaption}"/>
      <TextBlock Text="{Binding LastBackup}" Style="{StaticResource MirrorlyCaption}"/>
     </StackPanel>
     <StackPanel x:Name="Actions" Spacing="{StaticResource MirrorlyControlSpacing}">
+     <Button x:Name="BackupNow" Click="Backup_Click" Style="{StaticResource MirrorlyPrimaryButton}"><TextBlock Text="Back up now" TextWrapping="Wrap"/></Button>
      <Button x:Name="Explorer" Click="Explorer_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="Open in File Explorer" TextWrapping="Wrap"/></Button>
      <Button Click="View_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="View backup" TextWrapping="Wrap"/></Button>
     </StackPanel>
@@ -48,9 +49,13 @@
    </Grid>
    <Grid ColumnSpacing="{StaticResource MirrorlyControlSpacing}">
     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <TextBlock Style="{StaticResource MirrorlyCaption}" VerticalAlignment="Center"><Run Text="Last backup: "/><Run Text="{Binding LastBackup}"/></TextBlock>
+    <TextBlock Style="{StaticResource MirrorlyCaption}" VerticalAlignment="Center"><Run Text="{Binding LastBackupLabel}"/><Run Text=" "/><Run Text="{Binding LastBackup}"/></TextBlock>
     <HyperlinkButton x:Name="CompactView" Grid.Column="1" Content="View backup" Click="View_Click"/>
    </Grid>
+   <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyControlSpacing}">
+    <Button x:Name="CompactBackupNow" Content="Back up now" Click="Backup_Click" Style="{StaticResource MirrorlyPrimaryButton}"/>
+    <Button x:Name="CompactExplorer" Content="Open saved backup" Click="Explorer_Click" Style="{StaticResource MirrorlySecondaryButton}"/>
+   </StackPanel>
   </StackPanel>
   </Grid>
  </Border>

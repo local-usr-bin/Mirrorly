@@ -5,11 +5,18 @@ namespace Mirrorly.Desktop.Components;
 public sealed partial class BackupSummary : UserControl
 {
     public event Action<string>? PreviewAction;
-    public BackupSummary(BackupPresentation model, bool compact, bool designPreview = false)
+    public event Action<string>? BackupRequested;
+    public event Action<string>? OpenRequested;
+    private readonly BackupPresentation model;
+    public BackupSummary(BackupPresentation model, bool compact, bool designPreview = false, bool canBackUp = false)
     {
+        this.model = model;
         InitializeComponent();
         DataContext = model;
-        foreach (var button in Actions.Children.OfType<Button>()) button.IsEnabled = designPreview;
+        BackupNow.IsEnabled = CompactBackupNow.IsEnabled = canBackUp && !designPreview;
+        Explorer.IsEnabled = CompactExplorer.IsEnabled = model.SavedSnapshotPath is not null && !designPreview;
+        foreach (var button in Actions.Children.OfType<Button>())
+            if (button != BackupNow && button != Explorer) button.IsEnabled = designPreview;
         CompactView.IsEnabled = designPreview;
         ToolTipService.SetToolTip(Actions, "Browsing backup versions is not available yet.");
         Status.Style = (Style)Application.Current.Resources[$"Mirrorly{model.Tone}Text"];
@@ -29,6 +36,10 @@ public sealed partial class BackupSummary : UserControl
             DestinationColumn.Width = narrow ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
         };
     }
-    private void Explorer_Click(object sender, RoutedEventArgs e) => PreviewAction?.Invoke("Open in File Explorer");
+    private void Explorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (model.SavedSnapshotPath is not null) OpenRequested?.Invoke(model.SavedSnapshotPath);
+    }
+    private void Backup_Click(object sender, RoutedEventArgs e) => BackupRequested?.Invoke(model.Id);
     private void View_Click(object sender, RoutedEventArgs e) => PreviewAction?.Invoke("View backup");
 }

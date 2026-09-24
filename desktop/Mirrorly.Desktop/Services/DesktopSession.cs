@@ -6,11 +6,16 @@ namespace Mirrorly.Desktop.Services;
 
 public sealed record ConfiguredBackup(string Selector, string ConfigPath, string Name, string Source, string RepositoryPath);
 public sealed record BackupCatalog(IReadOnlyList<ConfiguredBackup> Tasks, IReadOnlyList<string> Problems);
+public sealed record SavedBackupSummary(string Selector, string RepositoryPath, string RepositoryId,
+    string? SnapshotId, string? CreatedAt, long? LifecycleSequence, string? SnapshotPath);
+public sealed record WorkerReply(string RequestId, string? OperationId, JsonElement Payload);
 public interface ISetupApi
 {
     Task<JsonElement> PreflightAsync(SetupPreflightIntent intent);
     Task<JsonElement> CreateAsync(SetupCreateIntent intent);
     Task<BackupCatalog> CatalogAsync();
+    Task<SavedBackupSummary> BackupSummaryAsync(string selector);
+    Task<WorkerReply> BackupAsync(string selector);
 }
 public interface IDesktopSession
 {
@@ -34,6 +39,11 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
     public string? RequestId { get; private set; }
     public bool WaitingForTerminal { get; private set; }
     public event Action? Changed;
+    public Func<ResumeInteraction, Task<ResumeAnswer>>? ResumeResponder
+    {
+        get => client.ResumeResponder;
+        set => client.ResumeResponder = value;
+    }
     private static TaskCompletionSource Completed() { var t = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); t.SetResult(); return t; }
     public async Task RunAsync(Func<ISetupApi, Task> workflow)
     {
@@ -45,7 +55,7 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
         try { await workflow(this); }
         finally { Busy = false; idle.TrySetResult(); Changed?.Invoke(); }
     }
-    private async Task<JsonElement> ReceiveAsync(Func<Task<WorkerRequest>> send)
+    private async Task<WorkerReply> ReceiveReplyAsync(Func<Task<WorkerRequest>> send)
     {
         if (!Busy) throw new InvalidOperationException("Application requests require a supervised workflow.");
         await (startup ??= client.StartAsync(launch));
@@ -54,19 +64,43 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
         Changed?.Invoke();
         try
         {
-            try { return (await request.WaitAsync(ResponseWait)).Payload; }
+            try
+            {
+                var terminal = await request.WaitAsync(ResponseWait);
+                return new(request.RequestId, request.OperationId, terminal.Payload);
+            }
             catch (TimeoutException)
             {
                 // Only the wait timed out: keep the request and supervision, never resend.
                 WaitingForTerminal = true;
                 Changed?.Invoke();
-                return (await request.Terminal).Payload;
+                var terminal = await request.Terminal;
+                return new(request.RequestId, request.OperationId, terminal.Payload);
             }
         }
         finally { WaitingForTerminal = false; RequestId = null; Changed?.Invoke(); }
     }
+    private async Task<JsonElement> ReceiveAsync(Func<Task<WorkerRequest>> send) =>
+        (await ReceiveReplyAsync(send)).Payload;
     public Task<JsonElement> PreflightAsync(SetupPreflightIntent intent) => ReceiveAsync(() => client.PreflightAsync(paths, intent));
     public Task<JsonElement> CreateAsync(SetupCreateIntent intent) => ReceiveAsync(() => client.CreateAsync(paths, intent));
+    public Task<WorkerReply> BackupAsync(string selector) => ReceiveReplyAsync(() => client.BackupAsync(paths, new(selector)));
+    public async Task<SavedBackupSummary> BackupSummaryAsync(string selector)
+    {
+        var payload = await ReceiveAsync(() => client.BackupSummaryAsync(paths, selector));
+        if (payload.GetProperty("phase").GetString() != "terminal" ||
+            payload.GetProperty("error").ValueKind != JsonValueKind.Null)
+            throw new IOException(payload.ToString());
+        var value = payload.GetProperty("result").GetProperty("summary");
+        var latest = value.GetProperty("latest_complete");
+        return new(value.GetProperty("selector").GetString()!, value.GetProperty("repository_path").GetString()!,
+            value.GetProperty("repository_id").GetString()!,
+            latest.ValueKind == JsonValueKind.Null ? null : latest.GetProperty("snapshot_id").GetString(),
+            latest.ValueKind == JsonValueKind.Null ? null : latest.GetProperty("created_at").GetString(),
+            latest.ValueKind == JsonValueKind.Null || latest.GetProperty("lifecycle_seq").ValueKind == JsonValueKind.Null
+                ? null : latest.GetProperty("lifecycle_seq").GetInt64(),
+            latest.ValueKind == JsonValueKind.Null ? null : latest.GetProperty("snapshot_path").GetString());
+    }
     public async Task<BackupCatalog> CatalogAsync()
     {
         var entries = new List<ConfiguredBackup>();

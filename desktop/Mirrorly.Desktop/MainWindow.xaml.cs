@@ -12,6 +12,7 @@ public sealed partial class MainWindow : Window
 {
     private readonly ShellViewModel shell = new();
     private readonly DesktopSession session;
+    private readonly BackupExecutionCoordinator backup;
     private readonly HomeView home;
     private readonly BackupSetupView setup;
     private TrayService? tray;
@@ -23,7 +24,10 @@ public sealed partial class MainWindow : Window
     public MainWindow(DesktopSession session)
     {
         this.session = session;
-        home = new(session); setup = new(session);
+        backup = new(session);
+        session.ResumeResponder = backup.ResolveResumeAsync;
+        backup.ResumePrompt = ShowResumeAsync;
+        home = new(session, backup); setup = new(session);
         setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
         setup.ConfirmCopy = () => ConfirmAsync("Use full-file copies?",
@@ -107,6 +111,52 @@ public sealed partial class MainWindow : Window
     }
     private bool exitDialog;
     private readonly SemaphoreSlim dialogs = new(1);
+    private ContentDialog? activeExitDialog;
+    private bool resumePending, exitInterrupted;
+    private TaskCompletionSource resumeDone = CompletedDialog();
+    private static TaskCompletionSource CompletedDialog()
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        done.SetResult();
+        return done;
+    }
+    private Task<ResumeAnswer> ShowResumeAsync(ResumeInteraction interaction)
+    {
+        var result = new TaskCompletionSource<ResumeAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(() => _ = ShowResumeOnUiAsync(interaction, result)))
+            result.SetResult(ResumeAnswer.Unavailable);
+        return result.Task;
+    }
+    private async Task ShowResumeOnUiAsync(ResumeInteraction interaction, TaskCompletionSource<ResumeAnswer> result)
+    {
+        resumePending = true;
+        resumeDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (activeExitDialog is not null) { exitInterrupted = true; activeExitDialog.Hide(); }
+        try
+        {
+            await dialogs.WaitAsync();
+            try
+            {
+                Reopen(); // A required decision must not remain hidden in the tray/minimized window.
+                var dialog = new ContentDialog {
+                    XamlRoot = Navigation.XamlRoot,
+                    Title = "Continue interrupted backup?",
+                    Content = "Mirrorly found unfinished Backup work. Resume it, or continue without using that unfinished work. The Backup will not continue until you choose.",
+                    PrimaryButtonText = "Resume", SecondaryButtonText = "Don't resume", CloseButtonText = "Not now",
+                    DefaultButton = ContentDialogButton.Close
+                };
+                var answer = await dialog.ShowAsync();
+                result.TrySetResult(answer switch {
+                    ContentDialogResult.Primary => ResumeAnswer.Resume,
+                    ContentDialogResult.Secondary => ResumeAnswer.DeclineResume,
+                    _ => ResumeAnswer.Unavailable
+                });
+            }
+            finally { dialogs.Release(); }
+        }
+        catch (Exception) { result.TrySetResult(ResumeAnswer.Unavailable); }
+        finally { resumePending = false; resumeDone.TrySetResult(); }
+    }
     private async Task<bool> ConfirmAsync(string title, string content, string primary, string close)
     {
         await dialogs.WaitAsync();
@@ -117,19 +167,35 @@ public sealed partial class MainWindow : Window
         }
         finally { dialogs.Release(); }
     }
+    private async Task<bool> ConfirmExitAfterResumeAsync()
+    {
+        while (true)
+        {
+            await resumeDone.Task;
+            await dialogs.WaitAsync();
+            try
+            {
+                if (resumePending) continue;
+                Reopen();
+                exitInterrupted = false;
+                activeExitDialog = new ContentDialog { XamlRoot = Navigation.XamlRoot,
+                    Title = "Mirrorly is still working",
+                    Content = "Exit after the current operation finishes? Mirrorly will stay running until it has processed the result.",
+                    PrimaryButtonText = "Exit after it finishes", CloseButtonText = "Stay in Mirrorly",
+                    DefaultButton = ContentDialogButton.Close };
+                var answer = await activeExitDialog.ShowAsync();
+                if (!exitInterrupted) return answer == ContentDialogResult.Primary;
+            }
+            finally { activeExitDialog = null; dialogs.Release(); }
+        }
+    }
     private async Task ExitAsync()
     {
         if (exiting || exitDialog || session.ExitPending) return;
         exitDialog = true;
         try
         {
-            var done = await session.ExitAsync(async () =>
-            {
-                Reopen();
-                return await ConfirmAsync("Mirrorly is still working",
-                    "Exit after the current operation finishes? Mirrorly will stay running until it has processed the result.",
-                    "Exit after it finishes", "Stay in Mirrorly");
-            });
+            var done = await session.ExitAsync(ConfirmExitAfterResumeAsync);
             if (!done) return;
             exiting = true; tray?.Dispose(); Close(); Application.Current.Exit();
         }

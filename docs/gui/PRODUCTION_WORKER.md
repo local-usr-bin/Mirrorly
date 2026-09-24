@@ -1,12 +1,13 @@
-# Production Worker Contract v1 — Phase 4A
+# Production Worker Contract v1 — Phase 4B
 
 Current implementation / frozen contract, 2026-09-24. This is the current production
 IPC source of truth. [Phase 0 IPC_CONTRACT](IPC_CONTRACT.md) remains a historical
 proposal, not an implemented API. [Phase 2](PHASE2.md) completed shared application
 orchestration. Phase 3E connected real GUI Setup and a readonly durable task catalog.
-Phase 4A adds production `backup.run` and the required Resume interaction at the
-worker/client boundary. The Home `Back up now` button remains disabled; no GUI Backup
-execution exists yet. This is not production distribution readiness.
+Phase 4A added production `backup.run` and the required Resume interaction at the
+worker/client boundary. Phase 4B connects one real GUI-started Backup at a time,
+binds the Resume decision to the main window, and adds read-only `backup.summary`
+for authoritative saved-version rediscovery. This is not production distribution readiness.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
 Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
@@ -25,6 +26,8 @@ Phase 4A reuses the unchanged shared Backup transaction and the same mutation ga
   intent/approval and application success/decision/failure wire mapping.
 - [worker/backup.py](../../src/mirrorly/worker/backup.py): strict Backup intent and
   projection of the shared application transaction's known facts.
+- [worker/summary.py](../../src/mirrorly/worker/summary.py): bounded read-only
+  projection of lifecycle-authoritative latest complete snapshot facts.
 - [worker/transport.py](../../src/mirrorly/worker/transport.py): bounded output
   boundaries; only pumps perform protocol/diagnostic writes.
 - [worker/lifecycle.py](../../src/mirrorly/worker/lifecycle.py): Windows user/logon
@@ -34,8 +37,8 @@ Phase 4A reuses the unchanged shared Backup transaction and the same mutation ga
   separate C# client behind DesktopSession; ViewModels do not own processes.
 
 The Phase 1A worker, FakeWorkerClient and PrototypeConfiguration remain unchanged test infrastructure. Normal GUI runtime no longer starts them. The old fake interpreter still intentionally does not import core.
-There is no GUI Backup binding, verify/restore execution, progress, cancellation,
-queue, Activity, notification UX or stdio reattach. No application/core/CLI algorithm,
+There is no GUI FIFO queue, verify/restore execution, progress, cancellation,
+Activity persistence, completion notification UX or stdio reattach. No application/core/CLI Backup algorithm,
 configuration/repository format, version or dependency changed.
 
 ## Development launch, not deployment design
@@ -123,7 +126,7 @@ validated independently; invalid method input is a request rejection, not execut
 4. Only then can `request` messages be admitted.
 
 Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`,
-`setup.create`, `tasks.list`, `backup.run`.
+`setup.create`, `tasks.list`, `backup.run`, `backup.summary`.
 No repository.inspect was added. The bounded readonly tasks.list contract is specified in [PHASE3E](PHASE3E.md#durable-task-catalog). Unknown methods, including
 verify, restore, cancellation and test_crash, are rejected before application.
 
@@ -374,8 +377,9 @@ Request params contain exactly `config_root` (explicit absolute path), `task`
 (bounded array of strings). The worker builds `application.backup.BackupRequest`
 and calls the existing synchronous `run_backup`. It never accepts a client-selected
 baseline, snapshot/sequence ID, manifest, repository identity or change set.
-The C# production client exposes `BackupAsync`, but no ViewModel or Home command
-calls it. Current GUI Setup and catalog continue to use the same worker session.
+The C# production client exposes `BackupAsync`; Phase 4B's app-scoped GUI
+coordinator now calls it for one user-started Backup. Current GUI Setup and
+catalog continue to use the same worker session.
 
 Real Backup admission validates protocol/session/intent and slot, requires the
 stable lifecycle gate on the control thread, then allocates operation_id, emits
@@ -555,5 +559,45 @@ and the existing Phase 2 application tests. All production Backup integration
 fixtures use disposable test roots and the qualified worktree interpreter. They
 exercise first/incremental snapshots, Resume/Decline/unavailable, one-slot/gate,
 notice isolation, three commit states, post-publication failures, timeout and
-disconnect. The normal Home button remains disabled; these results do not prove
-GUI Backup UX, progress/cancellation, O-02 or O-09.
+disconnect. At the Phase 4A validation point the Home button was disabled;
+those historical results alone did not prove GUI Backup UX, progress/cancellation,
+O-02 or O-09.
+
+## Phase 4B GUI single-Backup binding
+
+The app-scoped [BackupExecutionCoordinator](../../desktop/Mirrorly.Desktop/Services/BackupExecutionCoordinator.cs)
+accepts one user-started task selector and owns the live GUI operation/result state.
+It sends one `backup.run` through the existing production session and does not
+queue or replay. `Running` and the indeterminate indicator mean only that the
+operation has not returned; no phase, percentage, item, byte or current-file fact
+is available. A second Backup action is unavailable until the current operation
+finishes. The approved automatic FIFO, queued state and removal are Phase 4C.
+
+The worker's `backup.resume` request is dispatched off the stdout reader to one
+main-window ContentDialog. The app restores a tray-hidden/minimized window before
+showing that required decision. `Resume`, `Don't resume` and unavailable map to
+the existing interaction responses; dialog failure or window loss does not mean
+decline. The worker's ten-minute deadline remains authoritative. Resume takes
+priority over true-Exit confirmation; confirmed Exit remains pending until the
+active operation and any required interaction finish, then supervises idle worker
+shutdown. Close X and Minimize continue the operation.
+
+Read-only `backup.summary` takes only the explicit GUI config root and task
+selector. The Python application resolves the repository afresh and uses
+`latest_complete()` rather than list display order. The result gives the actual
+repository identity and, when present, saved snapshot ID, creation time,
+lifecycle sequence and existing snapshot directory. C# does not reconstruct
+snapshot paths or parse task TOML. On fresh launch Home can rediscover a saved
+version without inventing Activity or claiming that the source is unchanged.
+Home can open only the Python-provided existing snapshot path in File Explorer.
+
+Live terminal presentation distinguishes normal success, completed with issues,
+`not_published`, application `unknown`, `published` with finalization failure,
+and no-terminal transport uncertainty. A complete snapshot is a saved-version
+fact, not proof that report/finalization succeeded or that the source is current.
+An unknown or unreported outcome blocks further GUI-started Backup until a
+separate future reconciliation flow; no retry is automatic. See
+[Phase 4B acceptance](PHASE4B.md) for validation and remaining scope. Final
+manual acceptance is PASS: the user verified the real single-Backup loop,
+fresh-process saved-version rediscovery, and Windows Explorer opening the exact
+Python-provided snapshot folder containing the expected saved files.

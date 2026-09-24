@@ -98,6 +98,13 @@ def test_real_first_and_incremental_backup_over_production_stdio(tmp_path, inten
         assert facts["commit_state"] == "published" and facts["lifecycle_seq"] == 0
         assert facts["materialization"]["copied"] == 2
         first_id = facts["snapshot_id"]
+        peer.send(
+            "backup.summary", {"config_root": intent["config_root"], "task": intent["task_name"]}
+        )
+        assert peer.receive()["payload"]["phase"] == "accepted"
+        saved = peer.receive()["payload"]["result"]["summary"]["latest_complete"]
+        assert saved["snapshot_id"] == first_id
+        assert saved["snapshot_path"] == str(repo.path / "snapshots" / first_id)
         assert (repo.path / "snapshots" / first_id / "alpha.txt").read_bytes() == b"alpha"
         assert Path(facts["report_path"]).is_file()
         report = json.loads(Path(facts["report_path"]).read_text(encoding="utf-8"))
@@ -110,6 +117,12 @@ def test_real_first_and_incremental_backup_over_production_stdio(tmp_path, inten
         current = second["payload"]["result"]["facts"]
         assert current["commit_state"] == "published" and current["lifecycle_seq"] == 1
         assert current["snapshot_id"] != first_id
+        peer.send(
+            "backup.summary", {"config_root": intent["config_root"], "task": intent["task_name"]}
+        )
+        assert peer.receive()["payload"]["phase"] == "accepted"
+        latest = peer.receive()["payload"]["result"]["summary"]["latest_complete"]
+        assert latest["snapshot_id"] == current["snapshot_id"]
         assert current["changes"]["added"] == 1 and current["changes"]["modified"] == 1
         assert current["materialization"]["linked"] == 1
         assert (repo.path / "snapshots" / current["snapshot_id"] / "new.txt").read_bytes() == b"new"

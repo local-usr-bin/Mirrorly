@@ -24,6 +24,15 @@ class NoCompleteSnapshot(Exception):
     """No default/all complete target; the frontend supplies operation-specific wording."""
 
 
+@dataclass(frozen=True)
+class SavedBackupSummary:
+    """Current repository observation, not source freshness or prior finalization."""
+
+    context: TaskRepository
+    latest: ManifestSummary | None
+    snapshot_path: Path | None
+
+
 def resolve_task_repository(config_root: str | Path, task: str | None = None) -> TaskRepository:
     """Keep the original task -> repository order and caller-relative paths.
 
@@ -44,3 +53,16 @@ def list_snapshots(context: TaskRepository) -> tuple[ManifestSummary, ...]:
 def latest_complete(repo: RepoInfo) -> ManifestSummary | None:
     """Existing default selection; multiple legacy completes remain ambiguous."""
     return select_default_complete(list_manifests(repo))
+
+
+def saved_backup_summary(config_root: str | Path, task: str) -> SavedBackupSummary:
+    """Resolve identity and select the authoritative complete snapshot afresh."""
+
+    context = resolve_task_repository(config_root, task)
+    latest = latest_complete(context.repo)
+    candidate = context.repo.path / "snapshots" / latest.snapshot_id if latest else None
+    return SavedBackupSummary(
+        context,
+        latest,
+        candidate if candidate is not None and candidate.is_dir() else None,
+    )

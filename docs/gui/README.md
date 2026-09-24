@@ -3,15 +3,16 @@
 > Phase 0 历史快照：2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
 > 当时 GUI、worker、共享 application service 均尚未实现；下文保留该阶段的产品边界与契约提案。当前实施状态见下方更新。
 
-**当前实施状态（2026-09-24）**：[Phase 3E real Setup closed loop](PHASE3E.md) connects WinUI Setup to production preflight/create and a durable Python-owned GUI task catalog. Home uses real configurations; setup creates no snapshot. Back up now remains unavailable. No progress/cancel/Resume, Activity persistence or Backup queue; O-09 remains open.
+**当前实施状态（2026-09-24）**：[Phase 4B single-Backup GUI loop](PHASE4B.md) 已通过最终人工验收（PASS）：Home 通过 production IPC 执行真实 Backup，重启后从 Python 重新发现已保存版本，File Explorer 已人工确认打开 Python 提供的准确快照目录；Resume 是明确的 GUI 决策。仅 Setup 不创建快照。自动 FIFO、进度、取消和持久 Activity 仍未实现；O-02 和 O-09 仍待决。
 
-Phase 1A–1C documents preserve their reviewed historical prototype results. [Phase 2](PHASE2.md) completed shared application extraction; the current [production contract](PRODUCTION_WORKER.md) records Phase 3B–3E. Fake worker and fixtures remain test/design infrastructure, not normal runtime data.
+Phase 1A–1C documents preserve their reviewed historical prototype results. [Phase 2](PHASE2.md) completed shared application extraction; the current [production contract](PRODUCTION_WORKER.md) records the implemented worker/GUI bridge. Fake worker and fixtures remain test/design infrastructure, not normal runtime data.
 
 ## 阅读顺序与状态标记
 
 | 文档 | 内容 |
 | --- | --- |
-| [PRODUCTION_WORKER](PRODUCTION_WORKER.md) | 当前生产 v1 contract、只读 bridge、gate、setup.create 与 partial outcomes |
+| [PRODUCTION_WORKER](PRODUCTION_WORKER.md) | 当前生产 v1 contract、gate、setup.create、backup.run、Resume 与 saved-version query |
+| [PHASE4B](PHASE4B.md) | 首次真实 GUI 单 Backup 执行、结果呈现及验收 |
 | [CONFIGURATION](CONFIGURATION.md) | O-07 已批准归属、集中路径 provider、Python task truth 与 CLI 共存 |
 | [ARCHITECTURE](ARCHITECTURE.md) | GUI-ADR-001、分层、运行时、Backup/repository、Restore v1、未来目录 |
 | [OPERATIONS](OPERATIONS.md) | operation/result、health、queue、progress、cancellation/Exit 状态机 |
@@ -47,14 +48,14 @@ Phase 1A–1C documents preserve their reviewed historical prototype results. [P
 
 | ID | OPEN DECISION | 何时必须解决 |
 | --- | --- | --- |
-| O-01 | APPROVED policy：确认 Exit 后清空等待队列，监督当前 operation 完成再退出；v1 不支持撤回已确认 Exit | Phase 3E 已实现当前 Setup/catalog 的监督退出；尚无 Backup FIFO，见 [production contract](PRODUCTION_WORKER.md) |
+| O-01 | APPROVED policy：确认 Exit 后清空等待队列，监督当前 operation 完成再退出；v1 不支持撤回已确认 Exit | Phase 4B 已扩展到单个真实 Backup；尚无 Backup FIFO，见 [production contract](PRODUCTION_WORKER.md) |
 | O-02 | 取消 checkpoint、publication 不可取消区、finalizing 策略、restore 部分写入提示的详细提案 | 单独的安全关键 cancellation 任务前 |
-| O-03 | APPROVED：stdio v1、无 reattach；idle 失联退出，active 非交互收尾；必需交互不可用则在该边界结束 | Phase 3D setup.create 已接入 ownership guard，并验证失联时持有至执行/收尾结束；交互尚未实现 |
+| O-03 | APPROVED：stdio v1、无 reattach；idle 失联退出，active 非交互收尾；必需交互不可用则在该边界结束 | Phase 4A/4B 已实现 Backup Resume 的失联不可用语义与 GUI 决策入口 |
 | O-04 | APPROVED：全部 application operation 共用 worker execution slot | Phase 3B 已实现 slot；不替代 GUI FIFO，不解决外部 CLI 竞争 |
 | O-05 | GUI 最低 Windows build/edition、Windows 10 支持范围、首发 CPU 架构；开发工具版本组合 | 创建正式工程前确认开发目标，发布前验证完整支持矩阵 |
 | O-06 | Packaged/MSIX 或 unpackaged；Python 分发形式、runtime 依赖、签名与更新方案 | Phase 1 明确开发形态；生产分发另行 review |
 | O-07 | APPROVED v1：独立 per-user machine-local GUI config root；Python 独占 TOML 业务语义；不自动导入 CLI tasks | Phase 3C provider 已实现；registry/GUI preferences persistence 与显式 import 另行设计，见 [CONFIGURATION](CONFIGURATION.md) |
-| O-08 | Resume 十分钟期限和 unavailable 中止已批准但未实现；`older`、legacy/非 NTFS 的正式入口仍 OPEN | 对应真实能力上线前；不自动同意，也不把失联转换为拒绝续传后继续 |
+| O-08 | Resume 十分钟期限和 unavailable 中止已实现；`older`、legacy/非 NTFS 的正式入口仍 OPEN | 不自动同意，也不把失联转换为拒绝续传后继续 |
 | O-09 | **最终 Python worker distribution / packaging strategy**：A. 保留 MSIX/package identity，使用 Windows Application Packaging Project 或经验证的其他官方多 executable 方案；B. unpackaged/self-contained WinUI + 传统 installer/deployment | 捆绑生产 Python worker、冻结 installer 或宣称可分发前；两候选均未批准，见 [架构约束](ARCHITECTURE.md#python-worker-分发与打包open-decision-o-09)；O-06 的 worker 分发问题在此具体登记 |
 
 IPC 字段、进度阶段、活动存储限额和 source tree 都是 PROPOSED DESIGN，可在 review 中调整；这不重开已批准技术路线。Phase 0 时未附图；用户随后提供 v0，再提供 **Mirrorly GUI Visual Baseline v1**。v1 现为最高优先级视觉参考，取代 v0；不要求逐像素照抄。Phase 1B visual fidelity pass 的实际截图与回归记录见 [PHASE1B](PHASE1B.md#visual-fidelity-pass--baseline-v1)。

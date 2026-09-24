@@ -7,7 +7,7 @@
    <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}" VerticalAlignment="Center">
     <TextBlock Text="Home" Style="{StaticResource MirrorlyPageTitle}"/>
     <TextBlock Text="A little peace of mind for your everyday files." Style="{StaticResource MirrorlySecondary}"/>
-    <TextBlock Text="Configured backups · Backup execution is not available yet" Style="{StaticResource MirrorlyCaption}"/>
+    <TextBlock Text="Configured backups · saved versions are shown from Mirrorly" Style="{StaticResource MirrorlyCaption}"/>
    </StackPanel>
    <Border x:Name="HeaderDecoration" Grid.Column="1"><components:SpringSprig AssetName="spring-sprig-header" Style="{StaticResource MirrorlyHeaderDecoration}"/></Border>
   </Grid>
@@ -41,10 +41,10 @@
       </Grid>
       <TextBlock Text="{Binding Status.Detail}" Style="{StaticResource MirrorlyBody}"/>
       <TextBlock Text="{Binding Status.NextStep}" Style="{StaticResource MirrorlySecondary}"/>
-      <ProgressBar x:Name="Progress" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Preparing backup, sample progress"/>
+      <ProgressBar x:Name="Progress" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Backup is running; progress amount is unavailable"/>
      </StackPanel>
      <StackPanel x:Name="StatusActions" Grid.Column="1" VerticalAlignment="Center" Spacing="{StaticResource MirrorlyControlSpacing}">
-      <Button x:Name="PrimaryAction" ToolTipService.ToolTip="Backup execution is not available in this version." AutomationProperties.HelpText="Backup execution is not available in this version." Click="Primary_Click" Style="{StaticResource MirrorlyPrimaryButton}" HorizontalAlignment="Stretch">
+      <Button x:Name="PrimaryAction" Click="Primary_Click" Style="{StaticResource MirrorlyPrimaryButton}" HorizontalAlignment="Stretch">
        <TextBlock Text="{Binding Status.Action}" TextWrapping="Wrap"/>
       </Button>
       <Button x:Name="DetailsAction" Content="View details" Click="Details_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Stretch"/>

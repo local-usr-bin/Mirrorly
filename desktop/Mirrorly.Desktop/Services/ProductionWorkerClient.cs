@@ -142,6 +142,8 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> BackupAsync(BackupRunInput request) => RequestAsync("backup.run", request);
     public Task<WorkerRequest> BackupAsync(GuiDataPaths paths, BackupRunIntent intent) => BackupAsync(
         new BackupRunInput(paths.TaskConfigRoot, intent.task, intent.dry_run, intent.full_hash, intent.exclude ?? []));
+    public Task<WorkerRequest> BackupSummaryAsync(GuiDataPaths paths, string selector) =>
+        RequestAsync("backup.summary", new { config_root = paths.TaskConfigRoot, task = selector });
 
     internal static string AllocateRequestId(ref ulong highest)
     {
@@ -151,7 +153,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
-        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run");
+        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run" or "backup.summary");
     }
 
     private async Task<WorkerRequest> SendAsync(string kind, object payload, bool application = false)

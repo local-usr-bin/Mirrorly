@@ -235,6 +235,7 @@ static class ProductionWorkerTests
         await ProductionSetupTests.Run(test, check, launch);
         await DesktopFlowTests.Run(test, check, launch);
         await ProductionBackupTests.Run(test, check, launch);
+        await BackupGuiFlowTests.Run(test, check, launch);
     }
 
     static SetupPreflightInput Input(string directory) => new("documents", Path.Combine(directory, "source"), Path.Combine(directory, "target"), Path.Combine(directory, "config"));

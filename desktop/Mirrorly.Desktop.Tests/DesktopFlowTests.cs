@@ -157,10 +157,25 @@ sealed class FakeDesktopSession : IDesktopSession, ISetupApi
     public SetupPreflightIntent? LastIntent;
     public Exception? CreateError;
     public TaskCompletionSource<JsonElement>? Barrier;
+    public TaskCompletionSource<WorkerReply>? BackupBarrier;
+    public Exception? BackupError;
+    public Queue<WorkerReply> BackupReplies { get; } = new();
+    public int BackupCalls { get; private set; }
+    public string? LastBackupSelector { get; private set; }
+    public BackupCatalog Catalog { get; set; } = new([], []);
+    public Dictionary<string, SavedBackupSummary> Summaries { get; } = new();
     public async Task RunAsync(Func<ISetupApi, Task> action) { if (Busy || ExitPending) throw new InvalidOperationException(); Busy = true; Changed?.Invoke(); try { await action(this); } finally { Busy = false; Changed?.Invoke(); } }
     public Task<JsonElement> PreflightAsync(SetupPreflightIntent intent) { Checks++; LastIntent = intent; return Task.FromResult(Preflight); }
     public Task<JsonElement> CreateAsync(SetupCreateIntent intent) { Creates++; Approvals.Add(intent.copy_mode_approved); return CreateError is not null ? Task.FromException<JsonElement>(CreateError) : Barrier?.Task ?? Task.FromResult(Replies.Count > 0 ? Replies.Dequeue() : Success()); }
-    public Task<BackupCatalog> CatalogAsync() => Task.FromResult(new BackupCatalog([], []));
+    public Task<BackupCatalog> CatalogAsync() => Task.FromResult(Catalog);
+    public Task<SavedBackupSummary> BackupSummaryAsync(string selector) => Task.FromResult(
+        Summaries.TryGetValue(selector, out var saved) ? saved : new(selector, "configured repo", "repo-id", null, null, null, null));
+    public Task<WorkerReply> BackupAsync(string selector)
+    {
+        BackupCalls++; LastBackupSelector = selector;
+        return BackupError is not null ? Task.FromException<WorkerReply>(BackupError) :
+            BackupBarrier?.Task ?? Task.FromResult(BackupReplies.Dequeue());
+    }
     public Task<bool> ExitAsync(Func<Task<bool>> confirm) { ExitPending = true; return Task.FromResult(true); }
     public static JsonElement Check(bool approval = false, bool problem = false) => JsonSerializer.SerializeToElement(new { phase = "terminal", error = (object?)null, result = new { outcome = "succeeded", preflight = new { repository_path = @"X:\authoritative", copy_mode_approval_required = approval, problem = problem ? new { stage = "inputs" } : null } } });
     public static JsonElement Success() => JsonSerializer.SerializeToElement(new { phase = "terminal", error = (object?)null, result = new { outcome = "succeeded", setup = new { repository_initialized = true, config_written = true } } });
