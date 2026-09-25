@@ -19,6 +19,7 @@ public sealed partial class MainWindow : Window
     private int flourishGeneration;
     private readonly HomeView home;
     private readonly BackupsView backups;
+    private readonly BackupDetailView detail;
     private readonly BackupSetupView setup;
     private TrayService? tray;
     private bool exiting;
@@ -32,7 +33,8 @@ public sealed partial class MainWindow : Window
         backup = new(session);
         session.ResumeResponder = backup.ResolveResumeAsync;
         backup.ResumePrompt = ShowResumeAsync;
-        home = new(session, backup); backups = new(home.Model, session); setup = new(session);
+        home = new(session, backup); backups = new(home.Model, session);
+        detail = new(home.Model, session); setup = new(session);
         setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
         setup.ConfirmCopy = () => ConfirmAsync("Use full-file copies?",
@@ -42,7 +44,13 @@ public sealed partial class MainWindow : Window
         Navigation.ExpandedModeThresholdWidth = HomePolicy.ExpandedNavigationAt;
         Navigation.CompactModeThresholdWidth = HomePolicy.CompactNavigationAt;
         home.Navigate += Navigate;
+        home.ViewBackupRequested += NavigateBackupDetail;
         backups.Navigate += Navigate;
+        backups.ViewBackupRequested += NavigateBackupDetail;
+        detail.ReturnRequested += selector => {
+            Navigate(ShellPage.Backups);
+            DispatcherQueue.TryEnqueue(() => backups.FocusViewAction(selector));
+        };
         setup.Navigate += Navigate;
         setup.StepChanged += () => DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
         home.DecorationChanged += _ => UpdateShellLayout();
@@ -263,6 +271,7 @@ public sealed partial class MainWindow : Window
         shell.Navigate(page);
         PageHost.Content = page == ShellPage.Home ? home :
             page == ShellPage.Backups ? backups :
+            page == ShellPage.BackupDetail ? detail :
             page == ShellPage.BackupSetup ? setup :
 #if DEBUG
             page == ShellPage.Diagnostics ? diagnostics :
@@ -271,7 +280,7 @@ public sealed partial class MainWindow : Window
         if (page == ShellPage.Settings) Navigation.SelectedItem = Navigation.SettingsItem;
         else
         {
-            var tag = page == ShellPage.BackupSetup ? ShellPage.Backups : page;
+            var tag = shell.TopLevelPage;
             var selected = Navigation.MenuItems.Concat(Navigation.FooterMenuItems)
                 .OfType<NavigationViewItem>().FirstOrDefault(item => item.Tag?.ToString() == tag.ToString());
             // Setup belongs under Backups without replacing the active setup view.
@@ -282,6 +291,12 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
         if (Navigation.DisplayMode != NavigationViewDisplayMode.Expanded) Navigation.IsPaneOpen = false;
         UpdateShellLayout();
+    }
+    private void NavigateBackupDetail(string selector)
+    {
+        detail.Select(selector);
+        Navigate(ShellPage.BackupDetail);
+        DispatcherQueue.TryEnqueue(detail.FocusReturnAction);
     }
     private bool suppressSelection;
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

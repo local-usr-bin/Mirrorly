@@ -7,7 +7,9 @@ namespace Mirrorly.Desktop.ViewModels;
 public sealed class HomeViewModel : INotifyPropertyChanged
 {
     private readonly BackupExecutionCoordinator? execution;
+    private readonly Dictionary<string, ConfiguredBackup> configured = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SavedBackupSummary> saved = new();
+    private readonly Dictionary<string, string> summaryProblems = new(StringComparer.Ordinal);
     private string catalogDetails = "";
     private string catalogProblem = "";
     private string presentationDetails = "";
@@ -62,13 +64,18 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         {
             var catalog = await api.CatalogAsync();
             var found = new Dictionary<string, SavedBackupSummary>();
+            var summaryErrors = new Dictionary<string, string>(StringComparer.Ordinal);
             var problems = new List<string>(catalog.Problems);
             foreach (var task in catalog.Tasks)
             {
                 try { found[task.Selector] = await api.BackupSummaryAsync(task.Selector); }
-                catch (Exception error) { problems.Add($"Saved Backup summary for {task.Selector}: {error}"); }
+                catch (Exception error)
+                {
+                    summaryErrors[task.Selector] = error.ToString();
+                    problems.Add($"Saved Backup summary for {task.Selector}: {error}");
+                }
             }
-            ApplyCatalog(new(catalog.Tasks, problems), found);
+            ApplyCatalog(new(catalog.Tasks, problems), found, summaryErrors);
         }
         catch (Exception error) { Unavailable(error); }
     }
@@ -78,11 +85,16 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         catalogProblem = "Mirrorly couldn't refresh your configured backups. View technical details, then use Refresh to try reading again.";
         TechnicalDetails = error.ToString(); UpdateStatus();
     }
-    public void ApplyCatalog(BackupCatalog catalog, IReadOnlyDictionary<string, SavedBackupSummary>? summaries = null)
+    public void ApplyCatalog(BackupCatalog catalog, IReadOnlyDictionary<string, SavedBackupSummary>? summaries = null,
+        IReadOnlyDictionary<string, string>? errors = null)
     {
         DesignPreview = false; Loaded = true;
+        configured.Clear();
+        foreach (var task in catalog.Tasks) configured[task.Selector] = task;
         saved.Clear();
         if (summaries is not null) foreach (var pair in summaries) saved[pair.Key] = pair.Value;
+        summaryProblems.Clear();
+        if (errors is not null) foreach (var pair in errors) summaryProblems[pair.Key] = pair.Value;
         if (selectedSelector is null || !catalog.Tasks.Any(t => t.Selector == selectedSelector))
             selectedSelector = catalog.Tasks.FirstOrDefault()?.Selector;
         catalogProblem = catalog.Problems.Count == 0 ? "" : "Some Backup configurations or saved versions couldn't be read. They have not been repaired. View technical details.";
@@ -100,6 +112,35 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         }).ToArray();
         Fixture = new(CurrentStatus(cards), cards, []);
         UpdateStatus();
+    }
+    public BackupOverviewPresentation Overview(string selector)
+    {
+        if (!Loaded)
+            return new(catalogProblem.Length > 0 ? BackupOverviewAvailability.CatalogUnavailable : BackupOverviewAvailability.Loading,
+                "Backup unavailable", "", "", null,
+                "Saved versions unavailable", "Configured backups unavailable", StatusTone.Warning,
+                BackupTaskRunState.Idle, false, "Mirrorly couldn't refresh your configured backups.", TechnicalDetails);
+        if (!configured.TryGetValue(selector, out var task))
+            return new(BackupOverviewAvailability.Missing, "Backup not found", "", "", null,
+                "Saved versions unavailable", "Backup no longer configured", StatusTone.Warning,
+                BackupTaskRunState.Idle, false, "This Backup is no longer in the configured task catalog.", catalogDetails);
+        saved.TryGetValue(selector, out var summary);
+        var card = AllBackups.First(b => b.Id == selector);
+        var state = RunState(selector);
+        var summaryUnavailable = summary is null;
+        var queuePaused = execution is { QueueAttention: not BackupQueueAttention.None };
+        var attention = queuePaused ? Problem : summaryUnavailable
+            ? "Mirrorly couldn't read the repository or saved-version summary. No saved-version count is known."
+            : "";
+        var operation = queuePaused ? execution?.Result?.TechnicalDetails : execution?.ResultFor(selector)?.TechnicalDetails;
+        summaryProblems.TryGetValue(selector, out var summaryError);
+        return new(summaryUnavailable ? BackupOverviewAvailability.SummaryUnavailable : BackupOverviewAvailability.Available,
+            task.Name, task.Source, task.BackupLocation ?? "Backup location unavailable",
+            summary?.RepositoryPath,
+            summaryUnavailable ? "Saved versions unavailable" : summary!.SnapshotId is null
+                ? "No saved versions yet" : HomePolicy.FormatSavedVersionTime(summary.CreatedAt),
+            card.Status, card.Tone, state, CanBackUpTask(selector), attention,
+            string.Join("\n", new[] { summaryError, operation }.Where(s => !string.IsNullOrWhiteSpace(s))));
     }
     private StatusPresentation CurrentStatus(IReadOnlyList<BackupPresentation> cards)
     {

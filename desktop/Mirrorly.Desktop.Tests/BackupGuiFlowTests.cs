@@ -152,6 +152,11 @@ static class BackupGuiFlowTests
                 await home.RefreshAsync(session);
                 check(home.CanBackUp && home.Backups.Single().LastBackup == "Not checked" &&
                     home.Backups.Single().LastBackupLabel == "Last backup:");
+                var overview = home.Overview("documents");
+                check(overview.Source == Path.Combine(root, "source") &&
+                    overview.BackupLocation == Path.Combine(root, "target") &&
+                    overview.RepositoryPath == Path.Combine(root, "target", "MirrorlyRepo") &&
+                    overview.SavedVersion == "No saved versions yet");
                 await home.BackUpNowAsync("documents");
                 check(coordinator.Result?.CommitState == "published" && home.Status.Title == "Backup completed" &&
                     home.Backups.Single().SavedSnapshotPath is not null && home.Activity.Count == 0 &&

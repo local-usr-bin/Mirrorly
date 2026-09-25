@@ -4,7 +4,8 @@ using System.Text.Json;
 
 namespace Mirrorly.Desktop.Services;
 
-public sealed record ConfiguredBackup(string Selector, string ConfigPath, string Name, string Source, string RepositoryPath);
+public sealed record ConfiguredBackup(string Selector, string ConfigPath, string Name, string Source,
+    string RepositoryPath, string? BackupLocation = null);
 public sealed record BackupCatalog(IReadOnlyList<ConfiguredBackup> Tasks, IReadOnlyList<string> Problems);
 public sealed record SavedBackupSummary(string Selector, string RepositoryPath, string RepositoryId,
     string? SnapshotId, string? CreatedAt, long? LifecycleSequence, string? SnapshotPath);
@@ -129,7 +130,8 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
                 if (entry.GetProperty("task").ValueKind == JsonValueKind.Null) { problems.Add(entry.ToString()); continue; }
                 var task = entry.GetProperty("task");
                 entries.Add(new(entry.GetProperty("selector").GetString()!, entry.GetProperty("config_path").GetString()!,
-                    task.GetProperty("name").GetString()!, task.GetProperty("source").GetString()!, task.GetProperty("configured_repository_path").GetString()!));
+                    task.GetProperty("name").GetString()!, task.GetProperty("source").GetString()!,
+                    task.GetProperty("configured_repository_path").GetString()!, task.GetProperty("target").GetString()!));
             }
             var next = page.GetProperty("next_after").GetString();
             if (next is not null && after is not null && CompareCatalogCursor(next, after) <= 0)

@@ -11,6 +11,7 @@ public sealed partial class HomeView : UserControl
 {
     public HomeViewModel Model { get; }
     public event Action<ShellPage>? Navigate;
+    public event Action<string>? ViewBackupRequested;
     public event Action<bool>? DecorationChanged;
     private readonly IDesktopSession session;
     public HomeView(IDesktopSession session, BackupExecutionCoordinator execution)
@@ -42,6 +43,7 @@ public sealed partial class HomeView : UserControl
             var summary = new BackupSummary(backup, Model.CompactBackups, Model.DesignPreview,
                 Model.CanBackUpTask(backup.Id), Model.RunState(backup.Id));
             summary.PreviewAction += Model.ShowPrototypeAction;
+            summary.ViewRequested += selector => ViewBackupRequested?.Invoke(selector);
             summary.BackupRequested += selector => _ = Model.BackUpNowAsync(selector);
             summary.RemoveQueuedRequested += selector => Model.RemoveFromQueue(selector);
             summary.OpenRequested += OpenSnapshot;

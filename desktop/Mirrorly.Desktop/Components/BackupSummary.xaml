@@ -30,7 +30,7 @@
      <Button x:Name="BackupNow" Click="Backup_Click" Style="{StaticResource MirrorlyPrimaryButton}"><TextBlock x:Name="BackupNowLabel" Text="Back up now" TextWrapping="Wrap"/></Button>
      <Button x:Name="RemoveQueued" Content="Remove from queue" Click="RemoveQueued_Click" Style="{StaticResource MirrorlySecondaryButton}" Visibility="Collapsed"/>
      <Button x:Name="Explorer" Click="Explorer_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="Open in File Explorer" TextWrapping="Wrap"/></Button>
-     <Button Click="View_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="View backup" TextWrapping="Wrap"/></Button>
+     <Button x:Name="ViewBackup" Click="View_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="View backup" TextWrapping="Wrap"/></Button>
     </StackPanel>
    </StackPanel>
   </Grid>

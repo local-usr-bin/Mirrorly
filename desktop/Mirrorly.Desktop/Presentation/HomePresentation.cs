@@ -1,18 +1,23 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Mirrorly.Desktop.Services;
 
 namespace Mirrorly.Desktop.Presentation;
 
 // Display-only records; none authorize or execute operations.
 public enum HomeScenario { Healthy, DestinationUnavailable, Failed, CompletedWithIssues, FinalizationProblem, Running, Queued, TwoBackups, ThreeBackups, ManyBackups, Empty, LongPath }
 public enum StatusTone { Success, Warning, Error, Working, Neutral }
-public enum ShellPage { Home, Backups, Restore, Activity, Settings, BackupSetup, Diagnostics }
+public enum ShellPage { Home, Backups, Restore, Activity, Settings, BackupSetup, BackupDetail, Diagnostics }
 public enum PlantPlacement { Hidden, Compact, Expanded }
 public record StatusPresentation(string Title, string Detail, string NextStep, string Action, StatusTone Tone, string Symbol, bool Busy = false);
 public record BackupPresentation(string Id, string Name, string Source, string Destination, string LastBackup, string Status, StatusTone Tone, int Recency, string? SavedSnapshotPath = null, string LastBackupLabel = "Last backup:", DateTimeOffset? SavedVersionCreatedAt = null)
 {
     public bool NeedsAttention => Tone is StatusTone.Warning or StatusTone.Error;
 }
+public enum BackupOverviewAvailability { Loading, Missing, CatalogUnavailable, SummaryUnavailable, Available }
+public record BackupOverviewPresentation(BackupOverviewAvailability Availability, string Name, string Source,
+    string BackupLocation, string? RepositoryPath, string SavedVersion, string Status, StatusTone Tone,
+    BackupTaskRunState RunState, bool CanBackUp, string Attention, string TechnicalDetails);
 public record ActivityPresentation(string Title, string Backup, string When, StatusTone Tone = StatusTone.Success)
 {
     public string Symbol => Tone switch { StatusTone.Warning => "⚠", StatusTone.Error => "⊗", _ => "✓" };

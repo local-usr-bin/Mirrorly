@@ -7,6 +7,9 @@ FIFO queues other configured Backups while one runs. The worker retains one
 execution slot and no Backup queue. There is no verify/restore GUI, progress,
 cancellation or persistent Activity. See [PHASE4C](../docs/gui/PHASE4C.md) for
 the accepted FIFO and development smoke results.
+The complete Backups collection opens a selector-specific read-only Overview using
+the existing task catalog and authoritative latest-saved summary. It shares the
+same Backup coordinator; the snapshot collection remains a later query/UI batch.
 
 One app-owned DesktopSession starts the qualified mirrorly-gui-dev interpreter lazily.
 FakeWorkerClient, phase1a_worker and fixtures remain tests/design infrastructure only.

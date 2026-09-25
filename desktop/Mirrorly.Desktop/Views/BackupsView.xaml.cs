@@ -15,6 +15,7 @@ public sealed partial class BackupsView : UserControl
     private readonly HomeViewModel model;
     private readonly IDesktopSession session;
     public event Action<ShellPage>? Navigate;
+    public event Action<string>? ViewBackupRequested;
 
     public BackupsView(HomeViewModel model, IDesktopSession session)
     {
@@ -48,10 +49,18 @@ public sealed partial class BackupsView : UserControl
             summary.RemoveQueuedRequested += selector => model.RemoveFromQueue(selector);
             summary.OpenRequested += OpenSnapshot;
             summary.PreviewAction += model.ShowPrototypeAction;
+            summary.ViewRequested += selector => ViewBackupRequested?.Invoke(selector);
             Backups.Children.Add(summary);
         }
         if (focused.Action is { } action)
             Backups.Children.OfType<BackupSummary>().FirstOrDefault(card => card.Selector == focused.Selector)?.RestoreFocus(action);
+    }
+    public void FocusViewAction(string selector)
+    {
+        if (Backups.Children.OfType<BackupSummary>().FirstOrDefault(card => card.Selector == selector) is { } card)
+            card.RestoreFocus(BackupCardFocus.View);
+        else
+            SetupAction.Focus(FocusState.Programmatic);
     }
 
     private void OpenSnapshot(string path)

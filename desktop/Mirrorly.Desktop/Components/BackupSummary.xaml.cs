@@ -1,33 +1,39 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Mirrorly.Desktop.Presentation;
 using Mirrorly.Desktop.Services;
 namespace Mirrorly.Desktop.Components;
-public enum BackupCardFocus { Card, Backup, RemoveQueued, Explorer }
+public enum BackupCardFocus { Card, Backup, RemoveQueued, Explorer, View }
 public sealed partial class BackupSummary : UserControl
 {
     public event Action<string>? PreviewAction;
     public event Action<string>? BackupRequested;
     public event Action<string>? RemoveQueuedRequested;
     public event Action<string>? OpenRequested;
+    public event Action<string>? ViewRequested;
     private readonly BackupPresentation model;
+    private readonly bool designPreview;
     public string Selector => model.Id;
     public BackupCardFocus? FocusedAction =>
         FocusState != FocusState.Unfocused ? BackupCardFocus.Card :
         BackupNow.FocusState != FocusState.Unfocused || CompactBackupNow.FocusState != FocusState.Unfocused ? BackupCardFocus.Backup :
         RemoveQueued.FocusState != FocusState.Unfocused || CompactRemoveQueued.FocusState != FocusState.Unfocused ? BackupCardFocus.RemoveQueued :
-        Explorer.FocusState != FocusState.Unfocused || CompactExplorer.FocusState != FocusState.Unfocused ? BackupCardFocus.Explorer : null;
+        Explorer.FocusState != FocusState.Unfocused || CompactExplorer.FocusState != FocusState.Unfocused ? BackupCardFocus.Explorer :
+        ViewBackup.FocusState != FocusState.Unfocused || CompactView.FocusState != FocusState.Unfocused ? BackupCardFocus.View : null;
     public void RestoreFocus(BackupCardFocus action)
     {
         var backup = CompactLayout.Visibility == Visibility.Visible ? CompactBackupNow : BackupNow;
         var remove = CompactLayout.Visibility == Visibility.Visible ? CompactRemoveQueued : RemoveQueued;
         var explorer = CompactLayout.Visibility == Visibility.Visible ? CompactExplorer : Explorer;
+        ButtonBase view = CompactLayout.Visibility == Visibility.Visible ? CompactView : ViewBackup;
         var preferred = action switch
         {
             BackupCardFocus.Backup => backup,
             BackupCardFocus.RemoveQueued => remove,
             BackupCardFocus.Explorer => explorer,
+            BackupCardFocus.View => view,
             _ => null
         };
         if (preferred is { IsEnabled: true, Visibility: Visibility.Visible } && preferred.Focus(FocusState.Programmatic)) return;
@@ -42,6 +48,7 @@ public sealed partial class BackupSummary : UserControl
         bool canBackUp = false, BackupTaskRunState runState = BackupTaskRunState.Idle)
     {
         this.model = model;
+        this.designPreview = designPreview;
         InitializeComponent();
         DataContext = model;
         BackupNow.IsEnabled = CompactBackupNow.IsEnabled = canBackUp && !designPreview;
@@ -51,10 +58,7 @@ public sealed partial class BackupSummary : UserControl
         RemoveQueued.Visibility = CompactRemoveQueued.Visibility = runState == BackupTaskRunState.Queued && !designPreview
             ? Visibility.Visible : Visibility.Collapsed;
         Explorer.IsEnabled = CompactExplorer.IsEnabled = model.SavedSnapshotPath is not null && !designPreview;
-        foreach (var button in Actions.Children.OfType<Button>())
-            if (button != BackupNow && button != Explorer) button.IsEnabled = designPreview;
-        CompactView.IsEnabled = designPreview;
-        ToolTipService.SetToolTip(Actions, "Browsing backup versions is not available yet.");
+        ViewBackup.IsEnabled = CompactView.IsEnabled = true;
         Status.Style = (Style)Application.Current.Resources[$"Mirrorly{model.Tone}Text"];
         CompactStatus.Style = Status.Style;
         DetailedLayout.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
@@ -78,5 +82,9 @@ public sealed partial class BackupSummary : UserControl
     }
     private void Backup_Click(object sender, RoutedEventArgs e) => BackupRequested?.Invoke(model.Id);
     private void RemoveQueued_Click(object sender, RoutedEventArgs e) => RemoveQueuedRequested?.Invoke(model.Id);
-    private void View_Click(object sender, RoutedEventArgs e) => PreviewAction?.Invoke("View backup");
+    private void View_Click(object sender, RoutedEventArgs e)
+    {
+        if (designPreview) PreviewAction?.Invoke("View backup");
+        else ViewRequested?.Invoke(model.Id);
+    }
 }

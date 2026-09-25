@@ -24,6 +24,23 @@ static class BackupQueueTests
 
     public static async Task Run(Func<string, Func<Task>, Task> test, Action<bool> check, WorkerDevelopmentLaunch launch)
     {
+        await test("Backup overview shares the existing coordinator's Running, Queued and removal state", async () =>
+        {
+            var fake = new FakeDesktopSession { Catalog = Catalog("A", "B") };
+            var a = Barrier(); fake.BackupBarriers.Enqueue(a);
+            var coordinator = new BackupExecutionCoordinator(fake);
+            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            var running = home.BackUpNowAsync("A");
+            check(home.Overview("A").RunState == BackupTaskRunState.Running &&
+                home.Overview("B").CanBackUp && coordinator.QueuedSelectors.Count == 0);
+            await home.BackUpNowAsync("B");
+            check(home.Overview("B").RunState == BackupTaskRunState.Queued &&
+                home.Overview("B").Status == "Queued" && !home.Overview("B").CanBackUp &&
+                coordinator.QueuedSelectors.SequenceEqual(["B"]));
+            check(home.RemoveFromQueue("B") && home.Overview("B").RunState == BackupTaskRunState.Idle &&
+                coordinator.QueuedSelectors.Count == 0);
+            a.SetResult(Reply()); await running;
+        });
         await test("Petal start follows admission once, never optimistic Running or Queued", async () =>
         {
             var fake = new FakeDesktopSession { Catalog = Catalog("A", "B") };

@@ -247,7 +247,41 @@ await Test("Navigation and setup preserve explicit selection", () =>
         Check(shell.SelectedPage == page && shell.IsHome == (page == ShellPage.Home));
     }
     shell.Navigate(ShellPage.BackupSetup);
-    Check(shell.Title == "Set up backup");
+    Check(shell.Title == "Set up backup" && shell.TopLevelPage == ShellPage.Backups);
+    shell.Navigate(ShellPage.BackupDetail);
+    Check(shell.Title == "Backup overview" && shell.TopLevelPage == ShellPage.Backups);
+    shell.Navigate(ShellPage.Backups);
+    Check(shell.TopLevelPage == ShellPage.Backups);
+    return Task.CompletedTask;
+});
+await Test("Backup overview uses selector, distinct task paths and factual summary states", () =>
+{
+    var home = new HomeViewModel();
+    var first = new ConfiguredBackup("first", "first.toml", "Shared name", "C:/source-one",
+        "C:/target-one/MirrorlyRepo", "C:/target-one");
+    var second = new ConfiguredBackup("second", "second.toml", "Shared name", "D:/source-two",
+        "D:/target-two/MirrorlyRepo", "D:/target-two");
+    var created = "2025-12-01T10:00:00+00:00";
+    home.ApplyCatalog(new([first, second], []), new Dictionary<string, SavedBackupSummary> {
+        ["first"] = new("first", "E:/resolved/MirrorlyRepo", "repo-id", "snapshot", created, 3, "E:/resolved/snapshot"),
+        ["second"] = new("second", "D:/target-two/MirrorlyRepo", "second-id", null, null, null, null)
+    });
+    var one = home.Overview("first");
+    var two = home.Overview("second");
+    Check(one.Name == two.Name && one.Source == "C:/source-one" && one.BackupLocation == "C:/target-one" &&
+        one.RepositoryPath == "E:/resolved/MirrorlyRepo" && one.SavedVersion == HomePolicy.FormatSavedVersionTime(created));
+    Check(two.Source == "D:/source-two" && two.BackupLocation == "D:/target-two" &&
+        two.SavedVersion == "No saved versions yet" && two.Availability == BackupOverviewAvailability.Available);
+    home.ApplyCatalog(new([second], []), new Dictionary<string, SavedBackupSummary> { ["second"] = new(
+        "second", "D:/target-two/MirrorlyRepo", "second-id", "snapshot", "malformed", 4, null) });
+    Check(home.Overview("first").Availability == BackupOverviewAvailability.Missing &&
+        home.Overview("second").SavedVersion == "Time unavailable");
+    home.ApplyCatalog(new([second], []), new Dictionary<string, SavedBackupSummary>(),
+        new Dictionary<string, string> { ["second"] = "repository query failure" });
+    var unavailable = home.Overview("second");
+    Check(unavailable.Availability == BackupOverviewAvailability.SummaryUnavailable &&
+        unavailable.RepositoryPath is null && unavailable.SavedVersion == "Saved versions unavailable" &&
+        unavailable.TechnicalDetails.Contains("repository query failure") && unavailable.BackupLocation == "D:/target-two");
     return Task.CompletedTask;
 });
 await Test("Responsive boundary stacks status; preview actions never advance fixtures", () =>

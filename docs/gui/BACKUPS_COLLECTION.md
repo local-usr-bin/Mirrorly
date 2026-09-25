@@ -21,9 +21,19 @@ When automatic FIFO advancement is paused, both pages show the shared queue
 attention and affected-operation details. A queued task remains marked Queued
 and removable, without a promise that it will start automatically.
 
-This is a collection list, not the future per-Backup Overview, Snapshots or
-Settings hierarchy. Restore, Activity and Settings remain separate later
-work. Home shows the truthful empty Activity state without an active `View all`
+The collection now offers `View backup` for a selector-based, production read-only
+Overview inside the existing shell. The Backups navigation item remains selected;
+the Overview's Back action returns to the complete collection and restores focus
+to that task's `View backup` control when it still exists, or the collection's
+Set up backup action if it does not. The Overview reacquires task facts from the
+shared Python catalog and latest-complete summary, and uses the same app-scoped
+Backup coordinator for Running, Queued, removal, results and attention. It keeps
+Source, the selected Backup location and the freshly resolved Mirrorly repository
+distinct. A failed summary remains unavailable, not zero saved versions. Snapshot
+listing and Backup-specific Settings are deferred; neither has a placeholder
+destination in this Overview batch.
+
+Restore, Activity and global Settings remain separate later work. Home shows the truthful empty Activity state without an active `View all`
 link to the unfinished Activity page. Rebuilt Backup cards keep keyboard focus
 with the same task across live state updates when that task remains visible.
 No Python Backup transaction, worker protocol, task configuration, queue
