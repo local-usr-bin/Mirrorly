@@ -5,6 +5,8 @@
 
 **当前实施状态（2026-09-25）**：[Phase 4C GUI FIFO queue](PHASE4C.md) 已通过真实 A/B/C FIFO、托盘继续执行及 true Exit 人工验收；app-scoped coordinator 实现自动单槽 FIFO、去重与移除未开始项，worker 仍是单槽且没有队列。[Phase 4B](PHASE4B.md) 已通过人工验收：真实 Backup、Resume、重启后从 Python 发现已保存版本及准确快照目录。队列不持久化；进度、取消和持久 Activity 仍未实现；O-02 和 O-09 仍待决。
 
+Phase 4C 后的 [Backups collection](BACKUPS_COLLECTION.md) 使 Home 的小型预览通向完整、真实的 GUI Backup 列表；Home 的最近项按已保存版本时间展示，不改变 Python 的权威选择规则。
+
 Phase 1A–1C documents preserve their reviewed historical prototype results. [Phase 2](PHASE2.md) completed shared application extraction; the current [production contract](PRODUCTION_WORKER.md) records the implemented worker/GUI bridge. Fake worker and fixtures remain test/design infrastructure, not normal runtime data.
 
 ## 阅读顺序与状态标记
@@ -14,6 +16,7 @@ Phase 1A–1C documents preserve their reviewed historical prototype results. [P
 | [PRODUCTION_WORKER](PRODUCTION_WORKER.md) | 当前生产 v1 contract、gate、setup.create、backup.run、Resume 与 saved-version query |
 | [PHASE4B](PHASE4B.md) | 首次真实 GUI 单 Backup 执行、结果呈现及验收 |
 | [PHASE4C](PHASE4C.md) | GUI 自动 FIFO、移除、失联暂停与 Exit 队列语义 |
+| [BACKUPS_COLLECTION](BACKUPS_COLLECTION.md) | Home 预览与完整 Backups 列表的当前实现边界 |
 | [CONFIGURATION](CONFIGURATION.md) | O-07 已批准归属、集中路径 provider、Python task truth 与 CLI 共存 |
 | [ARCHITECTURE](ARCHITECTURE.md) | GUI-ADR-001、分层、运行时、Backup/repository、Restore v1、未来目录 |
 | [OPERATIONS](OPERATIONS.md) | operation/result、health、queue、progress、cancellation/Exit 状态机 |

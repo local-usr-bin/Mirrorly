@@ -14,6 +14,7 @@ public sealed partial class MainWindow : Window
     private readonly DesktopSession session;
     private readonly BackupExecutionCoordinator backup;
     private readonly HomeView home;
+    private readonly BackupsView backups;
     private readonly BackupSetupView setup;
     private TrayService? tray;
     private bool exiting;
@@ -27,7 +28,7 @@ public sealed partial class MainWindow : Window
         backup = new(session);
         session.ResumeResponder = backup.ResolveResumeAsync;
         backup.ResumePrompt = ShowResumeAsync;
-        home = new(session, backup); setup = new(session);
+        home = new(session, backup); backups = new(home.Model, session); setup = new(session);
         setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
         setup.ConfirmCopy = () => ConfirmAsync("Use full-file copies?",
@@ -37,6 +38,7 @@ public sealed partial class MainWindow : Window
         Navigation.ExpandedModeThresholdWidth = HomePolicy.ExpandedNavigationAt;
         Navigation.CompactModeThresholdWidth = HomePolicy.CompactNavigationAt;
         home.Navigate += Navigate;
+        backups.Navigate += Navigate;
         setup.Navigate += Navigate;
         setup.StepChanged += () => DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
         home.DecorationChanged += _ => UpdateShellLayout();
@@ -211,6 +213,7 @@ public sealed partial class MainWindow : Window
     {
         shell.Navigate(page);
         PageHost.Content = page == ShellPage.Home ? home :
+            page == ShellPage.Backups ? backups :
             page == ShellPage.BackupSetup ? setup :
 #if DEBUG
             page == ShellPage.Diagnostics ? diagnostics :

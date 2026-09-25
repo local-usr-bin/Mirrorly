@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+
 namespace Mirrorly.Desktop.Presentation;
 
 // Display-only records; none authorize or execute operations.
@@ -5,7 +8,7 @@ public enum HomeScenario { Healthy, DestinationUnavailable, Failed, CompletedWit
 public enum StatusTone { Success, Warning, Error, Working, Neutral }
 public enum ShellPage { Home, Backups, Restore, Activity, Settings, BackupSetup, Diagnostics }
 public record StatusPresentation(string Title, string Detail, string NextStep, string Action, StatusTone Tone, string Symbol, bool Busy = false);
-public record BackupPresentation(string Id, string Name, string Source, string Destination, string LastBackup, string Status, StatusTone Tone, int Recency, string? SavedSnapshotPath = null, string LastBackupLabel = "Last backup:")
+public record BackupPresentation(string Id, string Name, string Source, string Destination, string LastBackup, string Status, StatusTone Tone, int Recency, string? SavedSnapshotPath = null, string LastBackupLabel = "Last backup:", DateTimeOffset? SavedVersionCreatedAt = null)
 {
     public bool NeedsAttention => Tone is StatusTone.Warning or StatusTone.Error;
 }
@@ -26,9 +29,20 @@ public static class HomePolicy
     public const double CompactNavigationAt = 640;
     public static readonly bool DecorationsEnabled = true;
     public static bool StackStatus(double width) => width < StackedStatusBelow;
+    // Saved-version time is a Home display hint, never Backup baseline selection.
+    // Require an explicit offset so sorting cannot vary with the desktop time zone.
+    public static DateTimeOffset? SavedVersionTime(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !Regex.IsMatch(value, @"(?:Z|[+-]\d{2}:\d{2})$", RegexOptions.IgnoreCase) ||
+            !DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)) return null;
+        return parsed.ToUniversalTime();
+    }
     public static IReadOnlyList<BackupPresentation> Preview(IReadOnlyList<BackupPresentation> backups) =>
-        backups.Count <= 3 ? backups : backups.OrderByDescending(b => b.NeedsAttention)
-            .ThenByDescending(b => b.Recency).Take(ManyBackupPreviewLimit).ToArray();
+        backups.OrderByDescending(b => b.NeedsAttention)
+            .ThenByDescending(b => b.SavedVersionCreatedAt.HasValue)
+            .ThenByDescending(b => b.SavedVersionCreatedAt)
+            .ThenByDescending(b => b.Recency)
+            .ThenBy(b => b.Id, StringComparer.Ordinal).Take(ManyBackupPreviewLimit).ToArray();
 }
 
 public static class HomeFixtures

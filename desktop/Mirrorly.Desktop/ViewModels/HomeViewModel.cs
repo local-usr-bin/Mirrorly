@@ -21,6 +21,7 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     public bool DesignPreview { get; private set; }
     public HomeFixture Fixture { get; private set; } = new(new("Loading backups…", "Reading your configured backups.", "", "Back up now", StatusTone.Neutral, "○"), [], []);
     public StatusPresentation Status => Fixture.Status;
+    public IReadOnlyList<BackupPresentation> AllBackups => Fixture.Backups.Select(WithExecutionState).ToArray();
     public IReadOnlyList<BackupPresentation> Backups => HomePolicy.Preview(Fixture.Backups.Select(WithExecutionState).ToArray());
     public IReadOnlyList<ActivityPresentation> Activity => Fixture.Activity.Take(HomePolicy.RecentActivityLimit).ToArray();
     public bool IsEmpty => Fixture.Backups.Count == 0;
@@ -93,7 +94,8 @@ public sealed class HomeViewModel : INotifyPropertyChanged
                 latest ? summary!.CreatedAt ?? "Time unavailable" : "Not checked",
                 latest ? "Saved version available" : summary is null ? "Saved versions not checked" : "Backup set up",
                 StatusTone.Neutral, -index, summary?.SnapshotPath,
-                latest ? "Latest saved backup:" : "Last backup:");
+                latest ? "Latest saved backup:" : "Last backup:",
+                latest ? HomePolicy.SavedVersionTime(summary!.CreatedAt) : null);
         }).ToArray();
         Fixture = new(CurrentStatus(cards), cards, []);
         UpdateStatus();

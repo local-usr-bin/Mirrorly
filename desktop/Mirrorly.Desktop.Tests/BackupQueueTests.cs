@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Diagnostics;
 using Mirrorly.Desktop.Services;
+using Mirrorly.Desktop.Presentation;
 using Mirrorly.Desktop.ViewModels;
 
 static class BackupQueueTests
@@ -23,6 +24,31 @@ static class BackupQueueTests
 
     public static async Task Run(Func<string, Func<Task>, Task> test, Action<bool> check, WorkerDevelopmentLaunch launch)
     {
+        await test("Fifth and later catalog tasks use the same GUI FIFO and removal path", async () =>
+        {
+            var fake = new FakeDesktopSession { Catalog = Catalog("A", "B", "C", "D", "E", "F") };
+            var a = Barrier(); var f = Barrier();
+            fake.BackupBarriers.Enqueue(a); fake.BackupBarriers.Enqueue(f);
+            var fStarted = Started(fake, "F");
+            var coordinator = new BackupExecutionCoordinator(fake);
+            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            check(home.Backups.Count == HomePolicy.ManyBackupPreviewLimit && !home.Backups.Any(b => b.Id == "F") &&
+                home.AllBackups.Count == 6 && home.AllBackups.Any(b => b.Id == "F"));
+            var running = home.BackUpNowAsync("A");
+            await home.BackUpNowAsync("F"); await home.BackUpNowAsync("F");
+            check(fake.BackupSelectors.SequenceEqual(["A"]) && coordinator.QueuedSelectors.SequenceEqual(["F"]) &&
+                home.AllBackups.Single(b => b.Id == "F").Status == "Queued" && !home.CanBackUpTask("F"));
+            check(home.RemoveFromQueue("F") && !home.RemoveFromQueue("A") &&
+                coordinator.QueuedSelectors.Count == 0);
+            await home.BackUpNowAsync("F"); await home.BackUpNowAsync("F");
+            check(coordinator.QueuedSelectors.SequenceEqual(["F"]));
+            a.SetResult(Reply()); await running;
+            await fStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            check(fake.BackupSelectors.SequenceEqual(["A", "F"]) &&
+                home.AllBackups.Single(b => b.Id == "F").Status == "Backing up…");
+            f.SetResult(Reply());
+        });
+
         await test("FIFO insertion, duplicate suppression, middle removal and re-enqueue", async () =>
         {
             var fake = new FakeDesktopSession { Catalog = Catalog("A", "B", "C", "D") };

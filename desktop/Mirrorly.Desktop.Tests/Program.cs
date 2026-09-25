@@ -154,6 +154,39 @@ await Test("Many backups have bounded preview with attention before recency", ()
     Check(home.Activity.Count <= HomePolicy.RecentActivityLimit);
     return Task.CompletedTask;
 });
+await Test("Home preview uses saved-version time and stable fallback, while the full catalog remains available", () =>
+{
+    var catalog = new BackupCatalog(new[] { "a-old", "b-missing", "c-invalid", "d-middle", "e-older", "z-new" }
+        .Select(s => new ConfiguredBackup(s, s + ".toml", s, "source", "repository")).ToArray(), []);
+    SavedBackupSummary Summary(string selector, string? createdAt) =>
+        new(selector, "repository", "repo-id", "snapshot", createdAt, 1, "snapshot-path");
+    var summaries = new Dictionary<string, SavedBackupSummary> {
+        ["a-old"] = Summary("a-old", "2025-01-01T10:00:00+00:00"),
+        ["b-missing"] = Summary("b-missing", null),
+        ["c-invalid"] = Summary("c-invalid", "not a date"),
+        ["d-middle"] = Summary("d-middle", "2025-06-01T10:00:00+00:00"),
+        ["e-older"] = Summary("e-older", "2025-04-01T10:00:00+00:00"),
+        ["z-new"] = Summary("z-new", "2025-12-01T10:00:00+00:00")
+    };
+    var home = new HomeViewModel();
+    home.ApplyCatalog(catalog, summaries);
+    Check(home.AllBackups.Select(b => b.Id).SequenceEqual(catalog.Tasks.Select(t => t.Selector)));
+    Check(home.Backups.Select(b => b.Id).SequenceEqual(["z-new", "d-middle", "e-older", "a-old"]));
+    Check(home.ShowAllBackups && home.Backups.Count == HomePolicy.ManyBackupPreviewLimit);
+    Check(HomePolicy.SavedVersionTime("not a date") is null && HomePolicy.SavedVersionTime(null) is null &&
+        HomePolicy.SavedVersionTime("2025-12-01T10:00:00") is null);
+    Check(HomePolicy.SavedVersionTime("2025-12-01T10:00:00+00:00") ==
+        HomePolicy.SavedVersionTime("2025-12-01T11:00:00+01:00"));
+    Check(HomePolicy.Preview(home.AllBackups.Where(b => b.Id is "a-old" or "z-new").ToArray())
+        .Select(b => b.Id).SequenceEqual(["z-new", "a-old"]));
+    var fallback = new HomeViewModel();
+    fallback.ApplyCatalog(catalog, summaries.Where(p => p.Key is "b-missing" or "c-invalid")
+        .ToDictionary(p => p.Key, p => p.Value));
+    Check(fallback.Backups.Select(b => b.Id).SequenceEqual(["a-old", "b-missing", "c-invalid", "d-middle"]));
+    var warning = home.AllBackups.Single(b => b.Id == "c-invalid") with { Tone = StatusTone.Warning };
+    Check(HomePolicy.Preview(home.AllBackups.Where(b => b.Id != "c-invalid").Append(warning).ToArray())[0].Id == "c-invalid");
+    return Task.CompletedTask;
+});
 await Test("Empty state hides summaries and history", () =>
 {
     var home = new HomeViewModel();
