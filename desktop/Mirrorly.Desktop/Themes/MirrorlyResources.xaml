@@ -7,7 +7,7 @@
       <SolidColorBrush x:Key="MirrorlySurfaceBrush" Color="#F8FCF9" />
       <SolidColorBrush x:Key="MirrorlySurfaceSubtleBrush" Color="#F0F8F1" />
       <SolidColorBrush x:Key="MirrorlySurfaceElevatedBrush" Color="#FFFFFF" />
-      <SolidColorBrush x:Key="MirrorlyNavigationSurfaceBrush" Color="#EDF7ED" />
+      <SolidColorBrush x:Key="MirrorlyNavigationSurfaceBrush" Color="#EDF7EC" />
       <SolidColorBrush x:Key="MirrorlyFlowerPinkBrush" Color="#EDA4BD" />
       <SolidColorBrush x:Key="MirrorlyLeafGreenBrush" Color="#8AC795" />
       <SolidColorBrush x:Key="MirrorlyStatusSuccessBrush" Color="#27854B" />
@@ -17,9 +17,9 @@
       <SolidColorBrush x:Key="MirrorlyTextPrimaryBrush" Color="#203733" />
       <SolidColorBrush x:Key="MirrorlyTextSecondaryBrush" Color="#61716A" />
       <SolidColorBrush x:Key="MirrorlyBorderBrush" Color="#DEE9E1" />
-      <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#EDF7ED" />
-      <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#EDF7ED" />
-      <SolidColorBrush x:Key="AccentButtonBackground" Color="#328351" />
+      <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#EDF7EC" />
+      <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#EDF7EC" />
+      <SolidColorBrush x:Key="AccentButtonBackground" Color="#429D48" />
       <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#286E43" />
       <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#286E43" />
       <SolidColorBrush x:Key="AccentButtonForeground" Color="#FFFFFF" />

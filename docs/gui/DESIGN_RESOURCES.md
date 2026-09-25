@@ -20,6 +20,8 @@ Back up now 明显且由 queue coordinator 处理；已有其他 Backup Running 
 
 **Modern Windows + Fresh Spring Garden**：Windows 11/Fluent 骨架，明亮清新的浅草绿 navigation，白/极淡绿白内容，清楚的稍深草绿主按钮，少量粉色小花与嫩绿枝叶。避免偏黄/奶油/橄榄/复古绿、蒲公英、大片花田及白花主调；保持桌面应用感，不做 enterprise dashboard、杀毒软件式巨型绿勾或恐吓红字。
 
+当前 Light 主题为贴近已批准的 Visual Baseline v1 渲染，navigation surface（含 Compact/Expanded pane）使用 `#EDF7EC`，主 AccentButton 的静止背景使用 `#429D48`。这两项是有意选择的视觉值；不改变 High Contrast 系统色、按钮白色前景或独立的成功/警告/错误语义色。
+
 | 集中资源组 | 建议 semantic keys / 规则 |
 | --- | --- |
 | 品牌与 surfaces | `MirrorlyAccentBrush`、`MirrorlyAccentHoverBrush`、`MirrorlySurfaceBrush`、`MirrorlySurfaceElevatedBrush`、`MirrorlyNavigationSurfaceBrush` |
