@@ -284,6 +284,17 @@ await Test("Plant placement restores Compact default, preserves Expanded and hid
     Check((string?)sprig.Attribute("IsHitTestVisible") == "False" && (string?)sprig.Attribute("IsTabStop") == "False" &&
         (string?)sprig.Attribute("AutomationProperties.AccessibilityView") == "Raw" &&
         (string?)sprig.Attribute("Visibility") == "{ThemeResource MirrorlyDecorationVisibility}");
+    var flourish = sprig.Descendants().Single(e => e.Name.LocalName == "Storyboard" &&
+        (string?)e.Attribute(x + "Key") == "PetalFlourish");
+    Check((string?)flourish.Attribute("FillBehavior") == "Stop" &&
+        flourish.Descendants().Where(e => e.Name.LocalName.StartsWith("DoubleAnimation", StringComparison.Ordinal))
+            .All(e => ((string?)e.Attribute("Storyboard.TargetProperty")) is "Opacity" or
+                "(UIElement.RenderTransform).(CompositeTransform.TranslateY)" or
+                "(UIElement.RenderTransform).(CompositeTransform.Rotation)"));
+    var petals = sprig.Descendants().Where(e => (string?)e.Attribute(x + "Name") is "PetalOne" or "PetalTwo").ToArray();
+    Check(petals.Length == 2 && petals.All(e => (string?)e.Attribute("Opacity") == "0") &&
+        petals.All(e => e.Ancestors().Any(a => a.Name.LocalName == "Viewbox" &&
+            (string?)a.Attribute("IsHitTestVisible") == "False")));
     return Task.CompletedTask;
 });
 await SetupTests.Run(Test, Check);

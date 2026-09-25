@@ -173,9 +173,12 @@ sealed class FakeDesktopSession : IDesktopSession, ISetupApi
     public Task<BackupCatalog> CatalogAsync() => Task.FromResult(Catalog);
     public Task<SavedBackupSummary> BackupSummaryAsync(string selector) => Task.FromResult(
         Summaries.TryGetValue(selector, out var saved) ? saved : new(selector, "configured repo", "repo-id", null, null, null, null));
-    public Task<WorkerReply> BackupAsync(string selector)
+    public Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null)
     {
         BackupCalls++; LastBackupSelector = selector; BackupSelectors.Add(selector); BackupStarted?.Invoke(selector);
+        if (BackupError is null && (BackupBarriers.Count > 0 || BackupBarrier is not null || BackupReplies.TryPeek(out var reply) &&
+            reply.Payload.GetProperty("phase").GetString() == "terminal"))
+            onAdmitted?.Invoke(new(BackupCalls.ToString(System.Globalization.CultureInfo.InvariantCulture), "op-" + BackupCalls));
         return BackupError is not null ? Task.FromException<WorkerReply>(BackupError) :
             BackupBarriers.Count > 0 ? BackupBarriers.Dequeue().Task :
             BackupBarrier?.Task ?? Task.FromResult(BackupReplies.Dequeue());

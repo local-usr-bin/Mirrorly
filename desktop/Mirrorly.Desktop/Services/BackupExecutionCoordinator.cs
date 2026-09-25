@@ -39,6 +39,7 @@ public sealed class BackupExecutionCoordinator
         desktop.Observation is { Initialized: true, TransportHealthy: true };
     public Func<ResumeInteraction, Task<ResumeAnswer>>? ResumePrompt { get; set; }
     public event Action? Changed;
+    public event Action<WorkerAdmission>? BackupAdmitted;
 
     public BackupTaskRunState TaskState(string selector)
     {
@@ -162,7 +163,11 @@ public sealed class BackupExecutionCoordinator
             {
                 admittedLocally = true;
                 WorkerReply terminal;
-                try { terminal = await api.BackupAsync(selector); }
+                try { terminal = await api.BackupAsync(selector, admission => {
+                    // Only the worker's accepted response confirms admission. Local Running is optimistic.
+                    try { BackupAdmitted?.Invoke(admission); }
+                    catch (Exception) { /* Decoration cannot change Backup outcome. */ }
+                }); }
                 catch (Exception error)
                 {
                     Record(new(selector, null, null, "transport_uncertain", null, null, null, error.ToString(), null));

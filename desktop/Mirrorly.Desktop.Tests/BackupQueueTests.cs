@@ -24,6 +24,71 @@ static class BackupQueueTests
 
     public static async Task Run(Func<string, Func<Task>, Task> test, Action<bool> check, WorkerDevelopmentLaunch launch)
     {
+        await test("Petal start follows admission once, never optimistic Running or Queued", async () =>
+        {
+            var fake = new FakeDesktopSession { Catalog = Catalog("A", "B") };
+            var a = Barrier(); var b = Barrier();
+            fake.BackupBarriers.Enqueue(a); fake.BackupBarriers.Enqueue(b);
+            var coordinator = new BackupExecutionCoordinator(fake);
+            var policy = new PetalMotionPolicy();
+            var admissions = new List<WorkerAdmission>();
+            var bAdmitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            coordinator.BackupAdmitted += value => {
+                admissions.Add(value);
+                if (value.OperationId == "op-2") bAdmitted.TrySetResult();
+            };
+            var running = coordinator.StartAsync("A");
+            check(coordinator.State == BackupGuiState.Running && admissions.Count == 1 &&
+                policy.ShouldPlay(admissions[0], true, true, false));
+            await coordinator.StartAsync("B");
+            check(coordinator.TaskState("B") == BackupTaskRunState.Queued && admissions.Count == 1);
+            coordinator.Changed += () => { };
+            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            check(admissions.Count == 1 && !policy.ShouldPlay(admissions[0], true, true, false));
+            a.SetResult(Reply()); await running;
+            await bAdmitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            check(admissions.Count == 2 && policy.ShouldPlay(admissions[1], true, true, false) &&
+                !policy.ShouldPlay(admissions[1], true, true, false));
+            b.SetResult(Reply());
+        });
+
+        await test("Petal policy consumes hidden, reduced-motion and High Contrast starts without replay", () =>
+        {
+            var policy = new PetalMotionPolicy();
+            var hidden = new WorkerAdmission("1", "hidden");
+            var reduced = new WorkerAdmission("2", "reduced");
+            var contrast = new WorkerAdmission("3", "contrast");
+            check(!policy.ShouldPlay(hidden, false, true, false) && !policy.ShouldPlay(hidden, true, true, false));
+            check(!policy.ShouldPlay(reduced, true, false, false) && !policy.ShouldPlay(reduced, true, true, false));
+            check(!policy.ShouldPlay(contrast, true, true, true) && !policy.ShouldPlay(contrast, true, true, false));
+            var visible = new WorkerAdmission("4", "visible");
+            check(policy.ShouldPlay(visible, true, true, false));
+            // Switching Compact/Expanded hosts or rebuilding Home never supplies a fresh admission.
+            check(!policy.ShouldPlay(visible, true, true, false));
+            return Task.CompletedTask;
+        });
+
+        await test("Rejected Backup admission cannot start decorative motion", async () =>
+        {
+            var fake = new FakeDesktopSession();
+            fake.BackupReplies.Enqueue(Rejected("busy"));
+            var coordinator = new BackupExecutionCoordinator(fake);
+            var admissions = 0;
+            coordinator.BackupAdmitted += _ => admissions++;
+            await coordinator.StartAsync("A");
+            check(admissions == 0 && coordinator.QueueAttention == BackupQueueAttention.AdmissionRejected);
+        });
+
+        await test("Decorative admission listener failure cannot change Backup result", async () =>
+        {
+            var fake = new FakeDesktopSession();
+            fake.BackupReplies.Enqueue(Reply());
+            var coordinator = new BackupExecutionCoordinator(fake);
+            coordinator.BackupAdmitted += _ => throw new InvalidOperationException("decorative failure");
+            check(await coordinator.StartAsync("A") && coordinator.ResultFor("A")?.Outcome == "succeeded" &&
+                coordinator.QueueAttention == BackupQueueAttention.None);
+        });
+
         await test("Fifth and later catalog tasks use the same GUI FIFO and removal path", async () =>
         {
             var fake = new FakeDesktopSession { Catalog = Catalog("A", "B", "C", "D", "E", "F") };
@@ -212,6 +277,8 @@ static class BackupQueueTests
                 var coordinator = new BackupExecutionCoordinator(session);
                 var home = new HomeViewModel(coordinator); await home.RefreshAsync(session);
                 var order = new List<string>();
+                var admissions = new List<WorkerAdmission>();
+                coordinator.BackupAdmitted += admissions.Add;
                 coordinator.Changed += () => {
                     if (coordinator.State == BackupGuiState.Running && coordinator.TaskSelector is { } selector &&
                         (order.Count == 0 || order[^1] != selector)) order.Add(selector);
@@ -225,6 +292,7 @@ static class BackupQueueTests
                 File.WriteAllText(Path.Combine(root, "release"), "go");
                 await first; await cDone.Task.WaitAsync(TimeSpan.FromSeconds(20));
                 check(order.SequenceEqual(["A", "B", "C"]) && coordinator.QueuedSelectors.Count == 0 &&
+                    admissions.Count == 3 && admissions.Select(a => a.OperationId).Distinct().Count() == 3 &&
                     File.ReadAllLines(Path.Combine(root, "backup_calls")).Length == 3 &&
                     new[] { "A", "B", "C" }.All(s => coordinator.ResultFor(s)?.Outcome == "succeeded"));
                 await VerifyRepositories(launch.Interpreter, root, ["A", "B", "C"], check);
@@ -417,9 +485,9 @@ sealed class DeferredBackupSession(DesktopSession inner) : IDesktopSession, ISet
     public Task<JsonElement> CreateAsync(SetupCreateIntent intent) => inner.CreateAsync(intent);
     public Task<BackupCatalog> CatalogAsync() => inner.CatalogAsync();
     public Task<SavedBackupSummary> BackupSummaryAsync(string selector) => inner.BackupSummaryAsync(selector);
-    public async Task<WorkerReply> BackupAsync(string selector)
+    public async Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null)
     {
         if (Interlocked.Increment(ref calls) == 1) { FirstCalled.TrySetResult(); await release.Task; }
-        return await inner.BackupAsync(selector);
+        return await inner.BackupAsync(selector, onAdmitted);
     }
 }

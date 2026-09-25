@@ -19,6 +19,7 @@ public sealed record SetupCreateIntent(string task_name, string source, string t
 public sealed record BackupRunInput(string config_root, string? task, bool dry_run, bool full_hash, string[] exclude);
 public sealed record BackupRunIntent(string? task, bool dry_run = false, bool full_hash = false, string[]? exclude = null);
 public sealed record ResumeInteraction(string RequestId, string OperationId, string InteractionId, string SnapshotId, string CreatedAt, int DeadlineSeconds);
+public sealed record WorkerAdmission(string RequestId, string OperationId);
 public enum ResumeAnswer { Resume, DeclineResume, Unavailable }
 public sealed record ProductionWorkerObservation(bool ProcessExists, bool TransportHealthy, bool Initialized, string? ActiveOperationId, string Detail);
 public sealed class WorkerTransportUncertainException(string message) : IOException(message);
@@ -30,6 +31,7 @@ public sealed class WorkerRequest
     internal bool IsApplication { get; }
     public string? OperationId { get; internal set; }
     internal readonly TaskCompletionSource<ProductionMessage> Completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal readonly TaskCompletionSource<WorkerAdmission?> Admission = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task<ProductionMessage> Terminal => Completion.Task;
     // False after transport loss or a wait timeout without a received response.
     // True means a response is available, not that the application succeeded.
@@ -236,6 +238,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
                         throw new InvalidDataException("Invalid admission.");
                     request.OperationId = message.OperationId;
                     activeOperation = message.OperationId;
+                    request.Admission.TrySetResult(new(message.RequestId, message.OperationId));
                 }
                 else if (phase is "terminal" or "rejected")
                 {
@@ -244,6 +247,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
                         throw new InvalidDataException("Application terminal preceded admission.");
                     if (phase == "rejected" && (request.OperationId is not null || message.Payload.GetProperty("error").GetProperty("application_invoked").GetBoolean()))
                         throw new InvalidDataException("Invalid rejection facts.");
+                    if (phase == "rejected") request.Admission.TrySetResult(null);
                     if (activeOperation == request.OperationId) activeOperation = null;
                     request.Completion.TrySetResult(message);
                     pending.TryRemove(message.RequestId, out _);
@@ -328,7 +332,11 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
         initialized = false;
         detail = reason;
         hello.TrySetException(new WorkerTransportUncertainException(reason));
-        foreach (var request in pending.Values) request.Completion.TrySetException(new WorkerTransportUncertainException(reason));
+        foreach (var request in pending.Values)
+        {
+            request.Admission.TrySetResult(null);
+            request.Completion.TrySetException(new WorkerTransportUncertainException(reason));
+        }
         try { process?.StandardInput.Close(); }
         catch (Exception error) when (error is IOException or InvalidOperationException) { }
     }

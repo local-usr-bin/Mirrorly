@@ -23,6 +23,7 @@
     <Compile Include="..\Mirrorly.Desktop\ViewModels\WorkerDiagnosticsViewModel.cs" Link="ViewModels\WorkerDiagnosticsViewModel.cs" />
     <Compile Include="..\Mirrorly.Desktop\ViewModels\ShellViewModel.cs" Link="ViewModels\ShellViewModel.cs" />
     <Compile Include="..\Mirrorly.Desktop\Presentation\HomePresentation.cs" Link="Presentation\HomePresentation.cs" />
+    <Compile Include="..\Mirrorly.Desktop\Presentation\PetalMotionPolicy.cs" Link="Presentation\PetalMotionPolicy.cs" />
     <AssemblyMetadata Include="Phase1AWorkerPath" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\phase1a_worker\worker.py'))" />
   </ItemGroup>
 </Project>

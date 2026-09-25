@@ -6,6 +6,7 @@ using Mirrorly.Desktop.Services;
 using Mirrorly.Desktop.ViewModels;
 using Mirrorly.Desktop.Views;
 using Windows.Graphics;
+using Windows.UI.ViewManagement;
 namespace Mirrorly.Desktop;
 
 public sealed partial class MainWindow : Window
@@ -13,6 +14,9 @@ public sealed partial class MainWindow : Window
     private readonly ShellViewModel shell = new();
     private readonly DesktopSession session;
     private readonly BackupExecutionCoordinator backup;
+    private readonly PetalMotionPolicy petalMotion = new();
+    private bool flourishHostActive;
+    private int flourishGeneration;
     private readonly HomeView home;
     private readonly BackupsView backups;
     private readonly BackupSetupView setup;
@@ -42,6 +46,10 @@ public sealed partial class MainWindow : Window
         setup.Navigate += Navigate;
         setup.StepChanged += () => DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
         home.DecorationChanged += _ => UpdateShellLayout();
+        backup.BackupAdmitted += admission => {
+            if (DispatcherQueue.HasThreadAccess) OnBackupAdmitted(admission);
+            else DispatcherQueue.TryEnqueue(() => OnBackupAdmitted(admission));
+        };
         PageHost.Content = home;
 #if DEBUG
         var diagnosticsItem = new NavigationViewItem { Content = "Developer diagnostics", Tag = "Diagnostics", Icon = new FontIcon { Glyph = "\uE943" } };
@@ -98,7 +106,7 @@ public sealed partial class MainWindow : Window
             Navigation.ActualWidth < HomePolicy.CompactNavigationAt ? "MirrorlyCompactPageMargin" : "MirrorlyPageMargin"];
         Scroller.Margin = (Thickness)Application.Current.Resources[Navigation.DisplayMode == NavigationViewDisplayMode.Minimal
             ? "MirrorlyMinimalNavigationInset" : "MirrorlyNavigationInset"];
-        var plant = HomePolicy.PlantFor(home.Model.ShowDecoration && shell.IsHome, Navigation.IsPaneOpen,
+        var plant = HomePolicy.PlantFor((home.Model.ShowDecoration || flourishHostActive) && shell.IsHome, Navigation.IsPaneOpen,
             Navigation.DisplayMode == NavigationViewDisplayMode.Expanded,
             Navigation.DisplayMode == NavigationViewDisplayMode.Compact,
             Navigation.ActualWidth, Navigation.ActualHeight);
@@ -108,6 +116,43 @@ public sealed partial class MainWindow : Window
         if (Navigation.XamlRoot is not null) diagnostics?.SetDisplay(
             $"Actual DPI scale: {Navigation.XamlRoot.RasterizationScale:P0} · content {Navigation.ActualWidth:F0} × {Navigation.ActualHeight:F0} effective pixels");
 #endif
+    }
+    private void OnBackupAdmitted(WorkerAdmission admission)
+    {
+        // Admission is received before terminal handling. The optimistic local Running flag
+        // is deliberately never an animation trigger.
+        if (!backup.HasActiveBackup)
+        {
+            petalMotion.ShouldPlay(admission, false, false, false);
+            return; // A delayed UI dispatch must not celebrate an already-terminal call.
+        }
+        var placement = HomePolicy.PlantFor(shell.IsHome, Navigation.IsPaneOpen,
+            Navigation.DisplayMode == NavigationViewDisplayMode.Expanded,
+            Navigation.DisplayMode == NavigationViewDisplayMode.Compact,
+            Navigation.ActualWidth, Navigation.ActualHeight);
+        var visible = AppWindow.IsVisible && placement != PlantPlacement.Hidden;
+        if (!petalMotion.ShouldPlay(admission, visible, new UISettings().AnimationsEnabled,
+            new AccessibilitySettings().HighContrast)) return;
+        // The stationary Running layout keeps the plant hidden. Expose only its
+        // responsive decorative host for this short flourish, then restore that rule.
+        flourishHostActive = true;
+        var generation = ++flourishGeneration;
+        UpdateShellLayout();
+        var sprig = placement == PlantPlacement.Expanded ? SidebarSprig : CompactSprig;
+        try
+        {
+            sprig.PlayPetalFlourish(() => {
+                if (generation != flourishGeneration) return;
+                flourishHostActive = false;
+                UpdateShellLayout();
+            });
+        }
+        catch (Exception error)
+        {
+            flourishHostActive = false;
+            UpdateShellLayout();
+            Debug.WriteLine($"Decorative flourish unavailable: {error}");
+        }
     }
     private void Reopen()
     {

@@ -45,7 +45,7 @@ Back up now 明显且由 queue coordinator 处理；已有其他 Backup Running 
 
 v1 植物方向：轻植物学插画、细弯枝、多种嫩绿、不同大小/角度/弯曲的叶片、轻叶脉和粉色花瓣层次。左下两朵花必须分处主枝两侧：靠枝梢的一朵在上侧向外舒展，另一朵在相对下侧；不做两朵都垂在枝条下方的构图。右上更小、更轻，不进入状态卡。
 
-**静态页面禁止游离/飘落花瓣**。未来仅真实任务开始时允许短暂一次性 flourish，不是进度，不循环；详见 [MOTION](MOTION.md)。本阶段只记录规范，不实现动画或假队列。
+**静态页面禁止游离/飘落花瓣**。当前仅生产 worker 确认真实 Backup admission 时允许短暂一次性 flourish，不是进度，不循环；详见 [MOTION](MOTION.md)。动画层不改变原有 SVG，隐藏于 High Contrast，并遵循 Windows 动画设置。
 
 长期 Theme 为 System / Light / Dark。Light 是首个完整招牌视觉；Dark 以后单独设计，不能反色或变黑绿荧光粉。资源架构现在支持 ThemeDictionaries，但未实现/验证 Dark 前不能把一个空的 Dark 选项宣称为完整支持。High Contrast 使用系统功能色/状态文字与边界，不用品牌颜色强盖。主题与 live system theme 变化需测试；不引入 skin marketplace、任意用户主题或主题插件。
 

@@ -15,7 +15,7 @@ public interface ISetupApi
     Task<JsonElement> CreateAsync(SetupCreateIntent intent);
     Task<BackupCatalog> CatalogAsync();
     Task<SavedBackupSummary> BackupSummaryAsync(string selector);
-    Task<WorkerReply> BackupAsync(string selector);
+    Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null);
 }
 public interface IDesktopSession
 {
@@ -55,18 +55,20 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
         try { await workflow(this); }
         finally { Busy = false; idle.TrySetResult(); Changed?.Invoke(); }
     }
-    private async Task<WorkerReply> ReceiveReplyAsync(Func<Task<WorkerRequest>> send)
+    private async Task<WorkerReply> ReceiveReplyAsync(Func<Task<WorkerRequest>> send, Action<WorkerAdmission>? onAdmitted = null)
     {
         if (!Busy) throw new InvalidOperationException("Application requests require a supervised workflow.");
         await (startup ??= client.StartAsync(launch));
         var request = await send();
         RequestId = request.RequestId;
         Changed?.Invoke();
+        var admissionObserver = onAdmitted is null ? Task.CompletedTask : ObserveAdmissionAsync(request, onAdmitted);
         try
         {
             try
             {
                 var terminal = await request.WaitAsync(ResponseWait);
+                await admissionObserver;
                 return new(request.RequestId, request.OperationId, terminal.Payload);
             }
             catch (TimeoutException)
@@ -75,16 +77,26 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
                 WaitingForTerminal = true;
                 Changed?.Invoke();
                 var terminal = await request.Terminal;
+                await admissionObserver;
                 return new(request.RequestId, request.OperationId, terminal.Payload);
             }
         }
         finally { WaitingForTerminal = false; RequestId = null; Changed?.Invoke(); }
     }
+    private static async Task ObserveAdmissionAsync(WorkerRequest request, Action<WorkerAdmission> onAdmitted)
+    {
+        try
+        {
+            if (await request.Admission.Task is { } admission) onAdmitted(admission);
+        }
+        catch (Exception) { /* Decorative presentation cannot change application facts. */ }
+    }
     private async Task<JsonElement> ReceiveAsync(Func<Task<WorkerRequest>> send) =>
         (await ReceiveReplyAsync(send)).Payload;
     public Task<JsonElement> PreflightAsync(SetupPreflightIntent intent) => ReceiveAsync(() => client.PreflightAsync(paths, intent));
     public Task<JsonElement> CreateAsync(SetupCreateIntent intent) => ReceiveAsync(() => client.CreateAsync(paths, intent));
-    public Task<WorkerReply> BackupAsync(string selector) => ReceiveReplyAsync(() => client.BackupAsync(paths, new(selector)));
+    public Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null) =>
+        ReceiveReplyAsync(() => client.BackupAsync(paths, new(selector)), onAdmitted);
     public async Task<SavedBackupSummary> BackupSummaryAsync(string selector)
     {
         var payload = await ReceiveAsync(() => client.BackupSummaryAsync(paths, selector));

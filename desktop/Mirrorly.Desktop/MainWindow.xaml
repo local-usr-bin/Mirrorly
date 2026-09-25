@@ -13,7 +13,7 @@
   </NavigationView.MenuItems>
   <NavigationView.PaneFooter>
    <Border x:Name="SidebarDecoration">
-    <components:SpringSprig Style="{StaticResource MirrorlySidebarDecoration}"/>
+    <components:SpringSprig x:Name="SidebarSprig" Style="{StaticResource MirrorlySidebarDecoration}"/>
    </Border>
   </NavigationView.PaneFooter>
   <Grid Background="{ThemeResource MirrorlySurfaceBrush}">
@@ -22,7 +22,7 @@
     IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
     <Border x:Name="CompactDecoration" VerticalAlignment="Bottom" Visibility="Collapsed"
      IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
-     <components:SpringSprig Style="{StaticResource MirrorlyCompactSidebarDecoration}"/>
+     <components:SpringSprig x:Name="CompactSprig" Style="{StaticResource MirrorlyCompactSidebarDecoration}"/>
     </Border>
    </Border>
    <ScrollViewer x:Name="Scroller" Grid.Column="1" Background="{ThemeResource MirrorlySurfaceBrush}" HorizontalScrollBarVisibility="Disabled"
