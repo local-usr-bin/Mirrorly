@@ -18,6 +18,7 @@ public sealed record SetupCreateInput(string task_name, string source, string ta
 public sealed record SetupCreateIntent(string task_name, string source, string target, string filesystem_policy, bool copy_mode_approved);
 public sealed record BackupRunInput(string config_root, string? task, bool dry_run, bool full_hash, string[] exclude);
 public sealed record BackupRunIntent(string? task, bool dry_run = false, bool full_hash = false, string[]? exclude = null);
+public sealed record SnapshotListInput(string config_root, string task, string? after, int limit);
 public sealed record ResumeInteraction(string RequestId, string OperationId, string InteractionId, string SnapshotId, string CreatedAt, int DeadlineSeconds);
 public sealed record WorkerAdmission(string RequestId, string OperationId);
 public enum ResumeAnswer { Resume, DeclineResume, Unavailable }
@@ -146,6 +147,8 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
         new BackupRunInput(paths.TaskConfigRoot, intent.task, intent.dry_run, intent.full_hash, intent.exclude ?? []));
     public Task<WorkerRequest> BackupSummaryAsync(GuiDataPaths paths, string selector) =>
         RequestAsync("backup.summary", new { config_root = paths.TaskConfigRoot, task = selector });
+    public Task<WorkerRequest> ListSnapshotsAsync(GuiDataPaths paths, string selector, string? after = null, int limit = 16) =>
+        RequestAsync("snapshots.list", new SnapshotListInput(paths.TaskConfigRoot, selector, after, limit));
 
     internal static string AllocateRequestId(ref ulong highest)
     {
@@ -155,7 +158,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
-        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run" or "backup.summary");
+        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run" or "backup.summary" or "snapshots.list");
     }
 
     private async Task<WorkerRequest> SendAsync(string kind, object payload, bool application = false)

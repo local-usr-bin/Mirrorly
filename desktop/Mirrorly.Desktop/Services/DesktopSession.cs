@@ -9,6 +9,11 @@ public sealed record ConfiguredBackup(string Selector, string ConfigPath, string
 public sealed record BackupCatalog(IReadOnlyList<ConfiguredBackup> Tasks, IReadOnlyList<string> Problems);
 public sealed record SavedBackupSummary(string Selector, string RepositoryPath, string RepositoryId,
     string? SnapshotId, string? CreatedAt, long? LifecycleSequence, string? SnapshotPath);
+public sealed record SnapshotCollectionItem(string SnapshotId, string Status, string? CreatedAt,
+    ulong? LifecycleSequence, long FileCount, long DirectoryCount, long LogicalBytes,
+    string? ResumedFromSnapshotId, int FormatVersion);
+public sealed record SnapshotCollectionPage(string Selector, IReadOnlyList<SnapshotCollectionItem> Items,
+    string? NextAfter, string? LatestCompleteSnapshotId);
 public sealed record WorkerReply(string RequestId, string? OperationId, JsonElement Payload);
 public interface ISetupApi
 {
@@ -16,6 +21,7 @@ public interface ISetupApi
     Task<JsonElement> CreateAsync(SetupCreateIntent intent);
     Task<BackupCatalog> CatalogAsync();
     Task<SavedBackupSummary> BackupSummaryAsync(string selector);
+    Task<SnapshotCollectionPage> SnapshotPageAsync(string selector, string? after = null, int limit = 16);
     Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null);
 }
 public interface IDesktopSession
@@ -113,6 +119,51 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
             latest.ValueKind == JsonValueKind.Null || latest.GetProperty("lifecycle_seq").ValueKind == JsonValueKind.Null
                 ? null : latest.GetProperty("lifecycle_seq").GetInt64(),
             latest.ValueKind == JsonValueKind.Null ? null : latest.GetProperty("snapshot_path").GetString());
+    }
+    public async Task<SnapshotCollectionPage> SnapshotPageAsync(string selector, string? after = null, int limit = 16)
+    {
+        var payload = await ReceiveAsync(() => client.ListSnapshotsAsync(paths, selector, after, limit));
+        return ParseSnapshotPage(payload, selector, limit);
+    }
+    internal static SnapshotCollectionPage ParseSnapshotPage(JsonElement payload, string expectedSelector, int requestedLimit = 16)
+    {
+        if (payload.GetProperty("phase").GetString() != "terminal" ||
+            payload.GetProperty("error").ValueKind != JsonValueKind.Null)
+            throw new IOException(payload.ToString());
+        var result = payload.GetProperty("result");
+        if (result.GetProperty("outcome").GetString() != "succeeded")
+            throw new InvalidDataException("Snapshot query did not succeed.");
+        var page = result.GetProperty("page");
+        var selector = page.GetProperty("selector").GetString();
+        if (selector != expectedSelector) throw new InvalidDataException("Snapshot page selector mismatch.");
+        var items = new List<SnapshotCollectionItem>();
+        foreach (var item in page.GetProperty("items").EnumerateArray())
+        {
+            var id = item.GetProperty("snapshot_id").GetString();
+            var status = item.GetProperty("status").GetString();
+            var files = item.GetProperty("file_count").GetInt64();
+            var directories = item.GetProperty("directory_count").GetInt64();
+            var bytes = item.GetProperty("logical_bytes").GetInt64();
+            if (string.IsNullOrEmpty(id) || status is not ("complete" or "incomplete") ||
+                files < 0 || directories < 0 || bytes < 0 || items.Count >= requestedLimit)
+                throw new InvalidDataException("Invalid snapshot page item.");
+            var sequence = item.GetProperty("lifecycle_seq");
+            var created = item.GetProperty("created_at");
+            var resumed = item.GetProperty("resumed_from_snapshot_id");
+            items.Add(new(id, status,
+                created.ValueKind == JsonValueKind.Null ? null : created.GetString(),
+                sequence.ValueKind == JsonValueKind.Null ? null : sequence.GetUInt64(),
+                files, directories, bytes,
+                resumed.ValueKind == JsonValueKind.Null ? null : resumed.GetString(),
+                item.GetProperty("format_version").GetInt32()));
+        }
+        var next = page.GetProperty("next_after");
+        var latest = page.GetProperty("latest_complete_snapshot_id");
+        var cursor = next.ValueKind == JsonValueKind.Null ? null : next.GetString();
+        if (cursor is not null && (items.Count == 0 || items[^1].SnapshotId != cursor))
+            throw new InvalidDataException("Snapshot page cursor mismatch.");
+        return new(selector!, items, cursor,
+            latest.ValueKind == JsonValueKind.Null ? null : latest.GetString());
     }
     public async Task<BackupCatalog> CatalogAsync()
     {

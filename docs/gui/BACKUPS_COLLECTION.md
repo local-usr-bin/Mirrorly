@@ -29,9 +29,10 @@ Set up backup action if it does not. The Overview reacquires task facts from the
 shared Python catalog and latest-complete summary, and uses the same app-scoped
 Backup coordinator for Running, Queued, removal, results and attention. It keeps
 Source, the selected Backup location and the freshly resolved Mirrorly repository
-distinct. A failed summary remains unavailable, not zero saved versions. Snapshot
-listing and Backup-specific Settings are deferred; neither has a placeholder
-destination in this Overview batch.
+distinct. A failed summary remains unavailable, not zero saved versions. A
+bounded production `snapshots.list` data query now exists, but the Snapshots GUI
+and Backup-specific Settings remain deferred; neither has a placeholder
+destination in Overview.
 
 Restore, Activity and global Settings remain separate later work. Home shows the truthful empty Activity state without an active `View all`
 link to the unfinished Activity page. Rebuilt Backup cards keep keyboard focus

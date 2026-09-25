@@ -502,6 +502,8 @@ sealed class DeferredBackupSession(DesktopSession inner) : IDesktopSession, ISet
     public Task<JsonElement> CreateAsync(SetupCreateIntent intent) => inner.CreateAsync(intent);
     public Task<BackupCatalog> CatalogAsync() => inner.CatalogAsync();
     public Task<SavedBackupSummary> BackupSummaryAsync(string selector) => inner.BackupSummaryAsync(selector);
+    public Task<SnapshotCollectionPage> SnapshotPageAsync(string selector, string? after = null, int limit = 16) =>
+        inner.SnapshotPageAsync(selector, after, limit);
     public async Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null)
     {
         if (Interlocked.Increment(ref calls) == 1) { FirstCalled.TrySetResult(); await release.Task; }

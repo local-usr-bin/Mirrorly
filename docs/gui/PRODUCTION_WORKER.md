@@ -1,4 +1,4 @@
-# Production Worker Contract v1 — Phase 4C
+# Production Worker Contract v1
 
 Current implementation / frozen contract, 2026-09-24. This is the current production
 IPC source of truth. [Phase 0 IPC_CONTRACT](IPC_CONTRACT.md) remains a historical
@@ -10,6 +10,8 @@ binds the Resume decision to the main window, and adds read-only `backup.summary
 for authoritative saved-version rediscovery. This is not production distribution readiness.
 Phase 4C adds an app-scoped, memory-only GUI FIFO in the existing Backup coordinator;
 the worker still has one execution slot and no queue.
+The subsequent read-only data batch adds `snapshots.list`; the Snapshots GUI is
+not connected yet.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
 Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
@@ -128,7 +130,7 @@ validated independently; invalid method input is a request rejection, not execut
 4. Only then can `request` messages be admitted.
 
 Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`,
-`setup.create`, `tasks.list`, `backup.run`, `backup.summary`.
+`setup.create`, `tasks.list`, `backup.run`, `backup.summary`, `snapshots.list`.
 No repository.inspect was added. The bounded readonly tasks.list contract is specified in [PHASE3E](PHASE3E.md#durable-task-catalog). Unknown methods, including
 verify, restore, cancellation and test_crash, are rejected before application.
 
@@ -598,6 +600,38 @@ lifecycle sequence and existing snapshot directory. C# does not reconstruct
 snapshot paths or parse task TOML. On fresh launch Home can rediscover a saved
 version without inventing Activity or claiming that the source is unchanged.
 Home can open only the Python-provided existing snapshot path in File Explorer.
+
+### Read-only snapshot collection
+
+`snapshots.list` uses the existing application `list_snapshots()` and core
+`select_default_complete()` facts. Its request contains absolute `config_root`,
+durable task selector `task`, optional `after` snapshot ID (null for the first
+page), and `limit` (default/max 16). It occupies the one application slot and
+does not acquire mutation-gate ownership or publish a report. A successful
+terminal result has `outcome=succeeded` and a `page` with `selector`, `items`,
+`next_after` (null at the end), and `latest_complete_snapshot_id` (null when
+there is no complete snapshot). Each item contains snapshot ID, literal
+`complete`/`incomplete` status, creation timestamp, nullable uint64 lifecycle
+sequence, file/directory counts, total logical bytes, nullable Resume origin,
+and manifest format version. It does not expose entries, hashes, physical usage,
+reports, or arbitrary snapshot directory paths.
+
+Pages retain core manifest-filename order; their first row is **not** the
+authoritative latest. The latest ID comes from the existing core selection over
+the full observation, including its legacy ambiguity failure. `after` names the
+last returned snapshot ID; it must still identify exactly one item on the next
+fresh observation, or the query fails. Repository changes between page calls
+can insert/skip items relative to that cursor; paging is not a repository
+transaction or lock. Duplicate IDs also fail closed. Malformed manifests,
+unreadable configuration, unavailable/invalid repository, and ambiguous latest
+selection return application `snapshots_unavailable`, never successful empty
+items. Only a real zero-manifest repository returns an empty successful page.
+
+Each item is capped at 16 KiB of JSON and IDs/cursors at 1,024 characters;
+the maximum 16-item page stays well below the normal 1 MiB frame. An
+unrepresentable summary fails the query rather than truncating facts. The typed
+C# `SnapshotCollectionPage` retains nullable fields and the separate latest ID.
+No Snapshots tab/list or selected-snapshot Explorer action exists in the GUI yet.
 
 Live terminal presentation distinguishes normal success, completed with issues,
 `not_published`, application `unknown`, `published` with finalization failure,
