@@ -216,11 +216,13 @@ CLI 显示原 plan/entry 信息；存在 overwrite 时在原位置调用 `_confi
 3. 复核 repo/source/destination 的实际路径边界与双侧 reparse，重跑条目分类；整批 no-upgrade 拒绝任何破坏性升级。
 4. 每条写入前再分类、检查 no-upgrade；文件 staging 完成后、`os.replace` 前再执行 final check，否决则清理本次 owned temp。
 
-保留原 final-check → replace 的残余 TOCTOU 窗口；未新增 repo writer lock，也未在 plan/apply 间重新解析 task/volume identity。未来 worker 不得把任意客户端 plan DTO 当成可信服务端授权，或在 stale 后静默重规划/升级；如何管理 plan reference 属下一阶段。
+保留原 final-check → replace 的残余 TOCTOU 窗口；未新增 repo writer lock，也未在 plan/apply 间重新解析 task/volume identity。worker 不得把任意客户端 plan DTO 当成可信服务端授权，或在 stale 后静默重规划/升级。R1 已加入只读 `restore.prepare` 并在 worker 会话内只保留一份原始 Python plan；`restore.execute` 仍未开放，详见 [生产 worker 契约](PRODUCTION_WORKER.md#read-only-restore-preparation-r1)。
 
 `RestorationResult(result)` 保留原 core `RestoreResult` 的 restored、dirs_created、skipped、conflicts、errors、leftovers、bytes_written；`has_issues` 仍由 skipped/conflicts/errors/leftovers 判定。apply 未返回而抛错时，`RestoreExecutionFailure(cause, prepared)` 只保留原异常及准备的意图，不制造 partial counts 或 rollback/零副作用保证。core 正常返回的 partial restore 继续保留已恢复文件。
 
 Restore v1 不变：默认 never/Skip；显式批准的 always/Replace；原 older 语义保留。类型冲突不删除用户数据，目标额外文件不删除，无 Keep both、内容相同自动跳过、逐文件 policy、exact mirror 或自动 full verify。restore 仍不新增 report publication。
+
+R1 安全回归确认：仅拒绝 destination 根落入仓库不足以保护仓库父目录作为目标的情况；当某个已选 manifest 相对路径落入仓库子树时，core 现在在 plan、apply 重规划及逐项重验中 fail closed。父目录中的不相交普通 Restore 目标仍允许；不改变 Source/subdirectory safe-merge 规则。
 
 ### 兼容性验证与未来 worker 约束
 

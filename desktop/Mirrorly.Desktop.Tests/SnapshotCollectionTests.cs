@@ -143,6 +143,7 @@ static class SnapshotCollectionTests
         public Task<System.Text.Json.JsonElement> CreateAsync(SetupCreateIntent intent) => throw new NotSupportedException();
         public Task<BackupCatalog> CatalogAsync() => throw new NotSupportedException();
         public Task<SavedBackupSummary> BackupSummaryAsync(string selector) => throw new NotSupportedException();
+        public Task<RestorePreparedPlanPreview> PrepareRestoreAsync(RestorePrepareIntent intent) => throw new NotSupportedException();
         public Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null) => throw new NotSupportedException();
     }
 }

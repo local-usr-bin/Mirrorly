@@ -92,6 +92,7 @@ def test_real_create_without_preflight_and_exact_methods(tmp_path, intent):
             "backup.run",
             "backup.summary",
             "snapshots.list",
+            "restore.prepare",
         ]
         assert peer.hello["payload"]["qualification"]["cli_imported"] is False
         assert_success(intent, create(peer, intent))

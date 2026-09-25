@@ -19,7 +19,9 @@ HOST = ROOT / "src/mirrorly/worker/launch.py"
 
 
 class Peer:
-    def __init__(self, process=None, service=None, create_service=None):
+    def __init__(
+        self, process=None, service=None, create_service=None, restore_prepare_service=None
+    ):
         self.process = process
         self.responses = queue.Queue()
         self.input = queue.Queue()
@@ -37,6 +39,7 @@ class Peer:
                 {},
                 service=service,
                 create_service=create_service,
+                restore_prepare_service=restore_prepare_service,
                 shutdown_seconds=0.1,
             )
             self.thread = threading.Thread(target=self.host.run, daemon=True)

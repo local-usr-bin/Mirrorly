@@ -19,6 +19,11 @@ public sealed record SetupCreateIntent(string task_name, string source, string t
 public sealed record BackupRunInput(string config_root, string? task, bool dry_run, bool full_hash, string[] exclude);
 public sealed record BackupRunIntent(string? task, bool dry_run = false, bool full_hash = false, string[]? exclude = null);
 public sealed record SnapshotListInput(string config_root, string task, string? after, int limit);
+public enum RestoreConflictPolicy { SkipExisting, ReplaceExisting }
+public sealed record RestorePrepareIntent(string TaskSelector, string? SnapshotId, string Destination,
+    RestoreConflictPolicy Policy = RestoreConflictPolicy.SkipExisting);
+public sealed record RestorePrepareInput(string config_root, string task, string? snapshot_id,
+    string destination, string policy);
 public sealed record ResumeInteraction(string RequestId, string OperationId, string InteractionId, string SnapshotId, string CreatedAt, int DeadlineSeconds);
 public sealed record WorkerAdmission(string RequestId, string OperationId);
 public enum ResumeAnswer { Resume, DeclineResume, Unavailable }
@@ -149,6 +154,13 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
         RequestAsync("backup.summary", new { config_root = paths.TaskConfigRoot, task = selector });
     public Task<WorkerRequest> ListSnapshotsAsync(GuiDataPaths paths, string selector, string? after = null, int limit = 16) =>
         RequestAsync("snapshots.list", new SnapshotListInput(paths.TaskConfigRoot, selector, after, limit));
+    public Task<WorkerRequest> PrepareRestoreAsync(GuiDataPaths paths, RestorePrepareIntent intent) =>
+        RequestAsync("restore.prepare", new RestorePrepareInput(paths.TaskConfigRoot, intent.TaskSelector,
+            intent.SnapshotId, intent.Destination, intent.Policy switch {
+                RestoreConflictPolicy.SkipExisting => "skip_existing",
+                RestoreConflictPolicy.ReplaceExisting => "replace_existing",
+                _ => throw new ArgumentOutOfRangeException(nameof(intent))
+            }));
 
     internal static string AllocateRequestId(ref ulong highest)
     {
@@ -158,7 +170,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
-        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run" or "backup.summary" or "snapshots.list");
+        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run" or "backup.summary" or "snapshots.list" or "restore.prepare");
     }
 
     private async Task<WorkerRequest> SendAsync(string kind, object payload, bool application = false)

@@ -120,6 +120,10 @@ class RestoreError(Exception):
     """恢复相关错误（安全检查拒绝、stale plan、manifest 非法等）。"""
 
 
+class RestoreUnsafeDestinationError(RestoreError):
+    """The destination or a selected entry would violate a Restore safety boundary."""
+
+
 @dataclass(frozen=True)
 class RestoreEntry:
     """计划中单个条目的恢复动作（路径为快照相对 POSIX 风格字符串）。"""
@@ -318,24 +322,29 @@ def _same_actual_location(a: Path, b: Path) -> bool:
         return _real_norm(a) == _real_norm(b)
 
 
+def _check_repository_target(repo: RepoInfo, target: Path) -> None:
+    """Never let a selected Restore entry reach the repository, even from its parent."""
+    for candidate in (_norm(target), _real_norm(target)):
+        for repository in (_norm(repo.path), _real_norm(repo.path)):
+            if candidate == repository or candidate.startswith(repository + os.sep):
+                raise RestoreUnsafeDestinationError(f"恢复目标不能位于仓库目录内: {target}")
+
+
 def _check_destination(
     repo: RepoInfo, destination: Path, manifest: Manifest, in_place: bool
 ) -> None:
     """目标边界：仓库内拒绝（含别名到达）；等于原 source_root（同一实际位置，
     含别名）必须 in_place；普通子目录允许。"""
-    dest_variants = {_norm(destination), _real_norm(destination)}
-    repo_variants = {_norm(repo.path), _real_norm(repo.path)}
-    for d in dest_variants:
-        for r in repo_variants:
-            if d == r or d.startswith(r + os.sep):
-                raise RestoreError(f"恢复目标不能位于仓库目录内: {destination}")
+    _check_repository_target(repo, destination)
     if _same_actual_location(destination, Path(manifest.source_root)) and not in_place:
-        raise RestoreError(
+        raise RestoreUnsafeDestinationError(
             f"恢复目标即原始源路径 {manifest.source_root}（同一实际位置），必须显式指定 in_place"
         )
     dest_attrs = _file_attributes(to_long_path(destination))
     if dest_attrs is not None and dest_attrs & _FILE_ATTRIBUTE_REPARSE_POINT:
-        raise RestoreError(f"恢复目标为 reparse point（链接/交接点），保守拒绝: {destination}")
+        raise RestoreUnsafeDestinationError(
+            f"恢复目标为 reparse point（链接/交接点），保守拒绝: {destination}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +376,7 @@ def _select_entries(manifest: Manifest, selectors: tuple[str, ...]) -> list[Mani
 
 
 def _classify_entry(
+    repo: RepoInfo,
     m_entry: ManifestEntry,
     snap_dir: Path,
     destination: Path,
@@ -382,6 +392,7 @@ def _classify_entry(
     rel = m_entry.path
     validate_canonical_rel_path(rel, what="manifest 条目路径")
     dest = destination / Path(rel)
+    _check_repository_target(repo, dest)
     dest_lp = to_long_path(dest)
 
     # snapshot 读侧 reparse 防护（root + 快照内祖先链 + 条目自身）：
@@ -438,6 +449,7 @@ def _classify_entry(
 
 
 def _plan_entries(
+    repo: RepoInfo,
     manifest: Manifest,
     snap_dir: Path,
     destination: Path,
@@ -446,7 +458,7 @@ def _plan_entries(
 ) -> tuple[RestoreEntry, ...]:
     """核心规划：逐条目判定动作。plan 与 apply 共用（apply 重跑规划）。"""
     entries = [
-        _classify_entry(m_entry, snap_dir, destination, overwrite)
+        _classify_entry(repo, m_entry, snap_dir, destination, overwrite)
         for m_entry in _select_entries(manifest, selectors)
     ]
     # 目录先于文件、浅层先于深层，保证父目录先创建
@@ -503,7 +515,7 @@ def plan_restore(
         raise RestoreError(f"快照目录不存在: {snap_dir}")
 
     _check_destination(repo, destination, manifest, in_place)
-    entries = _plan_entries(manifest, snap_dir, destination, selectors, overwrite)
+    entries = _plan_entries(repo, manifest, snap_dir, destination, selectors, overwrite)
     return RestorePlan(
         snapshot_id=snapshot_id,
         destination=destination,
@@ -565,7 +577,7 @@ def apply_restore(repo: RepoInfo, plan: RestorePlan) -> RestoreResult:
     # 2. 重跑规划（含 canonical / reparse / 目标边界全量重验）
     destination = plan.destination
     _check_destination(repo, destination, manifest, plan.in_place)
-    recomputed = _plan_entries(manifest, snap_dir, destination, plan.paths, plan.overwrite)
+    recomputed = _plan_entries(repo, manifest, snap_dir, destination, plan.paths, plan.overwrite)
 
     # 3. no-upgrade 对账
     _reconcile_no_upgrade(plan.entries, recomputed)
@@ -591,7 +603,7 @@ def apply_restore(repo: RepoInfo, plan: RestorePlan) -> RestoreResult:
         # 紧邻 I/O 前重验：与 plan 共享同一分类器，防「batch 规划 → 实际写入」
         # 之间目标状态变化被旧决策静默覆盖
         try:
-            fresh = _classify_entry(m_entry, snap_dir, destination, plan.overwrite)
+            fresh = _classify_entry(repo, m_entry, snap_dir, destination, plan.overwrite)
         except RestoreError as e:
             errors.append((entry.rel_path, f"执行前重验失败: {e}"))
             continue
@@ -626,7 +638,7 @@ def apply_restore(repo: RepoInfo, plan: RestorePlan) -> RestoreResult:
                     m_entry.mtime_ns,
                     leftovers,
                     pre_commit=lambda fresh=fresh, m_entry=m_entry: _final_recheck(
-                        m_entry, snap_dir, destination, plan.overwrite, fresh.action
+                        repo, m_entry, snap_dir, destination, plan.overwrite, fresh.action
                     ),
                 )
                 if veto is None:
@@ -653,6 +665,7 @@ def apply_restore(repo: RepoInfo, plan: RestorePlan) -> RestoreResult:
 
 
 def _final_recheck(
+    repo: RepoInfo,
     m_entry: ManifestEntry,
     snap_dir: Path,
     destination: Path,
@@ -669,7 +682,7 @@ def _final_recheck(
       记 conflict（破坏性升级，绝不覆盖新出现的文件）；
     - final 持平或降级（更安全）→ 允许 commit。
     """
-    final = _classify_entry(m_entry, snap_dir, destination, overwrite)
+    final = _classify_entry(repo, m_entry, snap_dir, destination, overwrite)
     if final.action in (ACTION_SKIP, ACTION_CONFLICT):
         return final.action, f"commit 前状态变化: {final.reason}"
     if _ACTION_RANK[final.action] > _ACTION_RANK[baseline_action]:

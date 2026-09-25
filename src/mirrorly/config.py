@@ -43,6 +43,10 @@ class ConfigError(Exception):
     """配置解析/校验错误。"""
 
 
+class ConfigNotFoundError(ConfigError):
+    """An explicitly selected task configuration is absent."""
+
+
 # Windows 保留设备名（含 Windows 官方补充的上标形式；带扩展名形式同样保留）
 _RESERVED_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
@@ -172,7 +176,7 @@ def load_task_config(path: str | Path) -> TaskConfig:
     """加载并校验任务配置文件（严格模式）。"""
     path = Path(path)
     if not path.exists():
-        raise ConfigError(f"配置文件不存在: {path}")
+        raise ConfigNotFoundError(f"配置文件不存在: {path}")
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:

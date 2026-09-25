@@ -14,6 +14,14 @@ public sealed record SnapshotCollectionItem(string SnapshotId, string Status, st
     string? ResumedFromSnapshotId, int FormatVersion);
 public sealed record SnapshotCollectionPage(string Selector, IReadOnlyList<SnapshotCollectionItem> Items,
     string? NextAfter, string? LatestCompleteSnapshotId);
+public sealed record RestorePreparedPlanPreview(string PlanId, string Selector, string SnapshotId,
+    string Destination, RestoreConflictPolicy Policy, long FileCreateCount, long FileOverwriteCount,
+    long FileSkipCount, long FileConflictCount, long DirectoryEntryCount);
+public sealed class RestorePrepareRejectedException(string kind, string code) : IOException($"Restore preparation was not available ({code}).")
+{
+    public string Kind { get; } = kind;
+    public string Code { get; } = code;
+}
 public sealed record WorkerReply(string RequestId, string? OperationId, JsonElement Payload);
 public interface ISetupApi
 {
@@ -22,6 +30,7 @@ public interface ISetupApi
     Task<BackupCatalog> CatalogAsync();
     Task<SavedBackupSummary> BackupSummaryAsync(string selector);
     Task<SnapshotCollectionPage> SnapshotPageAsync(string selector, string? after = null, int limit = 16);
+    Task<RestorePreparedPlanPreview> PrepareRestoreAsync(RestorePrepareIntent intent);
     Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null);
 }
 public interface IDesktopSession
@@ -124,6 +133,55 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
     {
         var payload = await ReceiveAsync(() => client.ListSnapshotsAsync(paths, selector, after, limit));
         return ParseSnapshotPage(payload, selector, limit);
+    }
+    public async Task<RestorePreparedPlanPreview> PrepareRestoreAsync(RestorePrepareIntent intent)
+    {
+        var payload = await ReceiveAsync(() => client.PrepareRestoreAsync(paths, intent));
+        return ParseRestorePrepare(payload, intent.TaskSelector, intent.Policy, intent.SnapshotId);
+    }
+    internal static RestorePreparedPlanPreview ParseRestorePrepare(JsonElement payload, string expectedSelector,
+        RestoreConflictPolicy expectedPolicy, string? expectedSnapshotId = null)
+    {
+        try
+        {
+            var error = payload.GetProperty("error");
+            if (error.ValueKind != JsonValueKind.Null)
+            {
+                var kind = error.GetProperty("kind").GetString();
+                var code = error.GetProperty("code").GetString();
+                if (string.IsNullOrEmpty(kind) || string.IsNullOrEmpty(code))
+                    throw new InvalidDataException("Malformed Restore error response.");
+                throw new RestorePrepareRejectedException(kind, code);
+            }
+            if (payload.GetProperty("phase").GetString() != "terminal" ||
+                payload.GetProperty("result").GetProperty("outcome").GetString() != "succeeded")
+                throw new InvalidDataException("Restore prepare did not return a successful terminal result.");
+            var preview = payload.GetProperty("result").GetProperty("preview");
+            var planId = preview.GetProperty("plan_id").GetString();
+            var selector = preview.GetProperty("selector").GetString();
+            var snapshot = preview.GetProperty("snapshot_id").GetString();
+            var destination = preview.GetProperty("destination").GetString();
+            var policy = preview.GetProperty("policy").GetString() switch {
+                "skip_existing" => RestoreConflictPolicy.SkipExisting,
+                "replace_existing" => RestoreConflictPolicy.ReplaceExisting,
+                _ => throw new InvalidDataException("Unknown Restore policy in preview.")
+            };
+            long Count(string name) => preview.GetProperty(name).GetInt64();
+            var counts = new[] { Count("file_create_count"), Count("file_overwrite_count"),
+                Count("file_skip_count"), Count("file_conflict_count"), Count("directory_entry_count") };
+            if (planId is null || !Guid.TryParseExact(planId, "N", out _) ||
+                selector != expectedSelector || string.IsNullOrEmpty(snapshot) ||
+                (expectedSnapshotId is not null && snapshot != expectedSnapshotId) ||
+                string.IsNullOrEmpty(destination) || !Path.IsPathFullyQualified(destination) ||
+                policy != expectedPolicy || counts.Any(value => value < 0))
+                throw new InvalidDataException("Invalid Restore preview facts.");
+            return new(planId, selector!, snapshot, destination, policy,
+                counts[0], counts[1], counts[2], counts[3], counts[4]);
+        }
+        catch (Exception error) when (error is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException or JsonException)
+        {
+            throw new InvalidDataException("Malformed Restore prepare response.", error);
+        }
     }
     internal static SnapshotCollectionPage ParseSnapshotPage(JsonElement payload, string expectedSelector, int requestedLimit = 16)
     {

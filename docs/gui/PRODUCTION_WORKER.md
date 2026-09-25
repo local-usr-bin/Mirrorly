@@ -10,8 +10,9 @@ binds the Resume decision to the main window, and adds read-only `backup.summary
 for authoritative saved-version rediscovery. This is not production distribution readiness.
 Phase 4C adds an app-scoped, memory-only GUI FIFO in the existing Backup coordinator;
 the worker still has one execution slot and no queue.
-The subsequent read-only data batch adds `snapshots.list`; the Snapshots GUI is
-not connected yet.
+The subsequent read-only data batch adds `snapshots.list`, now used by Backup
+Detail's Snapshots section. Restore R1 adds only read-only `restore.prepare`;
+Restore execution and its GUI remain unimplemented.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
 Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
@@ -130,9 +131,10 @@ validated independently; invalid method input is a request rejection, not execut
 4. Only then can `request` messages be admitted.
 
 Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`,
-`setup.create`, `tasks.list`, `backup.run`, `backup.summary`, `snapshots.list`.
+`setup.create`, `tasks.list`, `backup.run`, `backup.summary`, `snapshots.list`,
+`restore.prepare`.
 No repository.inspect was added. The bounded readonly tasks.list contract is specified in [PHASE3E](PHASE3E.md#durable-task-catalog). Unknown methods, including
-verify, restore, cancellation and test_crash, are rejected before application.
+verify, `restore.execute`, cancellation and test_crash, are rejected before application.
 
 `resume_interaction=true` after the tested `backup.resume` round-trip. The other
 capabilities remain false: phase_progress, item_progress, byte_progress,
@@ -637,6 +639,55 @@ ID equals `latest_complete_snapshot_id`; it does not infer latest from page
 position or timestamp. Incomplete rows remain visibly unfinished. Query errors
 are unavailable states, not empty collections. Selected-snapshot Explorer,
 Restore, Verify and Backup-specific Settings remain later work.
+
+### Read-only Restore preparation (R1)
+
+`restore.prepare` occupies the existing single application slot but requires no
+mutation-gate ownership. It resolves the durable task selector and repository
+afresh, then calls the existing Python `application.restoration.prepare_restore`.
+It writes neither destination nor repository and publishes no report. Its exact
+request fields are absolute `config_root`, durable `task`, nullable `snapshot_id`
+(`null` selects the application's authoritative latest complete snapshot),
+absolute `destination`, and `policy` = `skip_existing` or `replace_existing`.
+These map only to core `never` and `always`; `older`, path subsets, `in_place`,
+Keep both and exact-mirror Restore are not production GUI prepare options.
+Only a complete snapshot can be prepared.
+
+A successful terminal result has `outcome=succeeded` and bounded `preview`:
+opaque 32-hex `plan_id`, selector, resolved snapshot ID, frozen absolute
+destination, policy, file create/overwrite/skip/conflict counts, and
+`directory_entry_count`. The latter counts planned directory entries, **not**
+directories guaranteed to be created. No entry list, manifest digest, target
+paths, duration, free-space promise, physical bytes or integrity conclusion is
+sent. Preview JSON is capped at 64 KiB, with separately bounded identifiers and
+paths, comfortably below the normal 1 MiB frame. Unrepresentable facts fail
+projection; they do not become an approvable plan.
+
+The worker retains at most **one** original Python prepared object. An admitted
+new `restore.prepare` discards the prior plan even if the new application query
+fails. Rejected invalid/busy requests do not replace it. The plan lives only in
+the current worker session; shutdown, EOF and restart discard it. There is no
+wall-clock TTL in R1. Future `restore.execute` must resolve this worker-owned
+object by ID, consume it once and retain core's manifest/destination/no-upgrade
+revalidation. **`plan_id` is a reference, not approval.** In particular,
+`file_overwrite_count > 0` is a Review fact; execution still needs distinct,
+explicit Replace approval. This release exposes no execute method and performs
+no Restore writes. A missing terminal is transport uncertainty; the client never
+automatically replays prepare or assumes the old plan remains usable. A fresh
+prepare produces a fresh approval candidate.
+
+Request shape errors and busy remain admission rejections. Application failures
+return no preview and a stable code such as `unknown_task`, `task_unreadable`,
+`repository_unavailable`, `repository_invalid`, `unknown_snapshot`,
+`incomplete_snapshot`, `no_complete_snapshot`, `unsafe_destination`,
+`manifest_unavailable` or `restore_plan_failed`, plus bounded technical detail.
+Malformed v2 manifest JSON can fail earlier repository lifecycle validation and
+therefore report `repository_invalid`; the code names the actual failing
+boundary, not a guessed diagnosis. A query failure is never a zero-count plan.
+`restore.execute` remains future destination mutation: it must have separate
+mutation admission, lifecycle supervision and no automatic replay. Restore does
+not enter the GUI Backup FIFO. R2/R3 will bind Review and execution after the
+Backup-vs-Restore GUI policy is decided.
 
 Live terminal presentation distinguishes normal success, completed with issues,
 `not_published`, application `unknown`, `published` with finalization failure,

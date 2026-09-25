@@ -61,6 +61,14 @@ class ManifestError(Exception):
     """清单读写/校验相关错误。"""
 
 
+class ManifestNotFoundError(ManifestError):
+    """The selected snapshot manifest does not exist."""
+
+
+class ManifestIncompleteError(ManifestError):
+    """The selected snapshot is not a complete saved version."""
+
+
 class ManifestPathError(ManifestError):
     """Manifest 条目路径不符合 canonical snapshot-relative 规则。"""
 
@@ -259,14 +267,14 @@ def load_manifest(repo: RepoInfo, snapshot_id: str, *, require_complete: bool = 
     """加载清单。require_complete=True 时拒绝 incomplete（防误当完整备份）。"""
     path = repo.path / "manifests" / f"{snapshot_id}.json"
     if not path.exists():
-        raise ManifestError(f"清单不存在: {snapshot_id}")
+        raise ManifestNotFoundError(f"清单不存在: {snapshot_id}")
     data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("format_version") not in SUPPORTED_FORMAT_VERSIONS:
         raise ManifestError(
             f"清单格式版本不兼容: {data.get('format_version')}（支持 {SUPPORTED_FORMAT_VERSIONS}）"
         )
     if require_complete and data["status"] != STATUS_COMPLETE:
-        raise ManifestError(f"清单状态为 {data['status']}，不是完整备份: {snapshot_id}")
+        raise ManifestIncompleteError(f"清单状态为 {data['status']}，不是完整备份: {snapshot_id}")
     return _from_dict(data)
 
 

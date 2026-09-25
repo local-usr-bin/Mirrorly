@@ -339,9 +339,33 @@ class TestPlanAndDestinationBoundary:
         repo = _init_repo(tmp_path / "target")
         _make_snapshot(repo, "s1", {"a.txt": b"a"})
         with pytest.raises(RestoreError, match="仓库目录内"):
+            plan_restore(repo, "s1", repo.path)
+        with pytest.raises(RestoreError, match="仓库目录内"):
             plan_restore(repo, "s1", repo.path / "restore-out")
         with pytest.raises(RestoreError, match="仓库目录内"):
             plan_restore(repo, "s1", repo.path / "snapshots" / "elsewhere")
+
+    def test_repository_parent_target_cannot_restore_into_repository(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        relative_manifest = f"target/{repo.path.name}/manifests/s1.json"
+        _make_snapshot(repo, "s1", {relative_manifest: b"not a manifest"})
+        with pytest.raises(RestoreError, match="仓库"):
+            plan_restore(repo, "s1", tmp_path, overwrite="always")
+        alias_parent = tmp_path / "alias"
+        alias_parent.mkdir()
+        with pytest.raises(RestoreError, match="仓库"):
+            plan_restore(repo, "s1", alias_parent / "..", overwrite="always")
+        safe = plan_restore(repo, "s1", tmp_path / "restored", overwrite="always")
+        forged = replace(safe, destination=tmp_path)
+        with pytest.raises(RestoreError, match="仓库"):
+            apply_restore(repo, forged)
+        assert (repo.path / "manifests" / "s1.json").is_file()
+
+    def test_repository_parent_without_target_overlap_remains_allowed(self, tmp_path) -> None:
+        repo = _init_repo(tmp_path / "target")
+        _make_snapshot(repo, "s1", {"other/a.txt": b"a"})
+        plan = plan_restore(repo, "s1", tmp_path)
+        assert plan.entries
 
     def test_in_place_required_only_for_same_location(self, tmp_path) -> None:
         repo = _init_repo(tmp_path / "target")

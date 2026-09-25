@@ -11,7 +11,7 @@ from collections import OrderedDict
 from mirrorly.application import setup
 
 from . import backup as backup_wire
-from . import catalog, creation, preflight, protocol, snapshots, summary
+from . import catalog, creation, preflight, protocol, restore_prepare, snapshots, summary
 from .lifecycle import LifecycleGate
 from .transport import Outbound
 
@@ -25,6 +25,7 @@ METHODS = [
     "backup.run",
     "backup.summary",
     "snapshots.list",
+    "restore.prepare",
 ]
 CAPABILITIES = dict.fromkeys(
     [
@@ -66,6 +67,7 @@ class WorkerHost:
         service=None,
         create_service=None,
         backup_service=None,
+        restore_prepare_service=None,
         resume_seconds=RESUME_SECONDS,
         shutdown_seconds=1,
     ):
@@ -74,6 +76,7 @@ class WorkerHost:
         self.service = service or setup.preflight_setup
         self.create_service = create_service or setup.create_backup
         self.backup_service = backup_service or backup_wire.backup.run_backup
+        self.restore_prepare_service = restore_prepare_service or restore_prepare.prepare
         self.resume_seconds = resume_seconds
         self.shutdown_seconds = shutdown_seconds
         self.session = uuid.uuid4().hex
@@ -91,6 +94,7 @@ class WorkerHost:
         self.lifecycle_gate = None
         self.resume_lock = threading.Lock()
         self.pending_resume = None
+        self.restore_plan = None  # At most one worker-owned, unapproved Python plan.
 
     def _message(
         self,
@@ -424,6 +428,40 @@ class WorkerHost:
             }
         self.completion.put_nowait((rid, oid, payload, error))
 
+    def _execute_restore_prepare(self, rid, oid, request):
+        try:
+            prepared = self.restore_prepare_service(request)
+        except Exception as exc:
+            payload = {"outcome": "failed", "preview": None}
+            error = {
+                "kind": "application",
+                "code": restore_prepare.failure_code(exc),
+                "technical": preflight.technical(exc),
+            }
+        else:
+            plan = restore_prepare.WorkerPreparedRestore(uuid.uuid4().hex, request, prepared)
+            try:
+                preview = restore_prepare.project(plan)
+                payload = {"outcome": "succeeded", "preview": preview}
+                error = None
+                protocol.encode(
+                    self._message(
+                        "response",
+                        {"phase": "terminal", "result": payload, "error": None},
+                        rid,
+                        oid,
+                    )
+                )
+                self.restore_plan = plan
+            except Exception as exc:
+                payload = {"outcome": "unreported", "preview": None}
+                error = {
+                    "kind": "worker",
+                    "code": "result_projection_failed",
+                    "technical": preflight.technical(exc),
+                }
+        self.completion.put_nowait((rid, oid, payload, error))
+
     def _finish_operation(self):
         try:
             rid, oid, result, error = self.completion.get_nowait()
@@ -506,6 +544,7 @@ class WorkerHost:
             "backup.run",
             "backup.summary",
             "snapshots.list",
+            "restore.prepare",
         ):
             if self.active and method not in ("setup.create", "backup.run"):
                 self._reject(rid, "busy")
@@ -519,6 +558,8 @@ class WorkerHost:
                     request = summary.request(params)
                 elif method == "snapshots.list":
                     request = snapshots.request(params)
+                elif method == "restore.prepare":
+                    request = restore_prepare.request(params)
                 elif method == "tasks.list":
                     request = catalog.request(params)
                 else:
@@ -529,6 +570,8 @@ class WorkerHost:
             if self.active:
                 self._reject(rid, "busy")
                 return False
+            if method == "restore.prepare":
+                self.restore_plan = None  # New intent invalidates the prior approval candidate.
             if method == "setup.create" or (method == "backup.run" and not request.dry_run):
                 try:
                     self.lifecycle_gate.require_ownership()
@@ -557,6 +600,8 @@ class WorkerHost:
                 if method == "backup.summary"
                 else self._execute_snapshots
                 if method == "snapshots.list"
+                else self._execute_restore_prepare
+                if method == "restore.prepare"
                 else self._execute
             )
             args = (
@@ -609,6 +654,7 @@ class WorkerHost:
         try:
             return self._run_session()
         finally:
+            self.restore_plan = None
             self.lifecycle_gate.close()
 
     def _run_session(self):

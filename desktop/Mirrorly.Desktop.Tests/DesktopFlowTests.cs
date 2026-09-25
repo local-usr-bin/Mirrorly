@@ -175,6 +175,7 @@ sealed class FakeDesktopSession : IDesktopSession, ISetupApi
         Summaries.TryGetValue(selector, out var saved) ? saved : new(selector, "configured repo", "repo-id", null, null, null, null));
     public Task<SnapshotCollectionPage> SnapshotPageAsync(string selector, string? after = null, int limit = 16) =>
         throw new NotSupportedException("Snapshot paging is not used by the GUI fixture.");
+    public Task<RestorePreparedPlanPreview> PrepareRestoreAsync(RestorePrepareIntent intent) => throw new NotSupportedException();
     public Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null)
     {
         BackupCalls++; LastBackupSelector = selector; BackupSelectors.Add(selector); BackupStarted?.Invoke(selector);
