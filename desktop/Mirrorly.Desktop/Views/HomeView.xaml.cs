@@ -28,6 +28,9 @@ public sealed partial class HomeView : UserControl
     }
     private void RenderFixture()
     {
+        var focused = Backups.Children.OfType<BackupSummary>()
+            .Select(card => (card.Selector, Action: card.FocusedAction))
+            .FirstOrDefault(item => item.Action is not null);
         Populated.Visibility = Model.ShowEmpty ? Visibility.Collapsed : Visibility.Visible;
         EmptyCard.Visibility = Model.ShowEmpty ? Visibility.Visible : Visibility.Collapsed;
         AdditionalSetup.Visibility = Model.ShowEmpty ? Visibility.Collapsed : Visibility.Visible;
@@ -44,6 +47,8 @@ public sealed partial class HomeView : UserControl
             summary.OpenRequested += OpenSnapshot;
             Backups.Children.Add(summary);
         }
+        if (focused.Action is { } action)
+            Backups.Children.OfType<BackupSummary>().FirstOrDefault(card => card.Selector == focused.Selector)?.RestoreFocus(action);
         StatusBadge.Style = (Style)Application.Current.Resources[Model.Status.Tone == StatusTone.Success ? "MirrorlySuccessBadge" : "MirrorlyStatusBadge"];
         StatusSymbol.Style = (Style)Application.Current.Resources[Model.Status.Tone == StatusTone.Success ? "MirrorlySuccessBadgeText" : $"Mirrorly{Model.Status.Tone}Text"];
         PrimaryAction.IsEnabled = Model.DesignPreview ? !Model.Status.Busy : Model.CanBackUp;
@@ -65,9 +70,6 @@ public sealed partial class HomeView : UserControl
         ActionColumn.Width = stacked ? new GridLength(0) : GridLength.Auto;
         StatusActions.HorizontalAlignment = stacked ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
         HeaderDecoration.Visibility = Model.ShowDecoration && ActualWidth >= HomePolicy.CompactActivityBelow ? Visibility.Visible : Visibility.Collapsed;
-        var compact = ActualWidth < HomePolicy.CompactActivityBelow;
-        ActivityCard.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        CompactActivity.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
     }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await Model.RefreshAsync(session);
     private async void Primary_Click(object sender, RoutedEventArgs e)
@@ -79,7 +81,7 @@ public sealed partial class HomeView : UserControl
     {
         if (!Directory.Exists(path))
         {
-            Model.ShowPresentationNotice("The saved Backup location is not available right now. No files were changed.");
+            Model.ShowPresentationNotice("The saved Backup folder is not available right now. No files were changed.");
             return;
         }
         try
@@ -102,5 +104,4 @@ public sealed partial class HomeView : UserControl
     private void Details_Click(object sender, RoutedEventArgs e) => TechnicalPanel.IsExpanded = true;
     private void Setup_Click(object sender, RoutedEventArgs e) => Navigate?.Invoke(ShellPage.BackupSetup);
     private void AllBackups_Click(object sender, RoutedEventArgs e) => Navigate?.Invoke(ShellPage.Backups);
-    private void Activity_Click(object sender, RoutedEventArgs e) => Navigate?.Invoke(ShellPage.Activity);
 }

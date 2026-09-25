@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Reflection;
 using System.Xml.Linq;
+using System.Globalization;
 using Mirrorly.Desktop.Services;
 using Mirrorly.Desktop.ViewModels;
 using Mirrorly.Desktop.Presentation;
@@ -187,6 +188,39 @@ await Test("Home preview uses saved-version time and stable fallback, while the 
     Check(fallback.Backups.Select(b => b.Id).SequenceEqual(["a-old", "b-missing", "c-invalid", "d-middle"]));
     var warning = home.AllBackups.Single(b => b.Id == "c-invalid") with { Tone = StatusTone.Warning };
     Check(HomePolicy.Preview(home.AllBackups.Where(b => b.Id != "c-invalid").Append(warning).ToArray())[0].Id == "c-invalid");
+    return Task.CompletedTask;
+});
+await Test("Saved-version time is local, culture-aware, and never invented", () =>
+{
+    var zone = TimeZoneInfo.CreateCustomTimeZone("test-offset", TimeSpan.FromHours(-8), "test-offset", "test-offset");
+    var culture = CultureInfo.GetCultureInfo("en-US");
+    var displayed = HomePolicy.FormatSavedVersionTime("2025-12-01T11:00:00+01:00", zone, culture);
+    Check(displayed == new DateTimeOffset(2025, 12, 1, 2, 0, 0, TimeSpan.FromHours(-8)).ToString("g", culture));
+    Check(HomePolicy.FormatSavedVersionTime(null, zone, culture) == "Time unavailable");
+    Check(HomePolicy.FormatSavedVersionTime("not a time", zone, culture) == "Time unavailable");
+    Check(HomePolicy.FormatSavedVersionTime("2025-12-01T10:00:00", zone, culture) == "Time unavailable");
+    var task = new ConfiguredBackup("saved", "saved.toml", "Saved", "source", "repository");
+    var home = new HomeViewModel();
+    home.ApplyCatalog(new BackupCatalog([task], []), new Dictionary<string, SavedBackupSummary> {
+        ["saved"] = new("saved", "repository", "repo-id", "snapshot", "2025-12-01T10:00:00+00:00", 1, "snapshot-path")
+    });
+    Check(home.Backups.Single().LastBackup == HomePolicy.FormatSavedVersionTime("2025-12-01T10:00:00+00:00"));
+    Check(home.Status.Detail == "Latest saved backup: " + home.Backups.Single().LastBackup);
+    home.ApplyCatalog(new BackupCatalog([task], []), new Dictionary<string, SavedBackupSummary> {
+        ["saved"] = new("saved", "repository", "repo-id", "snapshot", "malformed", 1, "snapshot-path")
+    });
+    Check(home.Backups.Single().LastBackup == "Time unavailable" && home.Status.Detail.EndsWith("Time unavailable"));
+    return Task.CompletedTask;
+});
+await Test("Repository label is factual and unfinished Home Activity has no link", () =>
+{
+    var root = Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>()
+        .Single(a => a.Key == "CheckoutRoot").Value!;
+    var card = File.ReadAllText(Path.Combine(root, "desktop", "Mirrorly.Desktop", "Components", "BackupSummary.xaml"));
+    var home = File.ReadAllText(Path.Combine(root, "desktop", "Mirrorly.Desktop", "Views", "HomeView.xaml"));
+    Check(card.Contains("Text=\"Mirrorly repository\"") && card.Contains("Text=\"Repository\""));
+    Check(!card.Contains("Text=\"Backup location\""));
+    Check(!home.Contains("Activity_Click") && !home.Contains("View recent activity"));
     return Task.CompletedTask;
 });
 await Test("Empty state hides summaries and history", () =>

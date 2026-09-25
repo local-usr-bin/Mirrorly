@@ -18,7 +18,7 @@
      <TextBlock Text="{Binding Source}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Source}" AutomationProperties.Name="{Binding Source}"/>
     </StackPanel>
     <StackPanel x:Name="DestinationPanel" Grid.Column="1" Spacing="{StaticResource MirrorlyTextSpacing}">
-     <TextBlock Text="Backup location" Style="{StaticResource MirrorlyCaption}"/>
+     <TextBlock Text="Mirrorly repository" Style="{StaticResource MirrorlyCaption}"/>
      <TextBlock Text="{Binding Destination}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Destination}" AutomationProperties.Name="{Binding Destination}"/>
     </StackPanel>
     </Grid>
@@ -45,7 +45,7 @@
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <TextBlock Text="From" Style="{StaticResource MirrorlyCaption}"/>
     <TextBlock Grid.Column="1" Text="{Binding Source}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Source}" AutomationProperties.Name="{Binding Source}"/>
-    <TextBlock Grid.Row="1" Text="To" Style="{StaticResource MirrorlyCaption}"/>
+    <TextBlock Grid.Row="1" Text="Repository" Style="{StaticResource MirrorlyCaption}"/>
     <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Destination}" Style="{StaticResource MirrorlyPath}" ToolTipService.ToolTip="{Binding Destination}" AutomationProperties.Name="{Binding Destination}"/>
    </Grid>
    <Grid ColumnSpacing="{StaticResource MirrorlyControlSpacing}">

@@ -1,8 +1,10 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Mirrorly.Desktop.Presentation;
 using Mirrorly.Desktop.Services;
 namespace Mirrorly.Desktop.Components;
+public enum BackupCardFocus { Card, Backup, RemoveQueued, Explorer }
 public sealed partial class BackupSummary : UserControl
 {
     public event Action<string>? PreviewAction;
@@ -10,6 +12,32 @@ public sealed partial class BackupSummary : UserControl
     public event Action<string>? RemoveQueuedRequested;
     public event Action<string>? OpenRequested;
     private readonly BackupPresentation model;
+    public string Selector => model.Id;
+    public BackupCardFocus? FocusedAction =>
+        FocusState != FocusState.Unfocused ? BackupCardFocus.Card :
+        BackupNow.FocusState != FocusState.Unfocused || CompactBackupNow.FocusState != FocusState.Unfocused ? BackupCardFocus.Backup :
+        RemoveQueued.FocusState != FocusState.Unfocused || CompactRemoveQueued.FocusState != FocusState.Unfocused ? BackupCardFocus.RemoveQueued :
+        Explorer.FocusState != FocusState.Unfocused || CompactExplorer.FocusState != FocusState.Unfocused ? BackupCardFocus.Explorer : null;
+    public void RestoreFocus(BackupCardFocus action)
+    {
+        var backup = CompactLayout.Visibility == Visibility.Visible ? CompactBackupNow : BackupNow;
+        var remove = CompactLayout.Visibility == Visibility.Visible ? CompactRemoveQueued : RemoveQueued;
+        var explorer = CompactLayout.Visibility == Visibility.Visible ? CompactExplorer : Explorer;
+        var preferred = action switch
+        {
+            BackupCardFocus.Backup => backup,
+            BackupCardFocus.RemoveQueued => remove,
+            BackupCardFocus.Explorer => explorer,
+            _ => null
+        };
+        if (preferred is { IsEnabled: true, Visibility: Visibility.Visible } && preferred.Focus(FocusState.Programmatic)) return;
+        if (remove is { IsEnabled: true, Visibility: Visibility.Visible } && remove.Focus(FocusState.Programmatic)) return;
+        // The initiating action may now be disabled (Running). Keep focus on its task,
+        // rather than allowing card reconstruction to move it to a distant control.
+        IsTabStop = true;
+        AutomationProperties.SetName(this, $"{model.Name}: {model.Status}");
+        Focus(FocusState.Programmatic);
+    }
     public BackupSummary(BackupPresentation model, bool compact, bool designPreview = false,
         bool canBackUp = false, BackupTaskRunState runState = BackupTaskRunState.Idle)
     {

@@ -47,6 +47,12 @@ public static class HomePolicy
             !DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)) return null;
         return parsed.ToUniversalTime();
     }
+    public static string FormatSavedVersionTime(string? value, TimeZoneInfo? timeZone = null, CultureInfo? culture = null)
+    {
+        var instant = SavedVersionTime(value);
+        return instant is null ? "Time unavailable" :
+            TimeZoneInfo.ConvertTime(instant.Value, timeZone ?? TimeZoneInfo.Local).ToString("g", culture ?? CultureInfo.CurrentCulture);
+    }
     public static IReadOnlyList<BackupPresentation> Preview(IReadOnlyList<BackupPresentation> backups) =>
         backups.OrderByDescending(b => b.NeedsAttention)
             .ThenByDescending(b => b.SavedVersionCreatedAt.HasValue)

@@ -92,7 +92,7 @@ public sealed class HomeViewModel : INotifyPropertyChanged
             saved.TryGetValue(t.Selector, out var summary);
             var latest = summary?.SnapshotId is not null;
             return new BackupPresentation(t.Selector, t.Name, t.Source, summary?.RepositoryPath ?? t.RepositoryPath,
-                latest ? summary!.CreatedAt ?? "Time unavailable" : "Not checked",
+                latest ? HomePolicy.FormatSavedVersionTime(summary!.CreatedAt) : "Not checked",
                 latest ? "Saved version available" : summary is null ? "Saved versions not checked" : "Backup set up",
                 StatusTone.Neutral, -index, summary?.SnapshotPath,
                 latest ? "Latest saved backup:" : "Last backup:",
@@ -140,7 +140,7 @@ public sealed class HomeViewModel : INotifyPropertyChanged
                 };
         }
         if (selectedSelector is not null && saved.TryGetValue(selectedSelector, out var summary) && summary.SnapshotId is not null)
-            return new("Saved backup available", "Latest saved backup: " + summary.CreatedAt,
+            return new("Saved backup available", "Latest saved backup: " + HomePolicy.FormatSavedVersionTime(summary.CreatedAt),
                 "This stored version does not establish that the source is currently unchanged.", "Back up now", StatusTone.Neutral, "○");
         return new("Backup set up", "No saved backup version has been confirmed for this Backup.",
             "Back up now can create a saved version. Setup alone created no snapshot.", "Back up now", StatusTone.Neutral, "○");

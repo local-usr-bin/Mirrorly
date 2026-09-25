@@ -28,6 +28,9 @@ public sealed partial class BackupsView : UserControl
 
     private void RenderCatalog()
     {
+        var focused = Backups.Children.OfType<BackupSummary>()
+            .Select(card => (card.Selector, Action: card.FocusedAction))
+            .FirstOrDefault(item => item.Action is not null);
         var backups = model.AllBackups;
         CatalogState.Text = !model.Loaded ? "Reading your configured backups…" : backups.Count == 0
             ? "No backups are configured yet. Set up your first backup to get started."
@@ -47,13 +50,15 @@ public sealed partial class BackupsView : UserControl
             summary.PreviewAction += model.ShowPrototypeAction;
             Backups.Children.Add(summary);
         }
+        if (focused.Action is { } action)
+            Backups.Children.OfType<BackupSummary>().FirstOrDefault(card => card.Selector == focused.Selector)?.RestoreFocus(action);
     }
 
     private void OpenSnapshot(string path)
     {
         if (!Directory.Exists(path))
         {
-            OpenNotice.Message = "The saved Backup location is not available right now. No files were changed.";
+            OpenNotice.Message = "The saved Backup folder is not available right now. No files were changed.";
             OpenNotice.Visibility = Visibility.Visible;
             OpenNotice.IsOpen = true;
             return;

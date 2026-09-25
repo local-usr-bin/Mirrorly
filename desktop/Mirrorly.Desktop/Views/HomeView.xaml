@@ -61,7 +61,6 @@
     <Grid>
      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <TextBlock Text="Recent activity" Style="{StaticResource MirrorlySectionTitle}" VerticalAlignment="Center"/>
-     <HyperlinkButton Grid.Column="1" Content="View all" Click="Activity_Click"/>
     </Grid>
     <Border x:Name="ActivityCard" Style="{StaticResource MirrorlyCard}">
      <StackPanel><TextBlock Text="No activity history is available yet." Style="{StaticResource MirrorlySecondary}"/><ItemsControl ItemsSource="{Binding Activity}">
@@ -80,7 +79,6 @@
       </ItemsControl.ItemTemplate>
      </ItemsControl></StackPanel>
     </Border>
-    <HyperlinkButton x:Name="CompactActivity" Content="View recent activity →" Click="Activity_Click" Visibility="Collapsed"/>
    </StackPanel>
   </StackPanel>
  </StackPanel>
