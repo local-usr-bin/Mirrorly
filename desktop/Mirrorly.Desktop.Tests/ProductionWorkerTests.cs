@@ -237,6 +237,7 @@ static class ProductionWorkerTests
         await ProductionBackupTests.Run(test, check, launch);
         await SnapshotQueryTests.Run(test, check, launch);
         await RestorePrepareTests.Run(test, check, launch);
+        await RestoreExecutionTests.Run(test, check, launch);
         await BackupGuiFlowTests.Run(test, check, launch);
         await BackupQueueTests.Run(test, check, launch);
     }

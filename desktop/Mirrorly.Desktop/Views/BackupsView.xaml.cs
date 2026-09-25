@@ -33,7 +33,7 @@ public sealed partial class BackupsView : UserControl
             .Select(card => (card.Selector, Action: card.FocusedAction))
             .FirstOrDefault(item => item.Action is not null);
         var backups = model.AllBackups;
-        CatalogState.Text = !model.Loaded ? "Reading your configured backups…" : backups.Count == 0
+        CatalogState.Text = model.RestoreAdmissionMessage.Length > 0 ? model.RestoreAdmissionMessage : !model.Loaded ? "Reading your configured backups…" : backups.Count == 0
             ? "No backups are configured yet. Set up your first backup to get started."
             : backups.Count == 1 ? "1 configured backup" : $"{backups.Count} configured backups";
         ProblemText.Visibility = model.Problem.Length > 0 ? Visibility.Visible : Visibility.Collapsed;

@@ -8,21 +8,23 @@ static class RestoreSelectionTests
 {
     public static async Task Run(Func<string, Func<Task>, Task> test, Action<bool> check)
     {
-        await test("Restore shell route and Review surface use real controls without execute action", () =>
+        await test("Restore shell route and Review surface require a final confirmation action", () =>
         {
             var root = Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>()
                 .Single(a => a.Key == "CheckoutRoot").Value!;
             var shell = File.ReadAllText(Path.Combine(root, "desktop", "Mirrorly.Desktop", "MainWindow.xaml.cs"));
             check(shell.Contains("page == ShellPage.Restore ? restore", StringComparison.Ordinal) &&
-                shell.Contains("restore = new(session, backup)", StringComparison.Ordinal));
+                shell.Contains("restore = new(session, backup, restoreExecution)", StringComparison.Ordinal) &&
+                shell.Contains("restore.ConfirmStart = ConfirmRestoreStartAsync", StringComparison.Ordinal));
             var view = XDocument.Load(Path.Combine(root, "desktop", "Mirrorly.Desktop", "Views", "RestoreView.xaml"));
             XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
             var names = view.Descendants().Select(e => (string?)e.Attribute(x + "Name")).ToHashSet();
             check(new[] { "BackupChoice", "LatestChoice", "AnotherChoice", "DestinationHost", "SkipChoice",
                 "ReplaceChoice", "ReviewAction", "EditAction", "LoadMoreAction", "RefreshVersionsAction" }
                 .All(names.Contains));
-            check(!view.Descendants().Any(e => (string?)e.Attribute("Content") == "Restore" &&
-                e.Name.LocalName == "Button"));
+            check(names.Contains("StartAction") &&
+                view.Descendants().Any(e => (string?)e.Attribute(x + "Name") == "StartAction" &&
+                    (string?)e.Attribute("Click") == "Start_Click"));
             return Task.CompletedTask;
         });
         await test("Restore selection uses durable selector and read-only latest prepare", async () =>

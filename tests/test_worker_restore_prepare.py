@@ -1,4 +1,4 @@
-"""Read-only production Restore planning; no destination writes or execute method."""
+"""Read-only production Restore planning and worker-owned preview facts."""
 
 from __future__ import annotations
 
@@ -93,8 +93,8 @@ def test_real_prepare_skip_replace_and_worker_owned_plan(tmp_path, intent):
         assert second["file_skip_count"] == 0 and second["policy"] == "replace_existing"
         assert (destination / "alpha.txt").read_bytes() == before
         assert not (destination / "beta.txt").exists()
-        peer.send("restore.execute", {"plan_id": second["plan_id"], "overwrite_approved": True})
-        assert peer.receive()["payload"]["error"]["code"] == "unsupported_method"
+        peer.send("restore.execute", {"plan_id": second["plan_id"]})
+        assert peer.receive()["payload"]["error"]["code"] == "invalid_parameters"
         assert peer.host.restore_plan.plan_id == second["plan_id"]  # ID is not approval.
         unavailable = ask(peer, params(intent, destination) | {"task": "missing"})
         assert unavailable["result"]["preview"] is None
@@ -136,7 +136,7 @@ def test_real_subprocess_prepare_and_failure_is_not_empty_success(tmp_path, inte
             assert failure["error"]["kind"] == "application"
             assert failure["error"]["code"] == code
         peer.send("restore.execute", {"plan_id": success["result"]["preview"]["plan_id"]})
-        assert peer.receive()["payload"]["error"]["code"] == "unsupported_method"
+        assert peer.receive()["payload"]["error"]["code"] == "invalid_parameters"
 
 
 def test_incomplete_and_repository_overlapping_target_fail_closed(tmp_path, intent):

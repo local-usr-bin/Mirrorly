@@ -39,10 +39,14 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     public bool CanBackUp => selectedSelector is not null && CanBackUpTask(selectedSelector);
     public bool CanBackUpTask(string selector) => !DesignPreview && Loaded &&
         Fixture.Backups.Any(b => b.Id == selector) && execution?.CanSchedule(selector) == true;
+    public string RestoreAdmissionMessage => execution?.RestoreUncertain == true
+        ? "Restore status is uncertain. Do not start another operation until its outcome is known."
+        : execution?.RestoreInProgress == true ? "Restore is in progress. Backups are unavailable until it finishes." : "";
     public BackupTaskRunState RunState(string selector) => execution?.TaskState(selector) ?? BackupTaskRunState.Idle;
     public bool IsBackingUp => selectedSelector is not null && RunState(selectedSelector) == BackupTaskRunState.Running;
     public string? SelectedSelector => selectedSelector;
-    public string BackupActionHelp => execution is { QueueAttention: not BackupQueueAttention.None }
+    public string BackupActionHelp => RestoreAdmissionMessage.Length > 0 ? RestoreAdmissionMessage
+        : execution is { QueueAttention: not BackupQueueAttention.None }
         ? "The automatic queue is paused. View technical details before starting more work."
         : selectedSelector is not null && RunState(selectedSelector) == BackupTaskRunState.Queued
         ? "This Backup is waiting. Use Remove from queue on its card if it should not run."
@@ -145,6 +149,10 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     private StatusPresentation CurrentStatus(IReadOnlyList<BackupPresentation> cards)
     {
         var name = cards.FirstOrDefault(b => b.Id == selectedSelector)?.Name ?? "Backup";
+        if (RestoreAdmissionMessage.Length > 0)
+            return new(execution?.RestoreUncertain == true ? "Restore status uncertain" : "Restore in progress",
+                RestoreAdmissionMessage, "Backup controls are unavailable during this Restore state.",
+                "Back up now", execution?.RestoreUncertain == true ? StatusTone.Warning : StatusTone.Working, "↻", true);
         if (execution?.QueueAttention == BackupQueueAttention.TransportUncertain)
             return new("Backup result unconfirmed", "Mirrorly lost the connection before it could confirm the Backup result.",
                 "Queued Backups will not start automatically. View technical details before starting more work.", "Back up now", StatusTone.Error, "⚠");

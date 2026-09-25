@@ -20,7 +20,12 @@ HOST = ROOT / "src/mirrorly/worker/launch.py"
 
 class Peer:
     def __init__(
-        self, process=None, service=None, create_service=None, restore_prepare_service=None
+        self,
+        process=None,
+        service=None,
+        create_service=None,
+        restore_prepare_service=None,
+        restore_execute_service=None,
     ):
         self.process = process
         self.responses = queue.Queue()
@@ -40,6 +45,7 @@ class Peer:
                 service=service,
                 create_service=create_service,
                 restore_prepare_service=restore_prepare_service,
+                restore_execute_service=restore_execute_service,
                 shutdown_seconds=0.1,
             )
             self.thread = threading.Thread(target=self.host.run, daemon=True)
@@ -181,7 +187,7 @@ def test_preflight_problem_and_reject_untrusted_fields(peer, intent):
     ):
         peer.send("setup.preflight", params)
         assert peer.receive()["payload"]["error"]["application_invoked"] is False
-    for method in ("snapshot.list", "verify.run", "restore.execute", "test_crash"):
+    for method in ("snapshot.list", "verify.run", "test_crash"):
         peer.send(method)
         assert peer.receive()["payload"]["error"]["code"] == "unsupported_method"
 

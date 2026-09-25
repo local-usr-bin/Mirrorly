@@ -11,7 +11,16 @@ from collections import OrderedDict
 from mirrorly.application import setup
 
 from . import backup as backup_wire
-from . import catalog, creation, preflight, protocol, restore_prepare, snapshots, summary
+from . import (
+    catalog,
+    creation,
+    preflight,
+    protocol,
+    restore_execute,
+    restore_prepare,
+    snapshots,
+    summary,
+)
 from .lifecycle import LifecycleGate
 from .transport import Outbound
 
@@ -26,6 +35,7 @@ METHODS = [
     "backup.summary",
     "snapshots.list",
     "restore.prepare",
+    "restore.execute",
 ]
 CAPABILITIES = dict.fromkeys(
     [
@@ -68,6 +78,7 @@ class WorkerHost:
         create_service=None,
         backup_service=None,
         restore_prepare_service=None,
+        restore_execute_service=None,
         resume_seconds=RESUME_SECONDS,
         shutdown_seconds=1,
     ):
@@ -77,6 +88,7 @@ class WorkerHost:
         self.create_service = create_service or setup.create_backup
         self.backup_service = backup_service or backup_wire.backup.run_backup
         self.restore_prepare_service = restore_prepare_service or restore_prepare.prepare
+        self.restore_execute_service = restore_execute_service or restore_execute.invoke
         self.resume_seconds = resume_seconds
         self.shutdown_seconds = shutdown_seconds
         self.session = uuid.uuid4().hex
@@ -462,6 +474,41 @@ class WorkerHost:
                 }
         self.completion.put_nowait((rid, oid, payload, error))
 
+    def _execute_restore_execute(self, rid, oid, plan, request):
+        try:
+            outcome = self.restore_execute_service(plan, request)
+        except Exception as exc:
+            payload = {"outcome": "failed", "facts": None, "destination_may_have_changed": True}
+            error = {
+                "kind": "application",
+                "code": "restore_execution_failed",
+                "technical": preflight.technical(exc),
+            }
+        else:
+            try:
+                payload = restore_execute.project(outcome)
+                error = None
+                protocol.encode(
+                    self._message(
+                        "response",
+                        {"phase": "terminal", "result": payload, "error": None},
+                        rid,
+                        oid,
+                    )
+                )
+            except Exception as exc:
+                payload = {
+                    "outcome": "unreported",
+                    "facts": None,
+                    "destination_may_have_changed": True,
+                }
+                error = {
+                    "kind": "worker",
+                    "code": "result_projection_failed",
+                    "technical": preflight.technical(exc),
+                }
+        self.completion.put_nowait((rid, oid, payload, error))
+
     def _finish_operation(self):
         try:
             rid, oid, result, error = self.completion.get_nowait()
@@ -545,6 +592,7 @@ class WorkerHost:
             "backup.summary",
             "snapshots.list",
             "restore.prepare",
+            "restore.execute",
         ):
             if self.active and method not in ("setup.create", "backup.run"):
                 self._reject(rid, "busy")
@@ -560,6 +608,8 @@ class WorkerHost:
                     request = snapshots.request(params)
                 elif method == "restore.prepare":
                     request = restore_prepare.request(params)
+                elif method == "restore.execute":
+                    request = restore_execute.request(params)
                 elif method == "tasks.list":
                     request = catalog.request(params)
                 else:
@@ -572,7 +622,21 @@ class WorkerHost:
                 return False
             if method == "restore.prepare":
                 self.restore_plan = None  # New intent invalidates the prior approval candidate.
-            if method == "setup.create" or (method == "backup.run" and not request.dry_run):
+            if method == "restore.execute":
+                if self.restore_plan is None or self.restore_plan.plan_id != request.plan_id:
+                    self._reject(rid, "restore_plan_unavailable")
+                    return False
+                if not restore_execute.admissible(self.restore_plan, request):
+                    self._reject(
+                        rid,
+                        "overwrite_approval_required"
+                        if self.restore_plan.intent.policy == "replace_existing"
+                        else "invalid_parameters",
+                    )
+                    return False
+            if method in ("setup.create", "restore.execute") or (
+                method == "backup.run" and not request.dry_run
+            ):
                 try:
                     self.lifecycle_gate.require_ownership()
                 except RuntimeError:
@@ -584,8 +648,15 @@ class WorkerHost:
                     return False
             oid = uuid.uuid4().hex
             self.active = {"request_id": rid, "operation_id": oid}
+            if method == "restore.execute":
+                plan = self.restore_plan
+                self.restore_plan = None  # Admitted mutation is one-shot, even after failure/loss.
             self._response(rid, "accepted", operation=oid)
-            if self.lost.is_set() and method not in ("setup.create", "backup.run"):
+            if self.lost.is_set() and method not in (
+                "setup.create",
+                "backup.run",
+                "restore.execute",
+            ):
                 self.active = None
                 return False
             # Once mutation is admitted, failed accepted delivery cannot undo it.
@@ -602,10 +673,16 @@ class WorkerHost:
                 if method == "snapshots.list"
                 else self._execute_restore_prepare
                 if method == "restore.prepare"
+                else self._execute_restore_execute
+                if method == "restore.execute"
                 else self._execute
             )
             args = (
-                (rid, oid, request, approved) if method == "setup.create" else (rid, oid, request)
+                (rid, oid, request, approved)
+                if method == "setup.create"
+                else (rid, oid, plan, request)
+                if method == "restore.execute"
+                else (rid, oid, request)
             )
             self.executor = threading.Thread(target=execute, args=args, name="application-executor")
             self.executor.start()

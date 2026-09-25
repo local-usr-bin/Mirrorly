@@ -22,6 +22,17 @@ public sealed class RestorePrepareRejectedException(string kind, string code) : 
     public string Kind { get; } = kind;
     public string Code { get; } = code;
 }
+public sealed record RestoreExecutionFacts(string SnapshotId, string Destination, long FilesRestored,
+    long DirectoriesCreated, long ItemsSkipped, long Conflicts, long Errors,
+    long LeftoverTemporaryFiles, long BytesWritten);
+public enum RestoreExecutionOutcome { Completed, CompletedWithIssues, ApplicationFailed, Unreported }
+public sealed record RestoreExecutionResult(RestoreExecutionOutcome Outcome, RestoreExecutionFacts? Facts,
+    string TechnicalDetails, string? RequestId, string? OperationId);
+public sealed class RestoreExecuteRejectedException(string kind, string code) : IOException($"Restore execution was not admitted ({code}).")
+{
+    public string Kind { get; } = kind;
+    public string Code { get; } = code;
+}
 public sealed record WorkerReply(string RequestId, string? OperationId, JsonElement Payload);
 public interface ISetupApi
 {
@@ -31,6 +42,8 @@ public interface ISetupApi
     Task<SavedBackupSummary> BackupSummaryAsync(string selector);
     Task<SnapshotCollectionPage> SnapshotPageAsync(string selector, string? after = null, int limit = 16);
     Task<RestorePreparedPlanPreview> PrepareRestoreAsync(RestorePrepareIntent intent);
+    Task<RestoreExecutionResult> ExecuteRestoreAsync(string planId, bool overwriteApproved,
+        Action<WorkerAdmission>? onAdmitted = null) => throw new NotSupportedException();
     Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null);
 }
 public interface IDesktopSession
@@ -138,6 +151,60 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
     {
         var payload = await ReceiveAsync(() => client.PrepareRestoreAsync(paths, intent));
         return ParseRestorePrepare(payload, intent.TaskSelector, intent.Policy, intent.SnapshotId);
+    }
+    public async Task<RestoreExecutionResult> ExecuteRestoreAsync(string planId, bool overwriteApproved,
+        Action<WorkerAdmission>? onAdmitted = null)
+    {
+        var reply = await ReceiveReplyAsync(() => client.ExecuteRestoreAsync(planId, overwriteApproved), onAdmitted);
+        return ParseRestoreExecute(reply);
+    }
+    internal static RestoreExecutionResult ParseRestoreExecute(WorkerReply reply)
+    {
+        try
+        {
+            var payload = reply.Payload;
+            var phase = payload.GetProperty("phase").GetString();
+            var error = payload.GetProperty("error");
+            if (phase == "rejected")
+                throw new RestoreExecuteRejectedException(error.GetProperty("kind").GetString()!,
+                    error.GetProperty("code").GetString()!);
+            if (phase != "terminal" || reply.OperationId is null)
+                throw new InvalidDataException("Restore execution did not return an admitted terminal response.");
+            var result = payload.GetProperty("result");
+            var outcome = result.GetProperty("outcome").GetString() switch
+            {
+                "completed" => RestoreExecutionOutcome.Completed,
+                "completed_with_issues" => RestoreExecutionOutcome.CompletedWithIssues,
+                "failed" when error.GetProperty("code").GetString() == "restore_execution_failed" &&
+                    result.GetProperty("destination_may_have_changed").GetBoolean() => RestoreExecutionOutcome.ApplicationFailed,
+                "unreported" => RestoreExecutionOutcome.Unreported,
+                _ => throw new InvalidDataException("Unknown Restore execution outcome.")
+            };
+            RestoreExecutionFacts? facts = null;
+            if (outcome is RestoreExecutionOutcome.Completed or RestoreExecutionOutcome.CompletedWithIssues)
+            {
+                if (error.ValueKind != JsonValueKind.Null) throw new InvalidDataException("Successful Restore includes an error.");
+                var value = result.GetProperty("facts");
+                long Count(string key) => value.GetProperty(key).GetInt64();
+                var counts = new[] { Count("files_restored"), Count("directories_created"), Count("items_skipped"),
+                    Count("conflicts"), Count("errors"), Count("leftover_temporary_files"), Count("bytes_written") };
+                var snapshot = value.GetProperty("snapshot_id").GetString();
+                var destination = value.GetProperty("destination").GetString();
+                if (string.IsNullOrEmpty(snapshot) || string.IsNullOrEmpty(destination) || counts.Any(c => c < 0) ||
+                    !Path.IsPathFullyQualified(destination) ||
+                    (outcome == RestoreExecutionOutcome.Completed && (counts[3] != 0 || counts[4] != 0 || counts[5] != 0)))
+                    throw new InvalidDataException("Invalid Restore execution facts.");
+                facts = new(snapshot, destination, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
+            }
+            else if (result.GetProperty("facts").ValueKind != JsonValueKind.Null)
+                throw new InvalidDataException("Failed Restore cannot provide invented exact counts.");
+            return new(outcome, facts, error.ValueKind == JsonValueKind.Null ? "" : error.ToString(),
+                reply.RequestId, reply.OperationId);
+        }
+        catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException or JsonException)
+        {
+            throw new InvalidDataException("Malformed Restore execution response.", exception);
+        }
     }
     internal static RestorePreparedPlanPreview ParseRestorePrepare(JsonElement payload, string expectedSelector,
         RestoreConflictPolicy expectedPolicy, string? expectedSnapshotId = null)

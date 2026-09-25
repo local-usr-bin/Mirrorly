@@ -61,6 +61,10 @@ public sealed class RestoreSelectionViewModel : INotifyPropertyChanged
         Destination.HasValidSelection && latestChecked && (chooseAnother ? explicitSnapshotId is not null : latestAvailable) &&
         !BackupWorkPending && !session.Busy && !session.ExitPending;
     public bool IsReview => State == RestoreSelectionState.Review && Preview is not null;
+    public bool IsCurrentReview(RestorePreparedPlanPreview preview) => IsReview && ReferenceEquals(Preview, preview) &&
+        SelectedSelector == preview.Selector && Policy == preview.Policy &&
+        string.Equals(Destination.SelectedPath, preview.Destination, StringComparison.OrdinalIgnoreCase) &&
+        (chooseAnother ? explicitSnapshotId == preview.SnapshotId : explicitSnapshotId is null);
     public bool HasNoBackups => State == RestoreSelectionState.Selecting && Backups.Count == 0;
     public bool NoSavedVersion => latestChecked && !latestAvailable;
     public bool CanChooseVersion => State == RestoreSelectionState.Selecting && SelectedBackup is not null && latestChecked;

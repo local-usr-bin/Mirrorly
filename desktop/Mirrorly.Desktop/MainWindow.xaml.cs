@@ -14,6 +14,7 @@ public sealed partial class MainWindow : Window
     private readonly ShellViewModel shell = new();
     private readonly DesktopSession session;
     private readonly BackupExecutionCoordinator backup;
+    private readonly RestoreExecutionCoordinator restoreExecution;
     private readonly PetalMotionPolicy petalMotion = new();
     private bool flourishHostActive;
     private int flourishGeneration;
@@ -32,10 +33,12 @@ public sealed partial class MainWindow : Window
     {
         this.session = session;
         backup = new(session);
+        restoreExecution = new(session, backup);
         session.ResumeResponder = backup.ResolveResumeAsync;
         backup.ResumePrompt = ShowResumeAsync;
         home = new(session, backup); backups = new(home.Model, session);
-        detail = new(home.Model, session); setup = new(session); restore = new(session, backup);
+        detail = new(home.Model, session); setup = new(session); restore = new(session, backup, restoreExecution);
+        restore.ConfirmStart = ConfirmRestoreStartAsync;
         setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
         setup.ConfirmCopy = () => ConfirmAsync("Use full-file copies?",
@@ -227,6 +230,13 @@ public sealed partial class MainWindow : Window
         }
         finally { dialogs.Release(); }
     }
+    private Task<bool> ConfirmRestoreStartAsync(RestorePreparedPlanPreview plan)
+    {
+        var message = "Restore the entire saved version to the selected destination. This version cannot be cancelled once it starts. Keep the Backup repository and destination devices connected, and avoid shutting down or restarting. You may close Mirrorly to the notification area; Restore will continue. Extra destination files are not deleted.";
+        if (plan.Policy == RestoreConflictPolicy.ReplaceExisting)
+            message += $"\n\n{plan.FileOverwriteCount:N0} existing files are planned for replacement. Files already replaced will not be rolled back if Restore later fails or is interrupted.";
+        return ConfirmAsync("Start restore?", message, "Start restore", "Cancel");
+    }
     private async Task<bool> ConfirmExitAfterResumeAsync()
     {
         while (true)
@@ -240,7 +250,9 @@ public sealed partial class MainWindow : Window
                 exitInterrupted = false;
                 activeExitDialog = new ContentDialog { XamlRoot = Navigation.XamlRoot,
                     Title = "Mirrorly is still working",
-                    Content = "Exit after the current operation finishes? Queued Backups that have not started will be removed. Mirrorly will stay running until it has processed the current result.",
+                    Content = restoreExecution.IsActive
+                        ? "Exit after the current Restore finishes? Mirrorly will keep supervising Restore and will not cancel it."
+                        : "Exit after the current operation finishes? Queued Backups that have not started will be removed. Mirrorly will stay running until it has processed the current result.",
                     PrimaryButtonText = "Exit after it finishes", CloseButtonText = "Stay in Mirrorly",
                     DefaultButton = ContentDialogButton.Close };
                 var answer = await activeExitDialog.ShowAsync();

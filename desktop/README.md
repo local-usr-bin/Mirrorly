@@ -4,9 +4,11 @@ Real Backup Setup uses production preflight/create and a Python-owned task catal
 Home rereads durable GUI configuration, including after restart. Setup creates no
 snapshot. Real `Back up now` uses production `backup.run`; an app-scoped, memory-only
 FIFO queues other configured Backups while one runs. The worker retains one
-execution slot and no Backup queue. Restore selection and read-only Review now
-use production `restore.prepare`, without execution or destination writes. Verify,
-Restore execution, progress, cancellation and persistent Activity remain later work.
+execution slot and no Backup queue. Restore selection uses production
+`restore.prepare`; explicit final confirmation executes its worker-owned plan
+through `restore.execute`. Restore and Backup GUI admission are mutually
+exclusive. Verify, Restore cancellation/progress and persistent Activity remain
+later work.
 See [PHASE4C](../docs/gui/PHASE4C.md) for the accepted FIFO and development smoke results.
 The complete Backups collection opens a selector-specific read-only Overview using
 the existing task catalog and authoritative latest-saved summary. It shares the

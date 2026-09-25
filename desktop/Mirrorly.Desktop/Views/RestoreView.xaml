@@ -81,6 +81,20 @@
     </StackPanel>
    </Border>
    <Button x:Name="EditAction" Content="Edit choices" Click="Edit_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left"/>
+   <TextBlock x:Name="ReviewAdmissionText" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite"/>
+   <Button x:Name="StartAction" Content="Restore" Click="Start_Click" Style="{StaticResource MirrorlyPrimaryButton}" HorizontalAlignment="Left"/>
+  </StackPanel>
+  <StackPanel x:Name="ExecutionContent" Spacing="{StaticResource MirrorlyControlSpacing}" Visibility="Collapsed">
+   <TextBlock x:Name="ExecutionHeading" Style="{StaticResource MirrorlySectionTitle}" AutomationProperties.LiveSetting="Polite"/>
+   <ProgressRing x:Name="RestoreProgress" Width="32" Height="32" HorizontalAlignment="Left" IsActive="False" AutomationProperties.Name="Restore is running"/>
+   <TextBlock x:Name="ExecutionFacts" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+   <TextBlock Text="Restore cannot be cancelled once it starts in this version. Keep the repository and destination devices connected; avoid shutting down or restarting. Closing this window to the notification area lets Restore continue." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+  </StackPanel>
+  <StackPanel x:Name="ResultContent" Spacing="{StaticResource MirrorlyControlSpacing}" Visibility="Collapsed">
+   <TextBlock x:Name="ResultHeading" Style="{StaticResource MirrorlySectionTitle}" AutomationProperties.LiveSetting="Polite"/>
+   <TextBlock x:Name="ResultSummary" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+   <TextBlock x:Name="ResultNextStep" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+   <Button x:Name="NewRestoreAction" Content="Prepare another restore" Click="NewRestore_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left" Visibility="Collapsed"/>
   </StackPanel>
   <Expander x:Name="TechnicalPanel" Header="View technical details" Visibility="Collapsed">
    <TextBlock x:Name="TechnicalText" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>

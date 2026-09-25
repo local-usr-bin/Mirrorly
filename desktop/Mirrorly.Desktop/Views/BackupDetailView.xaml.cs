@@ -63,8 +63,9 @@ public sealed partial class BackupDetailView : UserControl
         SavedVersion.Text = overview.SavedVersion;
         CurrentState.Text = overview.Status;
         CurrentState.Style = (Style)Application.Current.Resources[$"Mirrorly{overview.Tone}Text"];
-        AttentionText.Text = overview.Attention;
-        AttentionText.Visibility = overview.Attention.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        AttentionText.Text = string.Join("\n", new[] { overview.Attention, model.RestoreAdmissionMessage }
+            .Where(text => !string.IsNullOrWhiteSpace(text)));
+        AttentionText.Visibility = AttentionText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         BackupAction.Content = overview.RunState switch
         {
             BackupTaskRunState.Running => "Backing up…",

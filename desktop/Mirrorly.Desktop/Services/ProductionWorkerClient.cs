@@ -24,6 +24,7 @@ public sealed record RestorePrepareIntent(string TaskSelector, string? SnapshotI
     RestoreConflictPolicy Policy = RestoreConflictPolicy.SkipExisting);
 public sealed record RestorePrepareInput(string config_root, string task, string? snapshot_id,
     string destination, string policy);
+public sealed record RestoreExecuteInput(string plan_id, bool overwrite_approved);
 public sealed record ResumeInteraction(string RequestId, string OperationId, string InteractionId, string SnapshotId, string CreatedAt, int DeadlineSeconds);
 public sealed record WorkerAdmission(string RequestId, string OperationId);
 public enum ResumeAnswer { Resume, DeclineResume, Unavailable }
@@ -161,6 +162,8 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
                 RestoreConflictPolicy.ReplaceExisting => "replace_existing",
                 _ => throw new ArgumentOutOfRangeException(nameof(intent))
             }));
+    public Task<WorkerRequest> ExecuteRestoreAsync(string planId, bool overwriteApproved) =>
+        RequestAsync("restore.execute", new RestoreExecuteInput(planId, overwriteApproved));
 
     internal static string AllocateRequestId(ref ulong highest)
     {
@@ -170,7 +173,7 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     public Task<WorkerRequest> RequestAsync(string method, object? parameters = null)
     {
         if (!initialized) throw new InvalidOperationException("Worker is not initialized.");
-        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run" or "backup.summary" or "snapshots.list" or "restore.prepare");
+        return SendAsync("request", new { method, @params = parameters ?? new { } }, method is "setup.preflight" or "setup.create" or "tasks.list" or "backup.run" or "backup.summary" or "snapshots.list" or "restore.prepare" or "restore.execute");
     }
 
     private async Task<WorkerRequest> SendAsync(string kind, object payload, bool application = false)

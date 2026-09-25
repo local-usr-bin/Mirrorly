@@ -33,8 +33,13 @@ public sealed class BackupExecutionCoordinator
     public BackupOperationResult? Result { get; private set; }
     public IReadOnlyList<string> QueuedSelectors { get { lock (sync) return queued.ToArray(); } }
     public bool HasActiveBackup => State is BackupGuiState.Running or BackupGuiState.AwaitingResumeDecision;
+    public Func<bool>? RestoreBlocksScheduling { get; set; }
+    public Func<bool>? RestoreOutcomeUncertain { get; set; }
+    public bool RestoreInProgress => RestoreBlocksScheduling?.Invoke() == true;
+    public bool RestoreUncertain => RestoreOutcomeUncertain?.Invoke() == true;
+    public void RefreshAdmission() => Notify();
     public bool CanStart => !starting && !HasActiveBackup && QueueAttention == BackupQueueAttention.None &&
-        !session.Busy && !session.ExitPending && SessionHealthy;
+        !RestoreInProgress && !session.Busy && !session.ExitPending && SessionHealthy;
     private bool SessionHealthy => session is not DesktopSession desktop ||
         desktop.Observation is { Initialized: true, TransportHealthy: true };
     public Func<ResumeInteraction, Task<ResumeAnswer>>? ResumePrompt { get; set; }
@@ -59,7 +64,7 @@ public sealed class BackupExecutionCoordinator
     {
         lock (sync)
         {
-            if (string.IsNullOrWhiteSpace(selector) || session.ExitPending || QueueAttention != BackupQueueAttention.None ||
+            if (string.IsNullOrWhiteSpace(selector) || session.ExitPending || RestoreInProgress || QueueAttention != BackupQueueAttention.None ||
                 !SessionHealthy || queued.Contains(selector, StringComparer.Ordinal) ||
                 HasActiveBackup && TaskSelector == selector) return false;
             if (results.TryGetValue(selector, out var previous) &&

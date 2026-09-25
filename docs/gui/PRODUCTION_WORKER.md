@@ -668,11 +668,11 @@ The worker retains at most **one** original Python prepared object. An admitted
 new `restore.prepare` discards the prior plan even if the new application query
 fails. Rejected invalid/busy requests do not replace it. The plan lives only in
 the current worker session; shutdown, EOF and restart discard it. There is no
-wall-clock TTL in R1. Future `restore.execute` must resolve this worker-owned
+wall-clock TTL in R1. R3 `restore.execute` resolves this worker-owned
 object by ID, consume it once and retain core's manifest/destination/no-upgrade
 revalidation. **`plan_id` is a reference, not approval.** In particular,
 `file_overwrite_count > 0` is a Review fact; execution still needs distinct,
-explicit Replace approval. This release exposes no execute method and performs
+explicit Replace approval. R1 exposed no execute method and performed
 no Restore writes. A missing terminal is transport uncertainty; the client never
 automatically replays prepare or assumes the old plan remains usable. A fresh
 prepare produces a fresh approval candidate.
@@ -685,8 +685,7 @@ return no preview and a stable code such as `unknown_task`, `task_unreadable`,
 Malformed v2 manifest JSON can fail earlier repository lifecycle validation and
 therefore report `repository_invalid`; the code names the actual failing
 boundary, not a guessed diagnosis. A query failure is never a zero-count plan.
-`restore.execute` remains future destination mutation: it must have separate
-mutation admission, lifecycle supervision and no automatic replay. Restore does
+R3 adds destination mutation through the existing worker gate. Restore does
 not enter the GUI Backup FIFO.
 
 ### Restore selection and Review (R2)
@@ -714,9 +713,8 @@ available in R2, and Review writes nothing to the destination.
 The app-scoped Backup coordinator remains the sole Backup FIFO owner. Running
 or queued Backup work prevents Review preparation, including queued work left
 after queue attention stops advancement; Restore is never enqueued behind it.
-The worker's independent busy admission still handles races. R2 does not yet
-implement the reverse execution-time Backup admission/lifecycle policy; R3
-must do so before enabling destination mutation.
+The worker's independent busy admission still handles races. R3 adds the
+reverse execution-time Backup admission and lifecycle policy described below.
 
 Review explains safe merge: extra destination contents are not deleted, Skip
 keeps existing files, Replace may overwrite matching ordinary files, and type
@@ -725,6 +723,64 @@ cancelled, devices should remain connected, shutdown/restart should be avoided,
 and Close-to-tray will let a running Restore continue. Completed replacements
 are not automatically rolled back after later failure or interruption. These
 are future execution facts, not a claim that R2 can execute Restore.
+
+### Production Restore execution and result (R3)
+
+`restore.execute` accepts only the current worker-local 32-hex `plan_id` and
+`overwrite_approved` boolean. It never accepts a C# plan, manifest digest,
+file targets or altered preview. Replace requires `overwrite_approved=true`;
+Skip requires false. The final WinUI confirmation, after Review, is the user
+approval action; merely possessing a plan ID is not approval. Invalid IDs,
+stale/replaced/consumed IDs and missing Replace approval are rejected before
+mutation. A worker-busy or mutation-gate rejection is also pre-admission and
+retains the current plan. The admitted execute consumes the plan immediately,
+before accepted delivery or application apply; success, failure, client loss
+and terminal uncertainty never make it reusable. There is no replay or Restore
+queue. Another attempt requires a new prepare and confirmation.
+
+The existing worker-wide lifecycle mutation gate is acquired on the worker
+control thread and remains held until that worker exits; execute checks its
+ownership before admission. The single application slot remains occupied until
+the genuine terminal. A client/desktop disconnect does not cancel admitted
+execution: the host joins the executor before exiting and retains gate
+ownership during that work. The gate controls production worker admission,
+not external CLI operations. `restore.prepare` remains read-only and does not
+require gate ownership. Core `execute_restore` retains manifest, destination,
+reparse and no-upgrade revalidation; Restore does not write the repository or
+publish a report.
+
+A normal terminal contains `outcome=completed` or `completed_with_issues` and
+bounded summary facts: snapshot ID, destination, files actually restored,
+directories actually created, skipped items, conflicts, per-file errors,
+leftover temporary files and logical bytes written. Expected Skip-policy
+skips alone do not turn completion into failure. Conflicts, errors or leftovers
+do produce completed-with-issues. No unbounded per-file list crosses IPC.
+An application execution exception has `outcome=failed`, no invented counts,
+and `destination_may_have_changed=true`: partial destination writes may already
+have happened. A terminal whose facts cannot be projected is unreported; loss
+of a genuine terminal is transport uncertainty. Neither is silently retried.
+
+The app-scoped Restore execution coordinator owns Starting, admitted Running,
+terminal and transport-uncertain state across navigation and tray hiding.
+During Starting/Running, and while the outcome remains uncertain, the sole
+Backup coordinator refuses all Backup starts and enqueues. Running/queued
+Backup work prevents Restore admission, including at final confirmation.
+Restore never enters the Backup FIFO. Close hides to tray; minimize is normal.
+True Exit offers Stay or supervised Exit after the current operation; it never
+kills an admitted Restore. The UI has no Cancel, fabricated percentage or
+Restore Resume. It restores a whole complete snapshot to a separate destination
+(`in_place=false`); future per-file selection and cooperative cancellation are
+not part of v1.
+
+R3 validation used the registered Debug package and a disposable 20 MiB saved
+version. Real GUI Skip preserved an existing file and destination-only extra
+file while restoring two new files; Replace restored three files, including
+the existing match, and retained the extra file. Repository file hashes stayed
+unchanged across both runs. Both reached a factual Restore-complete result and
+Mirrorly exited normally. These quick runs completed before a GUI capture of
+the transient Running state; coordinator/lifecycle tests cover that state and
+supervised Exit. The prepared preview does not yet project the snapshot's
+creation time, so Review uses the authoritative snapshot ID.
 
 Live terminal presentation distinguishes normal success, completed with issues,
 `not_published`, application `unknown`, `published` with finalization failure,

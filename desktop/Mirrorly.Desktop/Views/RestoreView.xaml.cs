@@ -10,20 +10,27 @@ namespace Mirrorly.Desktop.Views;
 public sealed partial class RestoreView : UserControl
 {
     public RestoreSelectionViewModel Model { get; }
+    private readonly RestoreExecutionCoordinator execution;
+    private readonly IDesktopSession session;
+    public Func<RestorePreparedPlanPreview, Task<bool>>? ConfirmStart { get; set; }
     private bool rendering;
 
-    public RestoreView(IDesktopSession session, BackupExecutionCoordinator backup)
+    public RestoreView(IDesktopSession session, BackupExecutionCoordinator backup, RestoreExecutionCoordinator execution)
     {
+        this.session = session;
+        this.execution = execution;
         Model = new(session, backup, new FolderBrowserService());
         InitializeComponent();
         DestinationHost.Children.Add(new FolderBrowserPane(Model.Destination));
         VersionList.ItemsSource = Model.CompleteVersions;
         Model.PropertyChanged += (_, _) => Render();
+        execution.Changed += Render;
         Render();
     }
 
     public async Task EnterAsync()
     {
+        if (execution.State != RestoreGuiState.Idle) { Render(); return; }
         await Model.EnterAsync();
         if (Model.Backups.Count > 0) BackupChoice.Focus(FocusState.Programmatic);
     }
@@ -38,9 +45,27 @@ public sealed partial class RestoreView : UserControl
         {
             if (!ReferenceEquals(BackupChoice.ItemsSource, Model.Backups)) BackupChoice.ItemsSource = Model.Backups;
             BackupChoice.SelectedItem = Model.SelectedBackup;
-            StateText.Text = Model.Message;
-            SelectionContent.Visibility = Model.IsReview ? Visibility.Collapsed : Visibility.Visible;
-            ReviewContent.Visibility = Model.IsReview ? Visibility.Visible : Visibility.Collapsed;
+            var executionVisible = execution.State is RestoreGuiState.Starting or RestoreGuiState.Running;
+            var resultVisible = execution.State is RestoreGuiState.Terminal or RestoreGuiState.TransportUncertain;
+            StateText.Text = execution.State switch
+            {
+                RestoreGuiState.Starting => "Starting Restore; waiting for worker admission…",
+                RestoreGuiState.Running => "Restore is running. No progress estimate is available.",
+                RestoreGuiState.TransportUncertain => "Restore status is uncertain. Do not immediately start the same Restore again.",
+                RestoreGuiState.Terminal => "The Restore operation reached a factual application result.",
+                _ when execution.TechnicalDetails.Length > 0 => "Restore could not start. Review the plan and try again when the service is available.",
+                _ => Model.Message
+            };
+            SelectionContent.Visibility = executionVisible || resultVisible || Model.IsReview ? Visibility.Collapsed : Visibility.Visible;
+            ReviewContent.Visibility = !executionVisible && !resultVisible && Model.IsReview ? Visibility.Visible : Visibility.Collapsed;
+            ExecutionContent.Visibility = executionVisible ? Visibility.Visible : Visibility.Collapsed;
+            ResultContent.Visibility = resultVisible ? Visibility.Visible : Visibility.Collapsed;
+            ExecutionHeading.Text = execution.State == RestoreGuiState.Running ? "Restoring…" : "Starting Restore…";
+            RestoreProgress.IsActive = executionVisible;
+            ExecutionFacts.Text = execution.Plan is { } runningPlan
+                ? $"{execution.BackupName}\nSaved version: {runningPlan.SnapshotId}\nDestination: {runningPlan.Destination}\nExisting files: {(runningPlan.Policy == RestoreConflictPolicy.ReplaceExisting ? "Replace existing" : "Skip existing")}"
+                : "";
+            RenderResult();
             var selecting = Model.State == RestoreSelectionState.Selecting;
             BackupChoice.IsEnabled = selecting;
             LatestChoice.IsEnabled = AnotherChoice.IsEnabled = Model.CanChooseVersion;
@@ -54,6 +79,12 @@ public sealed partial class RestoreView : UserControl
             RetryCatalogAction.Visibility = Model.State == RestoreSelectionState.Unavailable ? Visibility.Visible : Visibility.Collapsed;
             BackupWorkText.Visibility = Model.BackupWorkPending ? Visibility.Visible : Visibility.Collapsed;
             ReviewAction.IsEnabled = Model.CanReview;
+            ReviewAdmissionText.Text = Model.BackupWorkPending
+                ? "Finish the current Backup work before restoring. Restore will not join the Backup queue."
+                : execution.TechnicalDetails.Length > 0 ? "Restore could not start. View technical details before trying again." : "";
+            ReviewAdmissionText.Visibility = ReviewAdmissionText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            StartAction.IsEnabled = Model.Preview is { } current && Model.IsCurrentReview(current) && !execution.RequiresNewPlan &&
+                execution.State == RestoreGuiState.Idle && !Model.BackupWorkPending && !session.Busy && !session.ExitPending;
             SkipChoice.IsChecked = Model.Policy == RestoreConflictPolicy.SkipExisting;
             ReplaceChoice.IsChecked = Model.Policy == RestoreConflictPolicy.ReplaceExisting;
             SkipChoice.IsEnabled = ReplaceChoice.IsEnabled = selecting;
@@ -72,7 +103,8 @@ public sealed partial class RestoreView : UserControl
             LoadMoreAction.Visibility = Model.Versions.HasMore ? Visibility.Visible : Visibility.Collapsed;
             LoadMoreAction.IsEnabled = selecting && !Model.Versions.IsLoading;
             RefreshVersionsAction.IsEnabled = selecting && !Model.Versions.IsLoading;
-            TechnicalText.Text = Model.TechnicalDetails.Length > 0 ? Model.TechnicalDetails : Model.Versions.TechnicalDetails;
+            TechnicalText.Text = execution.TechnicalDetails.Length > 0 ? execution.TechnicalDetails :
+                Model.TechnicalDetails.Length > 0 ? Model.TechnicalDetails : Model.Versions.TechnicalDetails;
             TechnicalPanel.Visibility = TechnicalText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             if (Model.Preview is { } preview)
             {
@@ -91,6 +123,42 @@ public sealed partial class RestoreView : UserControl
             }
         }
         finally { rendering = false; }
+    }
+
+    private void RenderResult()
+    {
+        if (execution.State == RestoreGuiState.TransportUncertain)
+        {
+            ResultHeading.Text = "Restore status uncertain";
+            ResultSummary.Text = "Mirrorly did not receive a usable application result. The destination may have changed; no automatic retry was started.";
+            ResultNextStep.Text = "Do not immediately repeat this Restore. Check the destination and saved version before deciding what to do next.";
+        }
+        else if (execution.Result is { } result)
+        {
+            ResultHeading.Text = result.Outcome switch
+            {
+                RestoreExecutionOutcome.Completed => "Restore complete",
+                RestoreExecutionOutcome.CompletedWithIssues => "Restore completed with issues",
+                _ => "Restore stopped"
+            };
+            ResultSummary.Text = result.Facts is { } facts
+                ? string.Format(CultureInfo.CurrentCulture,
+                    "{0:N0} files restored · {1:N0} directories created · {2:N0} items skipped\n{3:N0} conflicts · {4:N0} errors · {5:N0} leftover temporary files · {6:N0} logical bytes written",
+                    facts.FilesRestored, facts.DirectoriesCreated, facts.ItemsSkipped, facts.Conflicts,
+                    facts.Errors, facts.LeftoverTemporaryFiles, facts.BytesWritten)
+                : "Restore stopped before it finished. The destination may have been partially modified.";
+            ResultNextStep.Text = result.Outcome switch
+            {
+                RestoreExecutionOutcome.ApplicationFailed when execution.Plan?.Policy == RestoreConflictPolicy.ReplaceExisting =>
+                    "Files already replaced are not automatically returned to their previous versions. Review the destination before trying again.",
+                RestoreExecutionOutcome.ApplicationFailed => "Review the destination before trying again. Prepare a new plan for another attempt.",
+                RestoreExecutionOutcome.CompletedWithIssues => "Review conflicts, errors and leftover temporary files before relying on the destination.",
+                RestoreExecutionOutcome.Completed when result.Facts?.ItemsSkipped > 0 =>
+                    "Existing items skipped under your selected policy were not changed. Prepare a new plan to restore again.",
+                _ => "Prepare a new plan to restore again."
+            };
+        }
+        NewRestoreAction.Visibility = execution.State == RestoreGuiState.Terminal ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async void BackupChoice_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -130,6 +198,19 @@ public sealed partial class RestoreView : UserControl
     {
         Model.Edit();
         ReviewAction.Focus(FocusState.Programmatic);
+    }
+    private async void Start_Click(object sender, RoutedEventArgs e)
+    {
+        if (Model.Preview is not { } preview || !Model.IsCurrentReview(preview) || ConfirmStart is null) return;
+        StartAction.IsEnabled = false;
+        var confirmed = await ConfirmStart(preview);
+        if (!confirmed || !Model.IsCurrentReview(preview)) { Render(); return; }
+        if (!execution.Start(preview, Model.SelectedBackup?.Name ?? "Backup")) Render();
+    }
+    private async void NewRestore_Click(object sender, RoutedEventArgs e)
+    {
+        execution.ClearTerminal();
+        await EnterAsync();
     }
     private void SkipChoice_Checked(object sender, RoutedEventArgs e)
     {
