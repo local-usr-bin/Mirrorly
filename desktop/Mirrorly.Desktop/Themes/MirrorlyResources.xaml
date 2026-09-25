@@ -105,6 +105,8 @@
   <x:Double x:Key="MirrorlyHeaderDecorationScale">1</x:Double>
   <x:Double x:Key="MirrorlySidebarDecorationWidth">218</x:Double>
   <x:Double x:Key="MirrorlySidebarDecorationHeight">230</x:Double>
+  <x:Double x:Key="MirrorlyCompactSidebarDecorationWidth">132</x:Double>
+  <x:Double x:Key="MirrorlyCompactSidebarDecorationHeight">137</x:Double>
   <x:Double x:Key="MirrorlySidebarDecorationOffsetX">0</x:Double>
   <x:Double x:Key="MirrorlySidebarDecorationOffsetY">0</x:Double>
   <Thickness x:Key="MirrorlySidebarDecorationMargin">4,0,4,8</Thickness>
@@ -116,6 +118,11 @@
     <Setter Property="Height" Value="{StaticResource MirrorlySidebarDecorationHeight}"/>
     <Setter Property="Margin" Value="{StaticResource MirrorlySidebarDecorationMargin}"/>
     <Setter Property="RenderTransform"><Setter.Value><TranslateTransform X="{StaticResource MirrorlySidebarDecorationOffsetX}" Y="{StaticResource MirrorlySidebarDecorationOffsetY}"/></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="MirrorlyCompactSidebarDecoration" TargetType="UserControl">
+    <Setter Property="Width" Value="{StaticResource MirrorlyCompactSidebarDecorationWidth}"/>
+    <Setter Property="Height" Value="{StaticResource MirrorlyCompactSidebarDecorationHeight}"/>
+    <Setter Property="Margin" Value="0,0,0,10"/>
   </Style>
   <Style x:Key="MirrorlyHeaderDecoration" TargetType="UserControl">
     <Setter Property="Width" Value="{StaticResource MirrorlyHeaderDecorationWidth}"/>

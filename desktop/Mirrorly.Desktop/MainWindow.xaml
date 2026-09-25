@@ -16,9 +16,19 @@
     <components:SpringSprig Style="{StaticResource MirrorlySidebarDecoration}"/>
    </Border>
   </NavigationView.PaneFooter>
-  <ScrollViewer x:Name="Scroller" Background="{ThemeResource MirrorlySurfaceBrush}" HorizontalScrollBarVisibility="Disabled"
-   HorizontalScrollMode="Disabled" VerticalScrollBarVisibility="Auto">
-   <ContentControl x:Name="PageHost" Margin="{StaticResource MirrorlyPageMargin}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top"/>
-  </ScrollViewer>
+  <Grid Background="{ThemeResource MirrorlySurfaceBrush}">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <Border Grid.Column="0" Visibility="{ThemeResource MirrorlyDecorationVisibility}"
+    IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+    <Border x:Name="CompactDecoration" VerticalAlignment="Bottom" Visibility="Collapsed"
+     IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+     <components:SpringSprig Style="{StaticResource MirrorlyCompactSidebarDecoration}"/>
+    </Border>
+   </Border>
+   <ScrollViewer x:Name="Scroller" Grid.Column="1" Background="{ThemeResource MirrorlySurfaceBrush}" HorizontalScrollBarVisibility="Disabled"
+    HorizontalScrollMode="Disabled" VerticalScrollBarVisibility="Auto">
+    <ContentControl x:Name="PageHost" Margin="{StaticResource MirrorlyPageMargin}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top"/>
+   </ScrollViewer>
+  </Grid>
  </NavigationView>
 </Window>

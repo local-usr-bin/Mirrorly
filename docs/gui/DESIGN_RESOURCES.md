@@ -38,6 +38,9 @@ Back up now 明显且由 queue coordinator 处理；已有其他 Backup Running 
 
 花草是独立视觉层，可独立换图、移动、缩放和隐藏；不是把背景/卡片/内容烙成整页图片。Phase 1B fidelity pass 使用 `Assets/Decorations/spring-sprig-sidebar.svg` 与 `spring-sprig-header.svg` 两个原创静态矢量资产，由 `Components/SpringSprig` / 标准 `SvgImageSource` 呈现。资源定义占位尺寸及 render transform，资产本身不能撑开页面。不占点击区、不遮挡文本/焦点，以 Raw accessibility view 排除出常规 Control/Content 导航；不用承载功能信息。Working/Failure 时隐藏，High Contrast 直接隐藏。完整 screen reader 行为仍须实测。
 
+当前 Home 下方主植物在 Expanded 导航中沿用 pane footer；Compact 导航、关闭的 pane 且窗口宽度至少 960 epx、高于 600 epx 时，复用同一 SVG 的较小左侧独立宿主。低于此宽度或高度时隐藏，以免挤占必要内容。两宿主互斥，High Contrast 通过主题资源隐藏装饰；导航的 640/1280 epx 阈值不因植物而改变。
+当前开发机 175% DPI 的 package-context Debug 实测：默认约 1120×840 epx 的 Home 显示左下 Compact 主植物；最大化约 1463×843 epx 显示原 Expanded 侧栏主植物；560×480 epx 窄窗口隐藏主植物且 Home 操作可达；Backups 页面不保留装饰空列。100%/125% DPI 和真实 High Contrast 切换仍留待最终发行视觉验收；本次 High Contrast 仅验证了资源/宿主绑定及确定性测试。
+
 v1 植物方向：轻植物学插画、细弯枝、多种嫩绿、不同大小/角度/弯曲的叶片、轻叶脉和粉色花瓣层次。左下两朵花必须分处主枝两侧：靠枝梢的一朵在上侧向外舒展，另一朵在相对下侧；不做两朵都垂在枝条下方的构图。右上更小、更轻，不进入状态卡。
 
 **静态页面禁止游离/飘落花瓣**。未来仅真实任务开始时允许短暂一次性 flourish，不是进度，不循环；详见 [MOTION](MOTION.md)。本阶段只记录规范，不实现动画或假队列。

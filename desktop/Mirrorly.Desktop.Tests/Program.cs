@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
+using System.Xml.Linq;
 using Mirrorly.Desktop.Services;
 using Mirrorly.Desktop.ViewModels;
 using Mirrorly.Desktop.Presentation;
@@ -222,6 +224,32 @@ await Test("Responsive boundary stacks status; preview actions never advance fix
     var original = home.Fixture;
     home.ShowPrototypeAction("Back up now");
     Check(ReferenceEquals(original, home.Fixture) && home.PrototypeMessage.Contains("No files"));
+    return Task.CompletedTask;
+});
+await Test("Plant placement restores Compact default, preserves Expanded and hides at narrow/High Contrast", () =>
+{
+    Check(HomePolicy.PlantFor(true, false, false, true, 1120, 840) == PlantPlacement.Compact);
+    Check(HomePolicy.PlantFor(true, true, true, false, 1366, 768) == PlantPlacement.Expanded);
+    Check(HomePolicy.PlantFor(true, false, false, true, HomePolicy.CompactPlantAt - 1, 840) == PlantPlacement.Hidden);
+    Check(HomePolicy.PlantFor(true, false, false, true, 1120, HomePolicy.PlantMinHeight) == PlantPlacement.Hidden);
+    Check(HomePolicy.PlantFor(false, false, false, true, 1120, 840) == PlantPlacement.Hidden);
+    Check(HomePolicy.PlantFor(true, true, false, true, 1120, 840) == PlantPlacement.Hidden);
+    var root = Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>()
+        .Single(a => a.Key == "CheckoutRoot").Value!;
+    var resources = XDocument.Load(Path.Combine(root, "desktop", "Mirrorly.Desktop", "Themes", "MirrorlyResources.xaml"));
+    XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+    var highContrast = resources.Descendants().Single(e => e.Name.LocalName == "ResourceDictionary" &&
+        (string?)e.Attribute(x + "Key") == "HighContrast");
+    Check(highContrast.Descendants().Any(e => e.Name.LocalName == "Visibility" &&
+        (string?)e.Attribute(x + "Key") == "MirrorlyDecorationVisibility" && e.Value.Trim() == "Collapsed"));
+    var shell = XDocument.Load(Path.Combine(root, "desktop", "Mirrorly.Desktop", "MainWindow.xaml"));
+    var compact = shell.Descendants().Single(e => (string?)e.Attribute(x + "Name") == "CompactDecoration");
+    Check(compact.Ancestors().Any(e => (string?)e.Attribute("Visibility") == "{ThemeResource MirrorlyDecorationVisibility}"));
+    Check(shell.Descendants().Count(e => (string?)e.Attribute(x + "Name") is "CompactDecoration" or "SidebarDecoration") == 2);
+    var sprig = XDocument.Load(Path.Combine(root, "desktop", "Mirrorly.Desktop", "Components", "SpringSprig.xaml")).Root!;
+    Check((string?)sprig.Attribute("IsHitTestVisible") == "False" && (string?)sprig.Attribute("IsTabStop") == "False" &&
+        (string?)sprig.Attribute("AutomationProperties.AccessibilityView") == "Raw" &&
+        (string?)sprig.Attribute("Visibility") == "{ThemeResource MirrorlyDecorationVisibility}");
     return Task.CompletedTask;
 });
 await SetupTests.Run(Test, Check);

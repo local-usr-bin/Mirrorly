@@ -7,6 +7,7 @@ namespace Mirrorly.Desktop.Presentation;
 public enum HomeScenario { Healthy, DestinationUnavailable, Failed, CompletedWithIssues, FinalizationProblem, Running, Queued, TwoBackups, ThreeBackups, ManyBackups, Empty, LongPath }
 public enum StatusTone { Success, Warning, Error, Working, Neutral }
 public enum ShellPage { Home, Backups, Restore, Activity, Settings, BackupSetup, Diagnostics }
+public enum PlantPlacement { Hidden, Compact, Expanded }
 public record StatusPresentation(string Title, string Detail, string NextStep, string Action, StatusTone Tone, string Symbol, bool Busy = false);
 public record BackupPresentation(string Id, string Name, string Source, string Destination, string LastBackup, string Status, StatusTone Tone, int Recency, string? SavedSnapshotPath = null, string LastBackupLabel = "Last backup:", DateTimeOffset? SavedVersionCreatedAt = null)
 {
@@ -27,8 +28,17 @@ public static class HomePolicy
     // Compact navigation preserves content room on medium windows; see PHASE1C calibration.
     public const double ExpandedNavigationAt = 1280;
     public const double CompactNavigationAt = 640;
+    // Below this width the compact plant would take space from essential page controls.
+    public const double CompactPlantAt = 960;
+    public const double PlantMinHeight = 600;
     public static readonly bool DecorationsEnabled = true;
     public static bool StackStatus(double width) => width < StackedStatusBelow;
+    public static PlantPlacement PlantFor(bool show, bool paneOpen, bool expanded, bool compact, double width, double height)
+    {
+        if (!show || height <= PlantMinHeight) return PlantPlacement.Hidden;
+        if (expanded && paneOpen) return PlantPlacement.Expanded;
+        return compact && !paneOpen && width >= CompactPlantAt ? PlantPlacement.Compact : PlantPlacement.Hidden;
+    }
     // Saved-version time is a Home display hint, never Backup baseline selection.
     // Require an explicit offset so sorting cannot vary with the desktop time zone.
     public static DateTimeOffset? SavedVersionTime(string? value)

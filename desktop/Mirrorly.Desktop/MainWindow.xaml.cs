@@ -98,8 +98,12 @@ public sealed partial class MainWindow : Window
             Navigation.ActualWidth < HomePolicy.CompactNavigationAt ? "MirrorlyCompactPageMargin" : "MirrorlyPageMargin"];
         Scroller.Margin = (Thickness)Application.Current.Resources[Navigation.DisplayMode == NavigationViewDisplayMode.Minimal
             ? "MirrorlyMinimalNavigationInset" : "MirrorlyNavigationInset"];
-        SidebarDecoration.Visibility = Navigation.IsPaneOpen && Navigation.DisplayMode == NavigationViewDisplayMode.Expanded
-            && home.Model.ShowDecoration && shell.IsHome && Navigation.ActualHeight > 600 ? Visibility.Visible : Visibility.Collapsed;
+        var plant = HomePolicy.PlantFor(home.Model.ShowDecoration && shell.IsHome, Navigation.IsPaneOpen,
+            Navigation.DisplayMode == NavigationViewDisplayMode.Expanded,
+            Navigation.DisplayMode == NavigationViewDisplayMode.Compact,
+            Navigation.ActualWidth, Navigation.ActualHeight);
+        SidebarDecoration.Visibility = plant == PlantPlacement.Expanded ? Visibility.Visible : Visibility.Collapsed;
+        CompactDecoration.Visibility = plant == PlantPlacement.Compact ? Visibility.Visible : Visibility.Collapsed;
 #if DEBUG
         if (Navigation.XamlRoot is not null) diagnostics?.SetDisplay(
             $"Actual DPI scale: {Navigation.XamlRoot.RasterizationScale:P0} · content {Navigation.ActualWidth:F0} × {Navigation.ActualHeight:F0} effective pixels");
