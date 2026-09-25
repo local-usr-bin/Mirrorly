@@ -24,6 +24,12 @@ limit; the complete report remains available at `report_path`.
   busy or mutation-gate rejection pauses automatic dispatch and preserves
   not-yet-started queue entries. No automatic retry or replacement worker is
   launched. A lost transport is never classified as an application failure.
+- Queued remains a factual task state while automatic dispatch is paused. Home
+  and Backups show queue attention ahead of ordinary "will start next" wording,
+  with technical details from the operation that caused the pause even when a
+  different queued task is selected. A genuine terminal application
+  `commit_state=unknown` still permits FIFO advancement; it is not transport
+  uncertainty.
 - A required Resume interaction holds the slot and does not reorder the queue.
   The existing ten-minute deadline, hidden-window reopening and explicit
   Resume/Don't resume/unavailable behavior remain unchanged.

@@ -12,6 +12,9 @@ execution coordinator and existing summary controls. An omitted Home-preview
 task can start a real Backup, join the in-memory FIFO, show Running/Queued,
 and be removed while Queued. The shell owns vertical scrolling. Catalog
 refresh and navigation do not own or reorder the queue.
+When automatic FIFO advancement is paused, both pages show the shared queue
+attention and affected-operation details. A queued task remains marked Queued
+and removable, without a promise that it will start automatically.
 
 This is a collection list, not the future per-Backup Overview, Snapshots or
 Settings hierarchy. Restore, Activity and Settings remain separate later

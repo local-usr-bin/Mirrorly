@@ -40,10 +40,11 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     public BackupTaskRunState RunState(string selector) => execution?.TaskState(selector) ?? BackupTaskRunState.Idle;
     public bool IsBackingUp => selectedSelector is not null && RunState(selectedSelector) == BackupTaskRunState.Running;
     public string? SelectedSelector => selectedSelector;
-    public string BackupActionHelp => selectedSelector is not null && RunState(selectedSelector) == BackupTaskRunState.Queued
+    public string BackupActionHelp => execution is { QueueAttention: not BackupQueueAttention.None }
+        ? "The automatic queue is paused. View technical details before starting more work."
+        : selectedSelector is not null && RunState(selectedSelector) == BackupTaskRunState.Queued
         ? "This Backup is waiting. Use Remove from queue on its card if it should not run."
         : IsBackingUp ? "This Backup is running. No cancellation or progress percentage is available."
-        : execution?.QueueAttention != BackupQueueAttention.None ? "The automatic queue is paused. View technical details before starting more work."
         : execution?.HasActiveBackup == true ? "Add this Backup to the in-memory FIFO queue. It starts after the current Backup finishes."
         : execution?.ResultFor(selectedSelector ?? "")?.CommitState == "unknown" ? "Mirrorly cannot confirm whether this Backup's last version was saved."
         : "Start a real Backup. No progress percentage or cancellation is available.";
@@ -103,6 +104,15 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     private StatusPresentation CurrentStatus(IReadOnlyList<BackupPresentation> cards)
     {
         var name = cards.FirstOrDefault(b => b.Id == selectedSelector)?.Name ?? "Backup";
+        if (execution?.QueueAttention == BackupQueueAttention.TransportUncertain)
+            return new("Backup result unconfirmed", "Mirrorly lost the connection before it could confirm the Backup result.",
+                "Queued Backups will not start automatically. View technical details before starting more work.", "Back up now", StatusTone.Error, "⚠");
+        if (execution?.QueueAttention == BackupQueueAttention.AdmissionRejected)
+            return new("Queue paused", "Mirrorly could not admit the Backup request.",
+                "Queued Backups will not start automatically. View technical details before starting more work.", "Back up now", StatusTone.Warning, "⚠");
+        if (execution?.QueueAttention == BackupQueueAttention.UnreportedTerminal)
+            return new("Backup result not fully reported", "Mirrorly couldn't read the Backup result.",
+                "Queued Backups will not start automatically. View technical details before starting more work.", "Back up now", StatusTone.Warning, "⚠");
         if (selectedSelector is not null && execution is { } active)
         {
             if (active.TaskState(selectedSelector) == BackupTaskRunState.Queued)
@@ -184,7 +194,9 @@ public sealed class HomeViewModel : INotifyPropertyChanged
             BackupQueueAttention.UnreportedTerminal => "Queue paused: Mirrorly couldn't read the Backup result. Queued Backups will not start automatically.",
             _ => catalogProblem
         };
-        var operation = selectedSelector is null ? null : execution?.ResultFor(selectedSelector)?.TechnicalDetails;
+        var operation = execution is { QueueAttention: not BackupQueueAttention.None }
+            ? execution?.Result?.TechnicalDetails
+            : selectedSelector is null ? null : execution?.ResultFor(selectedSelector)?.TechnicalDetails;
         TechnicalDetails = string.Join("\n", new[] { catalogDetails, operation, presentationDetails }.Where(s => !string.IsNullOrWhiteSpace(s)));
         Changed();
     }

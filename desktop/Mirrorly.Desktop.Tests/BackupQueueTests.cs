@@ -92,7 +92,8 @@ static class BackupQueueTests
                 var running = home.BackUpNowAsync("A"); await home.BackUpNowAsync("B");
                 a.SetResult(Reply(outcome, commit)); await running;
                 await bStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                check(coordinator.ResultFor("A")?.CommitState == commit && fake.BackupSelectors.SequenceEqual(["A", "B"]));
+                check(coordinator.ResultFor("A")?.CommitState == commit &&
+                    coordinator.QueueAttention == BackupQueueAttention.None && fake.BackupSelectors.SequenceEqual(["A", "B"]));
                 if (commit == "unknown") check(!coordinator.CanSchedule("A") && coordinator.CanSchedule("B") == false);
                 b.SetResult(Reply());
             }
@@ -142,6 +143,39 @@ static class BackupQueueTests
                     coordinator.QueueAttention == attention && home.Problem.Contains("Queue paused") &&
                     !home.CanBackUpTask("B"));
             }
+        });
+
+        await test("Paused queue attention and affected-operation details outrank selected queued Backup", async () =>
+        {
+            var fake = new FakeDesktopSession { Catalog = Catalog("A", "B", "C") };
+            fake.BackupReplies.Enqueue(Reply());
+            var coordinator = new BackupExecutionCoordinator(fake);
+            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            await home.BackUpNowAsync("C");
+            var previousC = coordinator.ResultFor("C")?.TechnicalDetails;
+            var a = Barrier(); fake.BackupBarriers.Enqueue(a);
+            var running = home.BackUpNowAsync("A");
+            await home.BackUpNowAsync("B");
+            await home.BackUpNowAsync("C");
+            check(home.SelectedSelector == "C" && coordinator.QueuedSelectors.SequenceEqual(["B", "C"]) &&
+                home.Status.Title == "C is queued" && fake.BackupSelectors.SequenceEqual(["C", "A"]));
+            a.SetException(new WorkerTransportUncertainException("lost terminal for A"));
+            await running;
+            check(coordinator.QueueAttention == BackupQueueAttention.TransportUncertain &&
+                coordinator.ResultFor("A")?.CommitState is null &&
+                coordinator.QueuedSelectors.SequenceEqual(["B", "C"]) &&
+                home.RunState("C") == BackupTaskRunState.Queued &&
+                home.AllBackups.Single(b => b.Id == "C").Status == "Queued" &&
+                home.Status.Title == "Backup result unconfirmed" &&
+                home.Status.Detail.Contains("lost the connection") &&
+                home.Status.NextStep.Contains("will not start automatically") &&
+                !home.BackupActionHelp.Contains("starts after") &&
+                home.Problem.Contains("Queue paused") &&
+                home.TechnicalDetails.Contains("lost terminal for A") &&
+                home.TechnicalDetails == coordinator.ResultFor("A")?.TechnicalDetails &&
+                home.TechnicalDetails != previousC);
+            check(home.RemoveFromQueue("C") && coordinator.QueuedSelectors.SequenceEqual(["B"]) &&
+                home.RunState("C") == BackupTaskRunState.Idle && fake.BackupSelectors.SequenceEqual(["C", "A"]));
         });
 
         await test("Resume holds the slot; true Exit clears queued work while Stay preserves it", async () =>
