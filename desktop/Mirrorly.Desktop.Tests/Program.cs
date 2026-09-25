@@ -333,6 +333,7 @@ await Test("Plant placement restores Compact default, preserves Expanded and hid
 });
 await SetupTests.Run(Test, Check);
 await SnapshotCollectionTests.Run(Test, Check);
+await RestoreSelectionTests.Run(Test, Check);
 await ProductionWorkerTests.Run(Test, Check, args);
 Console.WriteLine($"{passed} passed; {failed} failed.");
 return failed == 0 ? 0 : 1;

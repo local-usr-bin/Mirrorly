@@ -7,6 +7,8 @@
 
 Phase 4C 后的 [Backups collection](BACKUPS_COLLECTION.md) 使 Home 的小型预览通向完整、真实的 GUI Backup 列表；Home 的最近项按已保存版本时间展示，不改变 Python 的权威选择规则。
 
+Restore R2 已将顶层占位页替换为真实 Backup / 完整 saved version / destination / Skip 或 Replace 选择与只读 `restore.prepare` Review。Review 不执行 Restore，也不写 destination；R3 才接入执行、运行时生命周期和结果。当前细节见[生产契约](PRODUCTION_WORKER.md#restore-selection-and-review-r2)。
+
 Phase 1A–1C documents preserve their reviewed historical prototype results. [Phase 2](PHASE2.md) completed shared application extraction; the current [production contract](PRODUCTION_WORKER.md) records the implemented worker/GUI bridge. Fake worker and fixtures remain test/design infrastructure, not normal runtime data.
 
 ## 阅读顺序与状态标记

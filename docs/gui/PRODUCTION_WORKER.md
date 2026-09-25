@@ -11,8 +11,9 @@ for authoritative saved-version rediscovery. This is not production distribution
 Phase 4C adds an app-scoped, memory-only GUI FIFO in the existing Backup coordinator;
 the worker still has one execution slot and no queue.
 The subsequent read-only data batch adds `snapshots.list`, now used by Backup
-Detail's Snapshots section. Restore R1 adds only read-only `restore.prepare`;
-Restore execution and its GUI remain unimplemented.
+Detail's Snapshots section. Restore R1 adds read-only `restore.prepare`; R2
+connects a real selection and Review GUI to it. Restore execution remains
+unimplemented.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
 Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
@@ -686,8 +687,44 @@ therefore report `repository_invalid`; the code names the actual failing
 boundary, not a guessed diagnosis. A query failure is never a zero-count plan.
 `restore.execute` remains future destination mutation: it must have separate
 mutation admission, lifecycle supervision and no automatic replay. Restore does
-not enter the GUI Backup FIFO. R2/R3 will bind Review and execution after the
-Backup-vs-Restore GUI policy is decided.
+not enter the GUI Backup FIFO.
+
+### Restore selection and Review (R2)
+
+The top-level Restore page now reads the production task catalog and lets the
+user choose a Backup by durable selector. Its default saved-version intent is
+`snapshot_id=null`, resolved by Python's authoritative latest-complete rule at
+prepare time. “Choose another saved version” reads `snapshots.list` in explicit
+16-item pages; only complete items can be selected. Manifest-filename order is
+not advertised as recency. The existing read-only folder browser selects an
+accessible, existing absolute destination. Skip existing is the default;
+Replace existing requires explicit selection. The GUI does not offer `in_place`,
+Keep both, `older`, path subsets, or exact-mirror Restore.
+
+“Review restore” calls **only** `restore.prepare`. The Review displays the
+returned selector-bound snapshot ID, destination, policy, create/overwrite/skip/
+conflict counts and planned directory-entry count. R1 does not expose the
+prepared snapshot creation time, so Review does not substitute a cached summary
+time for that authoritative fact. The opaque plan ID is current-session Review
+identity, never approval. Editing choices or leaving Restore discards local
+Review; a later Review calls prepare again. An in-flight stale response cannot
+replace newer choices. No `restore.execute` method or final Restore action is
+available in R2, and Review writes nothing to the destination.
+
+The app-scoped Backup coordinator remains the sole Backup FIFO owner. Running
+or queued Backup work prevents Review preparation, including queued work left
+after queue attention stops advancement; Restore is never enqueued behind it.
+The worker's independent busy admission still handles races. R2 does not yet
+implement the reverse execution-time Backup admission/lifecycle policy; R3
+must do so before enabling destination mutation.
+
+Review explains safe merge: extra destination contents are not deleted, Skip
+keeps existing files, Replace may overwrite matching ordinary files, and type
+conflicts remain conflicts. It also states that future v1 execution cannot be
+cancelled, devices should remain connected, shutdown/restart should be avoided,
+and Close-to-tray will let a running Restore continue. Completed replacements
+are not automatically rolled back after later failure or interruption. These
+are future execution facts, not a claim that R2 can execute Restore.
 
 Live terminal presentation distinguishes normal success, completed with issues,
 `not_published`, application `unknown`, `published` with finalization failure,

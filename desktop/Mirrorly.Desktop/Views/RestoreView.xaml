@@ -1,0 +1,89 @@
+<UserControl x:Class="Mirrorly.Desktop.Views.RestoreView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:viewModels="using:Mirrorly.Desktop.ViewModels">
+ <StackPanel Spacing="{StaticResource MirrorlySectionSpacing}" MaxWidth="{StaticResource MirrorlyContentMaxWidth}" HorizontalAlignment="Stretch">
+  <TextBlock Text="Restore" Style="{StaticResource MirrorlyPageTitle}"/>
+  <TextBlock Text="Restore a whole saved version into a folder you choose. Existing files are skipped unless you explicitly choose Replace." Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+  <TextBlock x:Name="StateText" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+  <StackPanel x:Name="SelectionContent" Spacing="{StaticResource MirrorlySectionSpacing}">
+   <Border Style="{StaticResource MirrorlyCard}">
+    <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
+     <TextBlock Text="Backup" Style="{StaticResource MirrorlySectionTitle}"/>
+     <ComboBox x:Name="BackupChoice" Header="Choose Backup" DisplayMemberPath="Name" HorizontalAlignment="Stretch" SelectionChanged="BackupChoice_SelectionChanged"/>
+     <TextBlock x:Name="EmptyBackups" Text="No configured Backups yet. Set up a Backup before restoring." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap" Visibility="Collapsed"/>
+     <Button x:Name="RetryCatalogAction" Content="Retry" Click="RetryCatalog_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left" Visibility="Collapsed"/>
+    </StackPanel>
+   </Border>
+   <Border Style="{StaticResource MirrorlyCard}">
+    <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
+     <TextBlock Text="Saved version" Style="{StaticResource MirrorlySectionTitle}"/>
+     <RadioButton x:Name="LatestChoice" GroupName="RestoreVersion" Content="Latest saved backup" IsChecked="True" Checked="LatestChoice_Checked"/>
+     <Button x:Name="RetrySavedVersionAction" Content="Retry saved-version check" Click="RetrySavedVersion_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left" Visibility="Collapsed"/>
+     <RadioButton x:Name="AnotherChoice" GroupName="RestoreVersion" Content="Choose another saved version" Checked="AnotherChoice_Checked"/>
+     <StackPanel x:Name="VersionPicker" Spacing="{StaticResource MirrorlyControlSpacing}" Visibility="Collapsed">
+      <TextBlock Text="Only complete saved versions can be restored. List order does not mean newest first." Style="{StaticResource MirrorlyCaption}" TextWrapping="Wrap"/>
+      <TextBlock x:Name="VersionState" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+      <ListView x:Name="VersionList" SelectionMode="Single" SelectionChanged="VersionList_SelectionChanged" MaxHeight="300"
+       AutomationProperties.Name="Complete saved versions" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+       <ListView.ItemTemplate><DataTemplate x:DataType="viewModels:RestoreVersionChoice">
+        <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}">
+         <TextBlock Text="{x:Bind Time}" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+         <TextBlock Text="{x:Bind Status}" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+        </StackPanel>
+       </DataTemplate></ListView.ItemTemplate>
+      </ListView>
+      <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyControlSpacing}">
+       <Button x:Name="LoadMoreAction" Content="Load more" Click="LoadMore_Click" Style="{StaticResource MirrorlySecondaryButton}"/>
+       <Button x:Name="RefreshVersionsAction" Content="Refresh versions" Click="RefreshVersions_Click" Style="{StaticResource MirrorlySecondaryButton}"/>
+      </StackPanel>
+     </StackPanel>
+    </StackPanel>
+   </Border>
+   <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
+    <TextBlock Text="Destination" Style="{StaticResource MirrorlySectionTitle}"/>
+    <TextBlock Text="Choose an existing folder. Restore to the original Source is not available in this version." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+    <Grid x:Name="DestinationHost"/>
+   </StackPanel>
+   <Border Style="{StaticResource MirrorlyCard}">
+    <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
+     <TextBlock Text="Existing files" Style="{StaticResource MirrorlySectionTitle}"/>
+     <RadioButton x:Name="SkipChoice" GroupName="RestorePolicy" Content="Skip existing" IsChecked="True" Checked="SkipChoice_Checked"/>
+     <TextBlock Text="Keep same-name files already in the destination. Extra destination files are never deleted." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+     <RadioButton x:Name="ReplaceChoice" GroupName="RestorePolicy" Content="Replace existing" Checked="ReplaceChoice_Checked"/>
+     <TextBlock Text="Matching ordinary files may be replaced. File/directory type conflicts are not forced; extra files are not deleted." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+    </StackPanel>
+   </Border>
+   <TextBlock x:Name="BackupWorkText" Text="Finish the current Backup work before preparing a Restore. Restore does not join the Backup queue." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap" Visibility="Collapsed"/>
+   <Button x:Name="ReviewAction" Content="Review restore" Click="Review_Click" Style="{StaticResource MirrorlyPrimaryButton}" HorizontalAlignment="Left"/>
+  </StackPanel>
+  <StackPanel x:Name="ReviewContent" Spacing="{StaticResource MirrorlySectionSpacing}" Visibility="Collapsed">
+   <Border Style="{StaticResource MirrorlyCard}">
+    <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
+     <TextBlock Text="Review restore" Style="{StaticResource MirrorlySectionTitle}"/>
+     <TextBlock x:Name="ReviewBackup" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+     <TextBlock Text="Saved version selected by Mirrorly" Style="{StaticResource MirrorlyCaption}"/>
+     <TextBlock x:Name="ReviewSnapshot" Style="{StaticResource MirrorlyPath}" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+     <TextBlock Text="Destination" Style="{StaticResource MirrorlyCaption}"/>
+     <TextBlock x:Name="ReviewDestination" Style="{StaticResource MirrorlyPath}" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+     <TextBlock x:Name="ReviewPolicy" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+     <TextBlock x:Name="ReviewCounts" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+     <TextBlock Text="Planned directory entries describe the snapshot plan, not the number of new folders guaranteed." Style="{StaticResource MirrorlyCaption}" TextWrapping="Wrap"/>
+    </StackPanel>
+   </Border>
+   <Border Style="{StaticResource MirrorlyCard}" Background="{ThemeResource MirrorlySurfaceSubtleBrush}">
+    <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
+     <TextBlock Text="Safe merge" Style="{StaticResource MirrorlySectionTitle}"/>
+     <TextBlock Text="Snapshot contents are restored into the selected destination. Extra destination contents are not deleted. Conflicts are not silently forced." Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+     <TextBlock x:Name="ReviewPolicyExplanation" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+     <TextBlock Text="Before you restore" Style="{StaticResource MirrorlySectionTitle}"/>
+     <TextBlock Text="Once a Restore starts in this version, it cannot be cancelled. Keep the Backup repository and destination devices connected, and avoid shutting down or restarting until it finishes. Closing Mirrorly to the notification area will allow it to continue." Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+     <TextBlock x:Name="ReplaceWarning" Text="Files already replaced are not automatically rolled back if a later failure or interruption occurs." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap" Visibility="Collapsed"/>
+    </StackPanel>
+   </Border>
+   <Button x:Name="EditAction" Content="Edit choices" Click="Edit_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left"/>
+  </StackPanel>
+  <Expander x:Name="TechnicalPanel" Header="View technical details" Visibility="Collapsed">
+   <TextBlock x:Name="TechnicalText" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+  </Expander>
+ </StackPanel>
+</UserControl>

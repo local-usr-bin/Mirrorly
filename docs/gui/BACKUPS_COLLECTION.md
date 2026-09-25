@@ -53,7 +53,9 @@ Technical errors remain behind “View technical details.” Backup-specific
 Settings, Restore, Verify, selected-snapshot Explorer paths and reports remain
 deferred, without placeholder destinations.
 
-Restore, Activity and global Settings remain separate later work. Home shows the truthful empty Activity state without an active `View all`
+Top-level Restore now has its own selection and read-only Review flow; no
+Snapshots-row Restore action or Restore execution exists yet. Activity and
+global Settings remain later work. Home shows the truthful empty Activity state without an active `View all`
 link to the unfinished Activity page. Rebuilt Backup cards keep keyboard focus
 with the same task across live state updates when that task remains visible.
 No Python Backup transaction, worker protocol, task configuration, queue

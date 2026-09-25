@@ -108,6 +108,20 @@ static class RestorePrepareTests
                     skip.FileOverwriteCount == 0 && replace!.FileOverwriteCount == 1 &&
                     replace.Policy == RestoreConflictPolicy.ReplaceExisting && replace.PlanId != skip.PlanId);
                 check(File.ReadAllText(Path.Combine(root, "destination", "sample.txt")) == "user data");
+                foreach (var unsafeDestination in new[] {
+                    Path.Combine(root, "source"), Path.Combine(root, "target", "MirrorlyRepo")
+                })
+                {
+                    try {
+                        await session.RunAsync(async api => _ = await api.PrepareRestoreAsync(new(
+                            "one", snapshot, unsafeDestination)));
+                        throw new Exception("Unsafe Restore destination yielded a plan.");
+                    }
+                    catch (RestorePrepareRejectedException error) {
+                        check(error.Kind == "application" && error.Code == "unsafe_destination");
+                    }
+                }
+                check(File.ReadAllText(Path.Combine(root, "destination", "sample.txt")) == "user data");
                 try {
                     await session.RunAsync(async api => _ = await api.PrepareRestoreAsync(new(
                         "unknown", snapshot, Path.Combine(root, "destination"))));

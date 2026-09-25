@@ -21,6 +21,7 @@ public sealed partial class MainWindow : Window
     private readonly BackupsView backups;
     private readonly BackupDetailView detail;
     private readonly BackupSetupView setup;
+    private readonly RestoreView restore;
     private TrayService? tray;
     private bool exiting;
 #if DEBUG
@@ -34,7 +35,7 @@ public sealed partial class MainWindow : Window
         session.ResumeResponder = backup.ResolveResumeAsync;
         backup.ResumePrompt = ShowResumeAsync;
         home = new(session, backup); backups = new(home.Model, session);
-        detail = new(home.Model, session); setup = new(session);
+        detail = new(home.Model, session); setup = new(session); restore = new(session, backup);
         setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
         setup.ConfirmCopy = () => ConfirmAsync("Use full-file copies?",
@@ -268,11 +269,13 @@ public sealed partial class MainWindow : Window
     }
     private void Navigate(ShellPage page)
     {
+        if (shell.SelectedPage == ShellPage.Restore && page != ShellPage.Restore) restore.Leave();
         shell.Navigate(page);
         PageHost.Content = page == ShellPage.Home ? home :
             page == ShellPage.Backups ? backups :
             page == ShellPage.BackupDetail ? detail :
             page == ShellPage.BackupSetup ? setup :
+            page == ShellPage.Restore ? restore :
 #if DEBUG
             page == ShellPage.Diagnostics ? diagnostics :
 #endif
@@ -291,6 +294,7 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, 0, null, true));
         if (Navigation.DisplayMode != NavigationViewDisplayMode.Expanded) Navigation.IsPaneOpen = false;
         UpdateShellLayout();
+        if (page == ShellPage.Restore) _ = restore.EnterAsync();
     }
     private void NavigateBackupDetail(string selector)
     {
