@@ -1,4 +1,4 @@
-# Production Worker Contract v1 — Phase 4B
+# Production Worker Contract v1 — Phase 4C
 
 Current implementation / frozen contract, 2026-09-24. This is the current production
 IPC source of truth. [Phase 0 IPC_CONTRACT](IPC_CONTRACT.md) remains a historical
@@ -8,6 +8,8 @@ Phase 4A added production `backup.run` and the required Resume interaction at th
 worker/client boundary. Phase 4B connects one real GUI-started Backup at a time,
 binds the Resume decision to the main window, and adds read-only `backup.summary`
 for authoritative saved-version rediscovery. This is not production distribution readiness.
+Phase 4C adds an app-scoped, memory-only GUI FIFO in the existing Backup coordinator;
+the worker still has one execution slot and no queue.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
 Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
@@ -37,7 +39,7 @@ Phase 4A reuses the unchanged shared Backup transaction and the same mutation ga
   separate C# client behind DesktopSession; ViewModels do not own processes.
 
 The Phase 1A worker, FakeWorkerClient and PrototypeConfiguration remain unchanged test infrastructure. Normal GUI runtime no longer starts them. The old fake interpreter still intentionally does not import core.
-There is no GUI FIFO queue, verify/restore execution, progress, cancellation,
+There is no worker Backup queue, verify/restore execution, progress, cancellation,
 Activity persistence, completion notification UX or stdio reattach. No application/core/CLI Backup algorithm,
 configuration/repository format, version or dependency changed.
 
@@ -410,9 +412,15 @@ sequence, snapshot ID, resumed-from ID, change counts, skipped count,
 materialization counts/bytes, retention deletion count and report path where
 available. A success may still have issues. Failure includes application stage
 and original technical cause; no exception-string diagnosis or invented partial
-retention details. `report` is present only on successful real Backup. Projection
-failure has a separate worker error with the small acknowledged commit facts; it
-never triggers re-execution.
+retention details. `report` is present only on successful real Backup, as a
+bounded factual summary (status, duration and issue counts); the full persisted
+report is available at `facts.report_path`. A real 10,000-file Backup showed why
+the full report arrays must not be copied into a bounded terminal frame: they
+exceeded the protocol's collection limit after the snapshot and report had
+already been published. Projection failure has a separate worker error with
+small acknowledged commit facts; it never triggers re-execution. The bounded
+projection now lets that valid result reach the GUI without relaxing protocol
+limits or changing the application Backup transaction.
 
 `not_published` means the complete publisher was not entered, **not** zero side
 effects. `unknown` means complete publication was attempted but did not return
@@ -601,3 +609,27 @@ separate future reconciliation flow; no retry is automatic. See
 manual acceptance is PASS: the user verified the real single-Backup loop,
 fresh-process saved-version rediscovery, and Windows Explorer opening the exact
 Python-provided snapshot folder containing the expected saved files.
+
+## Phase 4C GUI FIFO boundary
+
+The existing [BackupExecutionCoordinator](../../desktop/Mirrorly.Desktop/Services/BackupExecutionCoordinator.cs)
+is the only GUI scheduler. It keeps an ordered in-memory list of durable task
+selectors and one Running selector. A second eligible task is enqueued, while a
+Running or Queued selector cannot be added twice. Remove from queue only changes
+that not-yet-started list; it never sends a worker cancellation request. At
+dispatch, the coordinator sends a fresh `backup.run` with the selector, allowing
+Python to resolve current task/repository truth again.
+
+A genuine application terminal result advances FIFO even if it reports issues,
+`not_published`, application `unknown`, or `published` with failed finalization.
+Missing/unusable terminal evidence or worker busy/gate rejection pauses automatic
+dispatch and keeps not-yet-started selectors in memory. The worker still rejects
+concurrent application requests rather than silently queueing them. Resume holds
+the one slot and retains the pending FIFO order. Close X and Minimize do not pause
+dispatch. Confirmed true Exit clears pending selectors, supervises only the
+Running operation (including a required Resume decision), then shuts down the
+worker. Stay leaves the queue intact. A desktop restart does not restore it.
+There is no queue persistence, progress, cooperative cancellation, priority,
+reorder, pause, Back up all, or persistent Activity. The petal-start animation
+remains deferred because it is not part of scheduling correctness. See
+[Phase 4C acceptance](PHASE4C.md) for validation.

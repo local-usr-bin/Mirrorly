@@ -27,7 +27,8 @@
      <TextBlock Text="{Binding LastBackup}" Style="{StaticResource MirrorlyCaption}"/>
     </StackPanel>
     <StackPanel x:Name="Actions" Spacing="{StaticResource MirrorlyControlSpacing}">
-     <Button x:Name="BackupNow" Click="Backup_Click" Style="{StaticResource MirrorlyPrimaryButton}"><TextBlock Text="Back up now" TextWrapping="Wrap"/></Button>
+     <Button x:Name="BackupNow" Click="Backup_Click" Style="{StaticResource MirrorlyPrimaryButton}"><TextBlock x:Name="BackupNowLabel" Text="Back up now" TextWrapping="Wrap"/></Button>
+     <Button x:Name="RemoveQueued" Content="Remove from queue" Click="RemoveQueued_Click" Style="{StaticResource MirrorlySecondaryButton}" Visibility="Collapsed"/>
      <Button x:Name="Explorer" Click="Explorer_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="Open in File Explorer" TextWrapping="Wrap"/></Button>
      <Button Click="View_Click" Style="{StaticResource MirrorlySecondaryButton}"><TextBlock Text="View backup" TextWrapping="Wrap"/></Button>
     </StackPanel>
@@ -54,6 +55,7 @@
    </Grid>
    <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyControlSpacing}">
     <Button x:Name="CompactBackupNow" Content="Back up now" Click="Backup_Click" Style="{StaticResource MirrorlyPrimaryButton}"/>
+    <Button x:Name="CompactRemoveQueued" Content="Remove from queue" Click="RemoveQueued_Click" Style="{StaticResource MirrorlySecondaryButton}" Visibility="Collapsed"/>
     <Button x:Name="CompactExplorer" Content="Open saved backup" Click="Explorer_Click" Style="{StaticResource MirrorlySecondaryButton}"/>
    </StackPanel>
   </StackPanel>

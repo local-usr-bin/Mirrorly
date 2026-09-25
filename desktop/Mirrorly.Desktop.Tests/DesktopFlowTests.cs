@@ -158,9 +158,12 @@ sealed class FakeDesktopSession : IDesktopSession, ISetupApi
     public Exception? CreateError;
     public TaskCompletionSource<JsonElement>? Barrier;
     public TaskCompletionSource<WorkerReply>? BackupBarrier;
+    public Queue<TaskCompletionSource<WorkerReply>> BackupBarriers { get; } = new();
     public Exception? BackupError;
     public Queue<WorkerReply> BackupReplies { get; } = new();
     public int BackupCalls { get; private set; }
+    public List<string> BackupSelectors { get; } = new();
+    public event Action<string>? BackupStarted;
     public string? LastBackupSelector { get; private set; }
     public BackupCatalog Catalog { get; set; } = new([], []);
     public Dictionary<string, SavedBackupSummary> Summaries { get; } = new();
@@ -172,11 +175,13 @@ sealed class FakeDesktopSession : IDesktopSession, ISetupApi
         Summaries.TryGetValue(selector, out var saved) ? saved : new(selector, "configured repo", "repo-id", null, null, null, null));
     public Task<WorkerReply> BackupAsync(string selector)
     {
-        BackupCalls++; LastBackupSelector = selector;
+        BackupCalls++; LastBackupSelector = selector; BackupSelectors.Add(selector); BackupStarted?.Invoke(selector);
         return BackupError is not null ? Task.FromException<WorkerReply>(BackupError) :
+            BackupBarriers.Count > 0 ? BackupBarriers.Dequeue().Task :
             BackupBarrier?.Task ?? Task.FromResult(BackupReplies.Dequeue());
     }
     public Task<bool> ExitAsync(Func<Task<bool>> confirm) { ExitPending = true; return Task.FromResult(true); }
+    public void BeginExitForTest() { ExitPending = true; Changed?.Invoke(); }
     public static JsonElement Check(bool approval = false, bool problem = false) => JsonSerializer.SerializeToElement(new { phase = "terminal", error = (object?)null, result = new { outcome = "succeeded", preflight = new { repository_path = @"X:\authoritative", copy_mode_approval_required = approval, problem = problem ? new { stage = "inputs" } : null } } });
     public static JsonElement Success() => JsonSerializer.SerializeToElement(new { phase = "terminal", error = (object?)null, result = new { outcome = "succeeded", setup = new { repository_initialized = true, config_written = true } } });
     public static JsonElement Failure(bool? repo, bool? config) => JsonSerializer.SerializeToElement(new { phase = "terminal", error = new { code = "setup_failure" }, result = new { outcome = "failed", setup = new { repository_initialized = repo, config_written = config } } });

@@ -180,7 +180,7 @@ public sealed partial class MainWindow : Window
                 exitInterrupted = false;
                 activeExitDialog = new ContentDialog { XamlRoot = Navigation.XamlRoot,
                     Title = "Mirrorly is still working",
-                    Content = "Exit after the current operation finishes? Mirrorly will stay running until it has processed the result.",
+                    Content = "Exit after the current operation finishes? Queued Backups that have not started will be removed. Mirrorly will stay running until it has processed the current result.",
                     PrimaryButtonText = "Exit after it finishes", CloseButtonText = "Stay in Mirrorly",
                     DefaultButton = ContentDialogButton.Close };
                 var answer = await activeExitDialog.ShowAsync();

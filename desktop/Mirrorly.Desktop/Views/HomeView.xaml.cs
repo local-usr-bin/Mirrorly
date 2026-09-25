@@ -36,9 +36,11 @@ public sealed partial class HomeView : UserControl
         Backups.Children.Clear();
         foreach (var backup in Model.Backups)
         {
-            var summary = new BackupSummary(backup, Model.CompactBackups, Model.DesignPreview, Model.CanBackUp);
+            var summary = new BackupSummary(backup, Model.CompactBackups, Model.DesignPreview,
+                Model.CanBackUpTask(backup.Id), Model.RunState(backup.Id));
             summary.PreviewAction += Model.ShowPrototypeAction;
             summary.BackupRequested += selector => _ = Model.BackUpNowAsync(selector);
+            summary.RemoveQueuedRequested += selector => Model.RemoveFromQueue(selector);
             summary.OpenRequested += OpenSnapshot;
             Backups.Children.Add(summary);
         }

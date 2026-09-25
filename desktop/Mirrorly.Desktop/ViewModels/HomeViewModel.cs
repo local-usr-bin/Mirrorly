@@ -9,6 +9,7 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     private readonly BackupExecutionCoordinator? execution;
     private readonly Dictionary<string, SavedBackupSummary> saved = new();
     private string catalogDetails = "";
+    private string catalogProblem = "";
     private string presentationDetails = "";
     private string? selectedSelector;
     public HomeViewModel(BackupExecutionCoordinator? execution = null)
@@ -20,7 +21,7 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     public bool DesignPreview { get; private set; }
     public HomeFixture Fixture { get; private set; } = new(new("Loading backups…", "Reading your configured backups.", "", "Back up now", StatusTone.Neutral, "○"), [], []);
     public StatusPresentation Status => Fixture.Status;
-    public IReadOnlyList<BackupPresentation> Backups => HomePolicy.Preview(Fixture.Backups);
+    public IReadOnlyList<BackupPresentation> Backups => HomePolicy.Preview(Fixture.Backups.Select(WithExecutionState).ToArray());
     public IReadOnlyList<ActivityPresentation> Activity => Fixture.Activity.Take(HomePolicy.RecentActivityLimit).ToArray();
     public bool IsEmpty => Fixture.Backups.Count == 0;
     public bool Loaded { get; private set; }
@@ -32,13 +33,19 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     public string Problem { get; private set; } = "";
     public string TechnicalDetails { get; private set; } = "";
     public string PrototypeMessage { get; private set; } = "";
-    public bool CanBackUp => !DesignPreview && Loaded && selectedSelector is not null && execution?.CanStart == true;
-    public bool IsBackingUp => execution?.State is BackupGuiState.Running or BackupGuiState.AwaitingResumeDecision;
+    public bool CanBackUp => selectedSelector is not null && CanBackUpTask(selectedSelector);
+    public bool CanBackUpTask(string selector) => !DesignPreview && Loaded &&
+        Fixture.Backups.Any(b => b.Id == selector) && execution?.CanSchedule(selector) == true;
+    public BackupTaskRunState RunState(string selector) => execution?.TaskState(selector) ?? BackupTaskRunState.Idle;
+    public bool IsBackingUp => selectedSelector is not null && RunState(selectedSelector) == BackupTaskRunState.Running;
     public string? SelectedSelector => selectedSelector;
-    public string BackupActionHelp => IsBackingUp ? "Mirrorly is handling one Backup. Other Backups are not queued in this version."
-        : execution?.State == BackupGuiState.TransportUncertain ? "The last result is unconfirmed. Do not retry without checking the outcome."
-        : execution?.Result?.CommitState == "unknown" ? "Mirrorly cannot confirm whether the last version was saved. Check the outcome before another Backup."
-        : "Start one real Backup. No progress percentage or cancellation is available.";
+    public string BackupActionHelp => selectedSelector is not null && RunState(selectedSelector) == BackupTaskRunState.Queued
+        ? "This Backup is waiting. Use Remove from queue on its card if it should not run."
+        : IsBackingUp ? "This Backup is running. No cancellation or progress percentage is available."
+        : execution?.QueueAttention != BackupQueueAttention.None ? "The automatic queue is paused. View technical details before starting more work."
+        : execution?.HasActiveBackup == true ? "Add this Backup to the in-memory FIFO queue. It starts after the current Backup finishes."
+        : execution?.ResultFor(selectedSelector ?? "")?.CommitState == "unknown" ? "Mirrorly cannot confirm whether this Backup's last version was saved."
+        : "Start a real Backup. No progress percentage or cancellation is available.";
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed() => PropertyChanged?.Invoke(this, new(null));
     public async Task RefreshAsync(IDesktopSession session)
@@ -66,8 +73,8 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     private void Unavailable(Exception error)
     {
         Loaded = false;
-        Problem = "Mirrorly couldn't refresh your configured backups. View technical details, then use Refresh to try reading again.";
-        TechnicalDetails = error.ToString(); Changed();
+        catalogProblem = "Mirrorly couldn't refresh your configured backups. View technical details, then use Refresh to try reading again.";
+        TechnicalDetails = error.ToString(); UpdateStatus();
     }
     public void ApplyCatalog(BackupCatalog catalog, IReadOnlyDictionary<string, SavedBackupSummary>? summaries = null)
     {
@@ -76,7 +83,7 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         if (summaries is not null) foreach (var pair in summaries) saved[pair.Key] = pair.Value;
         if (selectedSelector is null || !catalog.Tasks.Any(t => t.Selector == selectedSelector))
             selectedSelector = catalog.Tasks.FirstOrDefault()?.Selector;
-        Problem = catalog.Problems.Count == 0 ? "" : "Some Backup configurations or saved versions couldn't be read. They have not been repaired. View technical details.";
+        catalogProblem = catalog.Problems.Count == 0 ? "" : "Some Backup configurations or saved versions couldn't be read. They have not been repaired. View technical details.";
         catalogDetails = string.Join("\n", catalog.Problems);
         var cards = catalog.Tasks.Select((t, index) =>
         {
@@ -94,18 +101,21 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     private StatusPresentation CurrentStatus(IReadOnlyList<BackupPresentation> cards)
     {
         var name = cards.FirstOrDefault(b => b.Id == selectedSelector)?.Name ?? "Backup";
-        if (execution is { } active && active.TaskSelector == selectedSelector)
+        if (selectedSelector is not null && execution is { } active)
         {
-            if (active.State == BackupGuiState.AwaitingResumeDecision)
+            if (active.TaskState(selectedSelector) == BackupTaskRunState.Queued)
+                return new($"{name} is queued", "This Backup will start after the current one finishes.",
+                    "Use Remove from queue on its card to withdraw it before it starts.", "Queued", StatusTone.Neutral, "◷", true);
+            if (active.TaskSelector == selectedSelector && active.State == BackupGuiState.AwaitingResumeDecision)
                 return new("Continue interrupted backup?", "Mirrorly is waiting for your Resume decision.",
                     "The decision is required before this Backup can continue.", "Backing up…", StatusTone.Warning, "⚠", true);
-            if (active.State == BackupGuiState.Running)
+            if (active.TaskState(selectedSelector) == BackupTaskRunState.Running)
                 return new($"Backing up {name}…", "Mirrorly is working. No progress estimate is available.",
                     "Close to the notification area or minimize to keep it running.", "Backing up…", StatusTone.Working, "↻", true);
-            if (active.State == BackupGuiState.TransportUncertain)
+            if (active.TaskSelector == selectedSelector && active.State == BackupGuiState.TransportUncertain)
                 return new("Backup result unconfirmed", "Mirrorly lost the connection before it could confirm the result.",
                     "Do not create another version blindly. View technical details.", "Back up now", StatusTone.Error, "⚠");
-            if (active.Result is { } result)
+            if (active.ResultFor(selectedSelector) is { } result)
                 return result switch
                 {
                     { Outcome: "succeeded" } => new("Backup completed", "A saved version was created.", "Latest saved version is shown below. This does not check whether the source is still unchanged.", "Back up now", StatusTone.Success, "✓"),
@@ -131,16 +141,48 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     }
     public async Task BackUpNowAsync(string? selector = null)
     {
-        if (execution is null || !execution.CanStart) return;
+        if (execution is null) return;
         if (selector is not null) SelectBackup(selector);
         if (!CanBackUp || selectedSelector is null) return;
         await execution.StartAsync(selectedSelector, RefreshCoreAsync);
         UpdateStatus();
     }
+    public bool RemoveFromQueue(string selector)
+    {
+        var removed = execution?.RemoveQueued(selector) == true;
+        if (removed) UpdateStatus();
+        return removed;
+    }
+    private BackupPresentation WithExecutionState(BackupPresentation backup)
+    {
+        if (execution is null || DesignPreview) return backup;
+        return execution.TaskState(backup.Id) switch
+        {
+            BackupTaskRunState.Running => backup with { Status = "Backing up…", Tone = StatusTone.Working },
+            BackupTaskRunState.Queued => backup with { Status = "Queued", Tone = StatusTone.Neutral },
+            _ => execution.ResultFor(backup.Id) switch
+            {
+                { Outcome: "succeeded" } => backup with { Status = "Backup completed", Tone = StatusTone.Success },
+                { Outcome: "completed_with_issues" } => backup with { Status = "Backup completed with issues", Tone = StatusTone.Warning },
+                { CommitState: "published" } => backup with { Status = "Saved · final steps need attention", Tone = StatusTone.Warning },
+                { CommitState: "unknown" } => backup with { Status = "Publication outcome unknown", Tone = StatusTone.Error },
+                { CommitState: "not_published" } => backup with { Status = "No new complete version published", Tone = StatusTone.Error },
+                { Outcome: "transport_uncertain" } => backup with { Status = "Result unconfirmed", Tone = StatusTone.Error },
+                _ => backup
+            }
+        };
+    }
     private void UpdateStatus()
     {
         if (!DesignPreview) Fixture = Fixture with { Status = CurrentStatus(Fixture.Backups) };
-        var operation = execution is { } active && active.TaskSelector == selectedSelector ? active.Result?.TechnicalDetails : null;
+        Problem = execution?.QueueAttention switch
+        {
+            BackupQueueAttention.TransportUncertain => "Queue paused: Mirrorly couldn't confirm the current Backup result. Queued Backups will not start automatically.",
+            BackupQueueAttention.AdmissionRejected => "Queue paused: Mirrorly couldn't admit the next Backup. Queued Backups have been kept in order.",
+            BackupQueueAttention.UnreportedTerminal => "Queue paused: Mirrorly couldn't read the Backup result. Queued Backups will not start automatically.",
+            _ => catalogProblem
+        };
+        var operation = selectedSelector is null ? null : execution?.ResultFor(selectedSelector)?.TechnicalDetails;
         TechnicalDetails = string.Join("\n", new[] { catalogDetails, operation, presentationDetails }.Where(s => !string.IsNullOrWhiteSpace(s)));
         Changed();
     }

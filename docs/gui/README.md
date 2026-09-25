@@ -3,7 +3,7 @@
 > Phase 0 历史快照：2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
 > 当时 GUI、worker、共享 application service 均尚未实现；下文保留该阶段的产品边界与契约提案。当前实施状态见下方更新。
 
-**当前实施状态（2026-09-24）**：[Phase 4B single-Backup GUI loop](PHASE4B.md) 已通过最终人工验收（PASS）：Home 通过 production IPC 执行真实 Backup，重启后从 Python 重新发现已保存版本，File Explorer 已人工确认打开 Python 提供的准确快照目录；Resume 是明确的 GUI 决策。仅 Setup 不创建快照。自动 FIFO、进度、取消和持久 Activity 仍未实现；O-02 和 O-09 仍待决。
+**当前实施状态（2026-09-25）**：[Phase 4C GUI FIFO queue](PHASE4C.md) 已通过真实 A/B/C FIFO、托盘继续执行及 true Exit 人工验收；app-scoped coordinator 实现自动单槽 FIFO、去重与移除未开始项，worker 仍是单槽且没有队列。[Phase 4B](PHASE4B.md) 已通过人工验收：真实 Backup、Resume、重启后从 Python 发现已保存版本及准确快照目录。队列不持久化；进度、取消和持久 Activity 仍未实现；O-02 和 O-09 仍待决。
 
 Phase 1A–1C documents preserve their reviewed historical prototype results. [Phase 2](PHASE2.md) completed shared application extraction; the current [production contract](PRODUCTION_WORKER.md) records the implemented worker/GUI bridge. Fake worker and fixtures remain test/design infrastructure, not normal runtime data.
 
@@ -13,6 +13,7 @@ Phase 1A–1C documents preserve their reviewed historical prototype results. [P
 | --- | --- |
 | [PRODUCTION_WORKER](PRODUCTION_WORKER.md) | 当前生产 v1 contract、gate、setup.create、backup.run、Resume 与 saved-version query |
 | [PHASE4B](PHASE4B.md) | 首次真实 GUI 单 Backup 执行、结果呈现及验收 |
+| [PHASE4C](PHASE4C.md) | GUI 自动 FIFO、移除、失联暂停与 Exit 队列语义 |
 | [CONFIGURATION](CONFIGURATION.md) | O-07 已批准归属、集中路径 provider、Python task truth 与 CLI 共存 |
 | [ARCHITECTURE](ARCHITECTURE.md) | GUI-ADR-001、分层、运行时、Backup/repository、Restore v1、未来目录 |
 | [OPERATIONS](OPERATIONS.md) | operation/result、health、queue、progress、cancellation/Exit 状态机 |
@@ -48,7 +49,7 @@ Phase 1A–1C documents preserve their reviewed historical prototype results. [P
 
 | ID | OPEN DECISION | 何时必须解决 |
 | --- | --- | --- |
-| O-01 | APPROVED policy：确认 Exit 后清空等待队列，监督当前 operation 完成再退出；v1 不支持撤回已确认 Exit | Phase 4B 已扩展到单个真实 Backup；尚无 Backup FIFO，见 [production contract](PRODUCTION_WORKER.md) |
+| O-01 | APPROVED policy：确认 Exit 后清空等待队列，监督当前 operation 完成再退出；v1 不支持撤回已确认 Exit | Phase 4C 已实现内存 FIFO 的清空与当前 Backup 监督，见 [production contract](PRODUCTION_WORKER.md) |
 | O-02 | 取消 checkpoint、publication 不可取消区、finalizing 策略、restore 部分写入提示的详细提案 | 单独的安全关键 cancellation 任务前 |
 | O-03 | APPROVED：stdio v1、无 reattach；idle 失联退出，active 非交互收尾；必需交互不可用则在该边界结束 | Phase 4A/4B 已实现 Backup Resume 的失联不可用语义与 GUI 决策入口 |
 | O-04 | APPROVED：全部 application operation 共用 worker execution slot | Phase 3B 已实现 slot；不替代 GUI FIFO，不解决外部 CLI 竞争 |

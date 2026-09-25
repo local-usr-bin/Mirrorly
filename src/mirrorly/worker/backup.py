@@ -67,6 +67,17 @@ def facts(value):
     }
 
 
+def report_summary(report):
+    """Keep the terminal bounded; the complete report is persisted at report_path."""
+    return {
+        "status": report["status"],
+        "duration_seconds": report["duration_seconds"],
+        "skipped_count": len(report["skipped"]),
+        "resume_untrusted_count": len(report["resume_untrusted"]),
+        "resume_uncertified_count": len(report["resume_uncertified"]),
+    }
+
+
 def invoke(service, intent, decide_resume, on_relocation, on_resume):
     try:
         return "succeeded", service(
@@ -95,7 +106,7 @@ def project(intent, outcome, value):
             "outcome": "completed_with_issues" if value.has_issues else "succeeded",
             "dry_run": False,
             "facts": facts(value.facts),
-            "report": value.report,
+            "report": report_summary(value.report),
         }, None
     if outcome == "failed":
         return {

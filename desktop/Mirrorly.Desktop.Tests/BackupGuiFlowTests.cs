@@ -35,7 +35,7 @@ static class BackupGuiFlowTests
             home.ShowPresentationNotice("File Explorer couldn't open the saved Backup.", "Access denied by test policy");
             check(home.PrototypeMessage.Contains("couldn't open") && home.TechnicalDetails.Contains("Access denied"));
         });
-        await test("GUI one-slot dispatch prevents double click and a second Backup; Running has no fake progress", async () =>
+        await test("GUI one-slot dispatch suppresses double click and queues another Backup; Running has no fake progress", async () =>
         {
             var fake = new FakeDesktopSession { Catalog = Catalog,
                 BackupBarrier = new(TaskCreationOptions.RunContinuationsAsynchronously) };
@@ -48,12 +48,14 @@ static class BackupGuiFlowTests
             await home.BackUpNowAsync("photos");
             check(fake.BackupCalls == 1 && fake.LastBackupSelector == "documents" &&
                 coordinator.State == BackupGuiState.Running && !coordinator.CanStart &&
-                home.Status.Title == "Backing up Documents…" && home.IsBackingUp &&
+                coordinator.QueuedSelectors.SequenceEqual(["photos"]) &&
+                home.Status.Title == "Photos is queued" && !home.IsBackingUp &&
                 !home.CanBackUp && !home.Status.Detail.Contains('%'));
             fake.BackupBarrier.SetResult(Reply("succeeded"));
             await running;
-            check(coordinator.State == BackupGuiState.Terminal && home.Status.Title == "Backup completed" &&
-                coordinator.Result?.RequestId == "1" && coordinator.Result.OperationId == "operation");
+            while (fake.BackupCalls < 2) await Task.Yield();
+            check(fake.BackupSelectors.SequenceEqual(["documents", "photos"]) &&
+                coordinator.ResultFor("documents")?.RequestId == "1");
         });
 
         await test("GUI Resume responses remain explicit and coordinator exposes awaiting state", async () =>

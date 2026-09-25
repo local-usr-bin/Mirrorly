@@ -3,32 +3,91 @@ using System.Text.Json;
 namespace Mirrorly.Desktop.Services;
 
 public enum BackupGuiState { Idle, Running, AwaitingResumeDecision, Terminal, TransportUncertain }
+public enum BackupTaskRunState { Idle, Running, Queued }
+public enum BackupQueueAttention { None, TransportUncertain, AdmissionRejected, UnreportedTerminal }
 
 public sealed record BackupOperationResult(string TaskSelector, string? RequestId, string? OperationId,
     string Outcome, string? CommitState, string? SnapshotId, string? Stage, string TechnicalDetails,
     string? AdmissionCode);
 
-// One GUI-started Backup at a time. This is supervision, not Python Backup policy or the future FIFO.
+// The only GUI FIFO owner. Entries are durable selectors, never copied Python task truth.
 public sealed class BackupExecutionCoordinator
 {
     private readonly IDesktopSession session;
     private readonly SynchronizationContext? ui;
+    private readonly object sync = new();
+    private readonly List<string> queued = [];
+    private readonly Dictionary<string, BackupOperationResult> results = new(StringComparer.Ordinal);
+    private bool starting;
+
     public BackupExecutionCoordinator(IDesktopSession session)
     {
         this.session = session;
         ui = SynchronizationContext.Current;
-        session.Changed += Notify;
+        session.Changed += OnSessionChanged;
     }
-    private bool starting;
+
     public BackupGuiState State { get; private set; } = BackupGuiState.Idle;
+    public BackupQueueAttention QueueAttention { get; private set; }
     public string? TaskSelector { get; private set; }
     public BackupOperationResult? Result { get; private set; }
-    public bool CanStart => !starting && State is not (BackupGuiState.Running or BackupGuiState.AwaitingResumeDecision or BackupGuiState.TransportUncertain)
-        && Result?.CommitState != "unknown" && Result?.Outcome != "unreported"
-        && !session.Busy && !session.ExitPending
-        && (session is not DesktopSession desktop || desktop.Observation is { Initialized: true, TransportHealthy: true });
+    public IReadOnlyList<string> QueuedSelectors { get { lock (sync) return queued.ToArray(); } }
+    public bool HasActiveBackup => State is BackupGuiState.Running or BackupGuiState.AwaitingResumeDecision;
+    public bool CanStart => !starting && !HasActiveBackup && QueueAttention == BackupQueueAttention.None &&
+        !session.Busy && !session.ExitPending && SessionHealthy;
+    private bool SessionHealthy => session is not DesktopSession desktop ||
+        desktop.Observation is { Initialized: true, TransportHealthy: true };
     public Func<ResumeInteraction, Task<ResumeAnswer>>? ResumePrompt { get; set; }
     public event Action? Changed;
+
+    public BackupTaskRunState TaskState(string selector)
+    {
+        lock (sync)
+        {
+            if (HasActiveBackup && TaskSelector == selector) return BackupTaskRunState.Running;
+            return queued.Contains(selector, StringComparer.Ordinal) ? BackupTaskRunState.Queued : BackupTaskRunState.Idle;
+        }
+    }
+
+    public BackupOperationResult? ResultFor(string selector)
+    {
+        lock (sync) return results.GetValueOrDefault(selector);
+    }
+
+    public bool CanSchedule(string selector)
+    {
+        lock (sync)
+        {
+            if (string.IsNullOrWhiteSpace(selector) || session.ExitPending || QueueAttention != BackupQueueAttention.None ||
+                !SessionHealthy || queued.Contains(selector, StringComparer.Ordinal) ||
+                HasActiveBackup && TaskSelector == selector) return false;
+            if (results.TryGetValue(selector, out var previous) &&
+                (previous.CommitState == "unknown" || previous.Outcome is "unreported" or "transport_uncertain")) return false;
+            // A terminal-to-next-dispatch gap still belongs to the existing FIFO.
+            return HasActiveBackup || queued.Count > 0 || !starting && !session.Busy;
+        }
+    }
+
+    public bool RemoveQueued(string selector)
+    {
+        bool removed;
+        lock (sync) removed = queued.Remove(selector);
+        if (removed) Notify();
+        return removed;
+    }
+
+    public void ClearQueuedForExit()
+    {
+        bool changed;
+        lock (sync) { changed = queued.Count != 0; queued.Clear(); }
+        if (changed) Notify();
+    }
+
+    private void OnSessionChanged()
+    {
+        if (session.ExitPending) ClearQueuedForExit();
+        Notify();
+    }
 
     private void Notify()
     {
@@ -48,12 +107,55 @@ public sealed class BackupExecutionCoordinator
         }
     }
 
-    public async Task<bool> StartAsync(string selector, Func<ISetupApi, Task>? refresh = null)
+    // An idle request executes now. A different task requested during Running is admitted to the GUI FIFO only.
+    public Task<bool> StartAsync(string selector, Func<ISetupApi, Task>? refresh = null)
     {
-        if (string.IsNullOrWhiteSpace(selector) || !CanStart) return false;
-        starting = true; TaskSelector = selector; Result = null;
+        lock (sync)
+        {
+            if (!CanSchedule(selector)) return Task.FromResult(false);
+            if (HasActiveBackup || queued.Count > 0)
+            {
+                queued.Add(selector);
+                Notify();
+                return Task.FromResult(true);
+            }
+            starting = true;
+        }
+        var first = ExecuteOneAsync(selector, refresh);
+        _ = DrainAfterAsync(first, refresh);
+        return first;
+    }
+
+    private async Task DrainAfterAsync(Task<bool> first, Func<ISetupApi, Task>? refresh)
+    {
+        if (!await first) return;
+        while (true)
+        {
+            string next;
+            lock (sync)
+            {
+                if (session.ExitPending || QueueAttention != BackupQueueAttention.None || queued.Count == 0) return;
+                next = queued[0];
+                queued.RemoveAt(0);
+                starting = true;
+                TaskSelector = next;
+                State = BackupGuiState.Running;
+            }
+            Notify();
+            if (await ExecuteOneAsync(next, refresh)) continue;
+            // An unconfirmed admission leaves the not-yet-started item at the FIFO head.
+            lock (sync) queued.Insert(0, next);
+            Notify();
+            return;
+        }
+    }
+
+    private async Task<bool> ExecuteOneAsync(string selector, Func<ISetupApi, Task>? refresh)
+    {
+        TaskSelector = selector; Result = null;
         State = BackupGuiState.Running; Notify();
         var admittedLocally = false;
+        var applicationTerminal = false;
         try
         {
             await session.RunAsync(async api =>
@@ -63,46 +165,56 @@ public sealed class BackupExecutionCoordinator
                 try { terminal = await api.BackupAsync(selector); }
                 catch (Exception error)
                 {
-                    // Without a received terminal there is no application commit-state evidence.
-                    Result = new(selector, null, null, "transport_uncertain", null, null, null, error.ToString(), null);
+                    Record(new(selector, null, null, "transport_uncertain", null, null, null, error.ToString(), null));
+                    QueueAttention = BackupQueueAttention.TransportUncertain;
                     State = BackupGuiState.TransportUncertain; Notify();
                     return;
                 }
-                try { Result = Interpret(selector, terminal); }
+                try
+                {
+                    Result = Interpret(selector, terminal);
+                    applicationTerminal = Result.Outcome is not ("rejected" or "unreported");
+                    if (!applicationTerminal)
+                        QueueAttention = Result.Outcome == "rejected" ? BackupQueueAttention.AdmissionRejected : BackupQueueAttention.UnreportedTerminal;
+                }
                 catch (Exception error)
                 {
-                    // A terminal arrived, but its facts could not be read. This is not EOF
-                    // and it must not become a safe-to-retry application failure.
-                    Result = new(selector, terminal.RequestId, terminal.OperationId, "unreported",
-                        null, null, null, "Unusable terminal response: " + error, null);
+                    Result = new(selector, terminal.RequestId, terminal.OperationId, "unreported", null, null, null,
+                        "Unusable terminal response: " + error, null);
+                    QueueAttention = BackupQueueAttention.UnreportedTerminal;
                 }
+                Record(Result);
                 State = BackupGuiState.Terminal; Notify();
-                if (refresh is not null)
+                if (applicationTerminal && refresh is not null)
                 {
                     try { await refresh(api); }
                     catch (Exception error)
                     {
-                        // Reading the durable summary failed; the Backup terminal is still factual.
-                        Result = Result with { TechnicalDetails = Result.TechnicalDetails + "\nSummary refresh: " + error };
+                        Record(Result with { TechnicalDetails = Result.TechnicalDetails + "\nSummary refresh: " + error });
                         Notify();
                     }
                 }
             });
-            return true;
         }
         catch (InvalidOperationException) when (!admittedLocally)
         {
-            // A local admission race starts no second GUI request.
+            QueueAttention = BackupQueueAttention.AdmissionRejected;
             State = BackupGuiState.Idle; Result = null; Notify();
-            return false;
         }
         catch (Exception error)
         {
-            Result = new(selector, null, null, "transport_uncertain", null, null, null, error.ToString(), null);
+            Record(new(selector, null, null, "transport_uncertain", null, null, null, error.ToString(), null));
+            QueueAttention = BackupQueueAttention.TransportUncertain;
             State = BackupGuiState.TransportUncertain; Notify();
-            return true;
         }
         finally { starting = false; Notify(); }
+        return applicationTerminal;
+    }
+
+    private void Record(BackupOperationResult value)
+    {
+        Result = value;
+        lock (sync) results[value.TaskSelector] = value;
     }
 
     private static BackupOperationResult Interpret(string selector, WorkerReply reply)
@@ -114,11 +226,12 @@ public sealed class BackupExecutionCoordinator
         if (phase == "rejected")
             return new(selector, reply.RequestId, null, "rejected", null, null, null,
                 error.ToString(), error.GetProperty("code").GetString());
+        if (phase != "terminal") throw new InvalidDataException("Backup response is not terminal.");
         var facts = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("facts", out var value) ? value : default;
         static string? Field(JsonElement item, string key) => item.ValueKind == JsonValueKind.Object &&
             item.TryGetProperty(key, out var field) && field.ValueKind == JsonValueKind.String ? field.GetString() : null;
-        return new(selector, reply.RequestId, reply.OperationId,
-            Field(result, "outcome") ?? "unreported", Field(facts, "commit_state"),
+        var outcome = Field(result, "outcome") ?? "unreported";
+        return new(selector, reply.RequestId, reply.OperationId, outcome, Field(facts, "commit_state"),
             Field(facts, "snapshot_id"), Field(error, "stage"), payload.ToString(), Field(error, "code"));
     }
 }

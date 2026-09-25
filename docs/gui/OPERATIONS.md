@@ -44,19 +44,17 @@
 
 **APPROVED**：single execution slot、FIFO、自动 enqueue、同 Backup Running/Queued 去重、可移除未开始项；Close/Minimize 不停止队列；true Exit 清空未开始项，不跨退出持久化。
 
-**PROPOSED DESIGN**：coordinator 为应用级对象，独立于页面/ViewModel。最小模型：
+**CURRENT FACT（Phase 4C）**：app-scoped `BackupExecutionCoordinator` 独占 GUI 调度；有序 pending 只保存 durable task selector，不复制 TaskConfig、revision、repository 或快照业务事实。Python 在 queued 项真正 dispatch 时重新解析当前配置与 repository。GUI 不以先前 catalog 当授权。如果配置已消失，真实应用终态失败按同一 FIFO 规则处理。
 
-- `QueueEntry(operation_id, backup_id, enqueued_at, enqueue_sequence, config_revision)`；revision 是应用侧配置指纹，不新增 task TOML 字段。
-- 有序 pending 集合 + 一个 active operation + 按 `backup_id` 的去重索引；所有 enqueue/remove/dispatch/exit 变化串行处理。
-- 点击同一 Running/Queued Backup 返回已有 `operation_id`，引导到真实状态，不产生第二次执行。不同 Backup 自动排到末尾，显示 “Photos has been added to the queue”。
-- dispatch 时重新加载配置、解析 repository 并验证 identity/revision。排队期间配置变化不能悄悄按新目标执行；该请求以 `not_started` 和明确原因结束，等待用户重新发起。离线/锁占用是该次操作真实失败，不无限重试阻塞后续队列。
-- 只有服务确认 active 已结束且没有仍在执行的 operation 才释放 slot。明确失败后可继续下一项；outcome unknown 时内部禁止 dispatch，先收敛 worker 存活/结果，不能让用户看到“暂停队列功能已实现”。
-- Remove 与 dispatch 竞争必须原子裁决：仍 pending 则移除并记 `not_started`；已 active 则拒绝 Remove，显示实际状态；不能偷偷转成 Cancel。
-- 全部 queue 仅在内存。Activity 可以记录历史排队/移除，但启动时绝不从 Activity 重建 pending jobs。
+- 一个 Running selector + 有序 Queued selectors；同一 Running/Queued task 不重复加入。不同 task 点击 Back up now 时排在末尾。不会预分配 worker operation ID；只有 worker 接受请求后才产生。
+- Remove 仅对尚未开始的队列项生效，不发送 cancellation；Running 无 Remove/Cancel。
+- 真实 application terminal（包括 `not_published`、application `unknown` 与提交后失败）释放 GUI 槽并继续 FIFO。缺失 terminal 的 transport uncertainty 不是 application `unknown`：队列暂停，未开始项留在内存，不重放。
+- worker busy/mutation gate 拒绝不会被解释为 Backup 结果；自动 dispatch 暂停，队列顺序保留，不循环重试。
+- Resume 期间仍占槽。Close 到 tray、Minimize 不暂停调度；确认 true Exit 清空未开始项，仅等待 Running。队列不写入 task TOML、GUI settings、Activity 或磁盘，重启不恢复。
 
 **DEFERRED**：Back up all、reorder、priority、Pause queue、持久化队列、多 worker 并行。保持调度选择与列表展示分离，未来可替换选择策略/增加显式批量 enqueue；不预建优先级体系、磁盘队列数据库或通用工作流引擎。
 
-**OPEN DECISION O-04**：Backup 串行的批准不等于已决定 Restore/verify 的并发。建议真实 IO 接入初期统一门禁，Restore/verify 忙时给出明确选择，不擅自加入 Backup FIFO。现有 verify/restore/list 不进入 backup writer 锁；GUI 内的串行也不能消除外部 CLI retention 与读取的竞争。需要单独 review，不能以 UI 限制宣称解决 core 并发安全。
+**CURRENT FACT / future boundary**：worker 全部 application operation 共用一个 execution slot；Restore/verify GUI 尚未接入，也不进入 Backup FIFO。GUI 串行不能消除外部 CLI 与它们的并发竞争，不能以 UI 限制宣称解决 core 并发安全。
 
 ## 真实流程与 progress contract
 
@@ -125,7 +123,15 @@ unsupported -> 返回 unsupported；operation 继续，不能显示 Cancelled
 
 **APPROVED**：`visible -> minimized` 留 taskbar；`visible -> hidden_to_tray` 保持 desktop process；两种状态都保持 active 与 pending。首次 Close 的轻量提示及 tray 见 [DESIGN_RESOURCES](DESIGN_RESOURCES.md)。
 
-**PROPOSED DESIGN**：区分退出意图和确认真正退出，避免先清队列再发现用户改变主意：
+**CURRENT FACT（Phase 4C）**：先确认 true Exit，避免用户选择 Stay 时清掉队列。确认后立即拒绝新 GUI 请求、清空未开始项，现有 Running 继续接受必要 Resume 决策；完成后请求 idle worker shutdown。Close X 与 Minimize 均不触发此流程。
+
+```text
+normal -> exit confirmation -> Stay (queue unchanged)
+normal -> exit confirmation -> confirmed Exit (clear pending, supervise Running)
+confirmed Exit -> Running terminal -> idle worker shutdown -> desktop exit
+```
+
+此前的候选设计保留如下，仅作历史参考：
 
 ```text
 normal -> exit_intent (暂不 dispatch 新项，等待 Running 策略裁决)
@@ -136,7 +142,7 @@ exit_committed -> 等待 active 按已批准策略结束 -> flush GUI store -> e
 
 无 active 时可直接接受 Exit 并清 pending；已移除的项记 `not_started / app_exit`，不是 worker cancelled。不跨真正退出保存待运行请求。最终窗口关闭/销毁只能在该流程结束后进行，不能等同 X。
 
-**OPEN DECISION O-01**：有 Running 时的选择尚未批准：
+**Historical O-01 options**：Running-on-Exit 已选定“完成当前任务后退出”；以下是当时比较的候选：
 
 | 候选 | 用户体验与约束 |
 | --- | --- |

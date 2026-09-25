@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from mirrorly.application.backup import BackupFacts, BackupRequest, BackupResult
 from mirrorly.manifest import list_manifests, load_manifest
 from mirrorly.repo import load_repo
+from mirrorly.worker import backup as backup_wire
 from mirrorly.worker import protocol
 from test_worker import intent as intent
 from test_worker_creation import create, worker
@@ -24,6 +26,45 @@ def backup_intent(intent, *, dry_run=False):
         "full_hash": False,
         "exclude": [],
     }
+
+
+@pytest.mark.parametrize("with_issue", [False, True])
+def test_large_persisted_backup_report_has_bounded_factual_terminal(tmp_path, with_issue):
+    """A realistic report may exceed protocol collection limits without losing outcome."""
+    report_path = tmp_path / "full-report.json"
+    report = {
+        "status": "complete",
+        "duration_seconds": 12.5,
+        "changes": {"added": [f"file-{index}" for index in range(10000)]},
+        "copied": [f"file-{index}" for index in range(10000)],
+        "skipped": [{"path": "one", "reason": "test"}] if with_issue else [],
+        "resume_untrusted": [],
+        "resume_uncertified": [],
+    }
+    result = BackupResult(
+        BackupFacts(commit_state="published", snapshot_id="snapshot", report_path=report_path),
+        report,
+        12.5,
+    )
+    intent = BackupRequest(tmp_path, "task")
+    payload, error = backup_wire.project(intent, "succeeded", result)
+    terminal = protocol.parse(
+        protocol.encode(
+            protocol.message(
+                "response",
+                "session",
+                {"phase": "terminal", "result": payload, "error": error},
+                "1",
+                "operation",
+            )
+        )
+    )["payload"]
+    assert terminal["error"] is None
+    assert terminal["result"]["outcome"] == ("completed_with_issues" if with_issue else "succeeded")
+    assert terminal["result"]["facts"]["commit_state"] == "published"
+    assert terminal["result"]["facts"]["report_path"] == str(report_path)
+    assert terminal["result"]["report"]["skipped_count"] == int(with_issue)
+    assert "changes" not in terminal["result"]["report"]
 
 
 def execute(peer, params, *, answer=None):
