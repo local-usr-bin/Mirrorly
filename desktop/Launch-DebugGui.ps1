@@ -12,7 +12,22 @@ $packageFamily = 'Mirrorly.TechnicalPrototype_fhsq4wxgq3ejr'
 $appId = 'App'
 $exe = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Mirrorly.Desktop/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Mirrorly.Desktop.exe'))
 
-if (-not [System.IO.Path]::IsPathFullyQualified($TestDataRoot)) {
+# Windows PowerShell 5.1 lacks IsPathFullyQualified; IsPathRooted accepts C:foo and \foo.
+function Test-FullyQualifiedWindowsPath([string] $CandidatePath) {
+    if ([string]::IsNullOrWhiteSpace($CandidatePath)) { return $false }
+    try {
+        $root = [System.IO.Path]::GetPathRoot($CandidatePath)
+        [void] [System.IO.Path]::GetFullPath($CandidatePath)
+    } catch {
+        return $false
+    }
+    return (($root -match '^[A-Za-z]:\\$') -or
+        ($root -match '^\\\\(?![?.]\\)[^\\]+\\[^\\]+\\?$') -or
+        ($root -match '^\\\\\?\\[A-Za-z]:\\$') -or
+        ($root -match '^\\\\\?\\UNC\\[^\\]+\\[^\\]+\\?$'))
+}
+
+if (-not (Test-FullyQualifiedWindowsPath $TestDataRoot)) {
     throw 'TestDataRoot must be an absolute path.'
 }
 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
