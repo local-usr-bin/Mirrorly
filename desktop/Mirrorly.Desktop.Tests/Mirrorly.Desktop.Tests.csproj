@@ -20,6 +20,7 @@
     <Compile Include="..\Mirrorly.Desktop\Services\FakeWorkerClient.cs" Link="Services\FakeWorkerClient.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\PrototypeConfiguration.cs" Link="Services\PrototypeConfiguration.cs" />
     <Compile Include="..\Mirrorly.Desktop\ViewModels\HomeViewModel.cs" Link="ViewModels\HomeViewModel.cs" />
+    <Compile Include="..\Mirrorly.Desktop\ViewModels\SnapshotCollectionViewModel.cs" Link="ViewModels\SnapshotCollectionViewModel.cs" />
     <Compile Include="..\Mirrorly.Desktop\ViewModels\WorkerDiagnosticsViewModel.cs" Link="ViewModels\WorkerDiagnosticsViewModel.cs" />
     <Compile Include="..\Mirrorly.Desktop\ViewModels\ShellViewModel.cs" Link="ViewModels\ShellViewModel.cs" />
     <Compile Include="..\Mirrorly.Desktop\Presentation\HomePresentation.cs" Link="Presentation\HomePresentation.cs" />

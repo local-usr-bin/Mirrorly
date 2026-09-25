@@ -1,10 +1,38 @@
 <UserControl x:Class="Mirrorly.Desktop.Views.BackupDetailView"
- xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:viewModels="using:Mirrorly.Desktop.ViewModels">
  <StackPanel Spacing="{StaticResource MirrorlySectionSpacing}" MaxWidth="{StaticResource MirrorlyContentMaxWidth}" HorizontalAlignment="Stretch">
   <Button x:Name="BackAction" Content="← Back to backups" Click="Back_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left"/>
   <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}">
    <TextBlock x:Name="BackupTitle" Style="{StaticResource MirrorlyPageTitle}" TextWrapping="Wrap"/>
-   <TextBlock Text="Overview" Style="{StaticResource MirrorlySecondary}"/>
+   <StackPanel Orientation="Horizontal" Spacing="{StaticResource MirrorlyControlSpacing}" AutomationProperties.Name="Backup detail sections">
+    <Button x:Name="OverviewSection" Content="Overview" Click="OverviewSection_Click" Style="{StaticResource MirrorlySecondaryButton}" BorderBrush="{ThemeResource MirrorlyAccentBrush}"/>
+    <Button x:Name="SnapshotsSection" Content="Snapshots" Click="SnapshotsSection_Click" Style="{StaticResource MirrorlySecondaryButton}" BorderBrush="{ThemeResource MirrorlyAccentBrush}"/>
+   </StackPanel>
+  </StackPanel>
+  <StackPanel x:Name="SnapshotsContent" Spacing="{StaticResource MirrorlyControlSpacing}" Visibility="Collapsed">
+   <TextBlock Text="Snapshots" Style="{StaticResource MirrorlySectionTitle}"/>
+   <TextBlock Text="Saved versions and unfinished backup work." Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+   <Button x:Name="SnapshotRefreshAction" Content="Refresh" Click="SnapshotRefresh_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left" AutomationProperties.Name="Refresh snapshots"/>
+   <TextBlock x:Name="SnapshotStateText" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite"/>
+   <TextBlock x:Name="SnapshotAttentionText" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap" Visibility="Collapsed"/>
+   <ItemsRepeater ItemsSource="{x:Bind SnapshotRows, Mode=OneWay}">
+    <ItemsRepeater.ItemTemplate>
+     <DataTemplate x:DataType="viewModels:SnapshotRowPresentation">
+      <Border BorderBrush="{ThemeResource MirrorlyBorderBrush}" BorderThickness="0,0,0,1" Padding="0,12,0,12">
+       <StackPanel Spacing="{StaticResource MirrorlyTextSpacing}">
+        <TextBlock Text="{x:Bind Time}" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap"/>
+        <TextBlock Text="{x:Bind Status}" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+        <TextBlock Text="{x:Bind Facts}" Style="{StaticResource MirrorlySecondary}" TextWrapping="Wrap"/>
+       </StackPanel>
+      </Border>
+     </DataTemplate>
+    </ItemsRepeater.ItemTemplate>
+   </ItemsRepeater>
+   <Button x:Name="LoadMoreAction" Content="Load more" Click="LoadMore_Click" Style="{StaticResource MirrorlySecondaryButton}" HorizontalAlignment="Left" Visibility="Collapsed"/>
+   <Expander x:Name="SnapshotTechnicalPanel" Header="View technical details" Visibility="Collapsed">
+    <TextBlock x:Name="SnapshotTechnicalText" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+   </Expander>
   </StackPanel>
   <TextBlock x:Name="UnavailableText" Style="{StaticResource MirrorlyBody}" TextWrapping="Wrap" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite"/>
   <StackPanel x:Name="OverviewContent" Spacing="{StaticResource MirrorlySectionSpacing}">

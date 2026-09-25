@@ -631,7 +631,12 @@ Each item is capped at 16 KiB of JSON and IDs/cursors at 1,024 characters;
 the maximum 16-item page stays well below the normal 1 MiB frame. An
 unrepresentable summary fails the query rather than truncating facts. The typed
 C# `SnapshotCollectionPage` retains nullable fields and the separate latest ID.
-No Snapshots tab/list or selected-snapshot Explorer action exists in the GUI yet.
+Backup Detail now offers a lazy, read-only Snapshots section using this typed
+query, with explicit `Load more` and Refresh. It marks only the loaded row whose
+ID equals `latest_complete_snapshot_id`; it does not infer latest from page
+position or timestamp. Incomplete rows remain visibly unfinished. Query errors
+are unavailable states, not empty collections. Selected-snapshot Explorer,
+Restore, Verify and Backup-specific Settings remain later work.
 
 Live terminal presentation distinguishes normal success, completed with issues,
 `not_published`, application `unknown`, `published` with finalization failure,
