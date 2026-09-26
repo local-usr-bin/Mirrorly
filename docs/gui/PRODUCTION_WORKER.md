@@ -12,8 +12,8 @@ Phase 4C adds an app-scoped, memory-only GUI FIFO in the existing Backup coordin
 the worker still has one execution slot and no queue.
 The subsequent read-only data batch adds `snapshots.list`, now used by Backup
 Detail's Snapshots section. Restore R1 adds read-only `restore.prepare`; R2
-connects a real selection and Review GUI to it. Restore execution remains
-unimplemented.
+connects a real selection and Review GUI to it. R3 adds production
+`restore.execute`, lifecycle supervision and factual result presentation.
 Phase 3B's readonly bridge is complete. Phase 3C removes the finite request budget,
 adds worker-lifetime admission and freezes [GUI configuration ownership](CONFIGURATION.md).
 Phase 3D enabled setup.create under that gate. [Phase 3E](PHASE3E.md) now binds Setup, owns the production session at app scope, and uses Python task data on Home.
@@ -43,9 +43,27 @@ Phase 4A reuses the unchanged shared Backup transaction and the same mutation ga
   separate C# client behind DesktopSession; ViewModels do not own processes.
 
 The Phase 1A worker, FakeWorkerClient and PrototypeConfiguration remain unchanged test infrastructure. Normal GUI runtime no longer starts them. The old fake interpreter still intentionally does not import core.
-There is no worker Backup queue, verify/restore execution, progress, cancellation,
+There is no worker Backup queue, Verify execution, percentage progress, cancellation,
 Activity persistence, completion notification UX or stdio reattach. No application/core/CLI Backup algorithm,
 configuration/repository format, version or dependency changed.
+
+## GUI v1 heavy file-data I/O policy
+
+Mirrorly GUI v1 does not deliberately fan out multiple heavy file-data streams
+within one Backup or Restore operation. The current Backup path scans and hashes
+sequentially, then materializes files one at a time. With write verification
+enabled, it rereads Source and the new snapshot file in sequence after copying
+each file; those additional reads do not overlap the next file's copy. Restore
+stages and commits one file before moving to the next. The worker's single
+application slot also prevents two top-level calls in one session, but is not
+the sole basis for the per-operation I/O claim.
+
+Here concurrency `1` means one Mirrorly-initiated logical high-throughput
+file-data stream at a time. It does not cap Windows outstanding disk requests,
+cache read-ahead or write-behind. The test-only leaf-operation guard in
+[test_heavy_io_concurrency.py](../../tests/test_heavy_io_concurrency.py)
+checks multi-file Backup, change detection, Resume certification and Restore
+for accidental active-stream overlap.
 
 ## Development launch, not deployment design
 
@@ -722,7 +740,8 @@ conflicts remain conflicts. It also states that future v1 execution cannot be
 cancelled, devices should remain connected, shutdown/restart should be avoided,
 and Close-to-tray will let a running Restore continue. Completed replacements
 are not automatically rolled back after later failure or interruption. These
-are future execution facts, not a claim that R2 can execute Restore.
+were future execution facts at R2, not a claim that R2 could execute Restore.
+The R3 section below records the current execution boundary.
 
 ### Production Restore execution and result (R3)
 
