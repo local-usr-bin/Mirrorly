@@ -70,6 +70,7 @@ public sealed class BackupSetupViewModel : INotifyPropertyChanged
         working = true; Changed();
         await Task.WhenAll(Source.RevalidateAsync(), Destination.RevalidateAsync());
         working = false;
+        SetupDiagnostics.Record("T1 revalidation complete", DiagnosticState);
         if (!CanContinue) { Changed(); return; }
         IsReview = true;
         await CheckAsync();
@@ -79,12 +80,14 @@ public sealed class BackupSetupViewModel : INotifyPropertyChanged
         if (!CanCheck) return;
         working = true; TechnicalDetails = "";
         Set(SetupState.Checking, "Checking setup…");
+        SetupDiagnostics.Record("T2 review checking", DiagnosticState);
         var intent = Intent();
         try
         {
             await session.RunAsync(async api =>
             {
                 var reply = await api.PreflightAsync(intent);
+                SetupDiagnostics.Record("T4 preflight returned to ViewModel", DiagnosticState);
                 TechnicalDetails = reply.ToString();
                 if (Rejected(reply)) return;
                 if (reply.GetProperty("error").ValueKind != JsonValueKind.Null) { Set(SetupState.Blocked, "Mirrorly couldn't check this setup. View technical details, then check again."); return; }
@@ -97,9 +100,10 @@ public sealed class BackupSetupViewModel : INotifyPropertyChanged
                 else Set(SetupState.Ready, "Ready to set up. This creates the backup repository and configuration; it does not back up files yet.");
             });
         }
-        catch (Exception error) { TechnicalDetails = error.ToString(); Set(SetupState.Unavailable, "Mirrorly's service is unavailable. View technical details. No create request was made by this check."); }
-        finally { working = false; Changed(); }
+        catch (Exception error) { SetupDiagnostics.Record("CheckAsync catch", DiagnosticState, error); TechnicalDetails = error.ToString(); Set(SetupState.Unavailable, "Mirrorly's service is unavailable. View technical details. No create request was made by this check."); }
+        finally { working = false; Changed(); SetupDiagnostics.Record("T5 final ViewModel state", DiagnosticState); }
     }
+    internal string DiagnosticState() => $"IsReview={IsReview} State={State} working={working}";
     private bool Rejected(JsonElement reply)
     {
         if (reply.GetProperty("phase").GetString() != "rejected") return false;

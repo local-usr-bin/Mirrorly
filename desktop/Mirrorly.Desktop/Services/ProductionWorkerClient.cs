@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace Mirrorly.Desktop.Services;
 
 // Development launch inputs are supplied by the caller, never a portable business config.
-public sealed record WorkerDevelopmentLaunch(string Interpreter, string Checkout)
+public sealed record WorkerDevelopmentLaunch(string Interpreter, string Checkout) : WorkerLaunch
 {
     internal string? TestHostPath { get; init; }
     internal Dictionary<string, string>? TestEnvironment { get; init; }
@@ -71,10 +71,10 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
     private string detail = "Not started.";
     public ProductionWorkerObservation Observation => new(process is not null && !processExited, !disconnected && session is not null, initialized, activeOperation, detail);
     public Task Completion => lifetime ?? Task.CompletedTask;
+    public WorkerPayloadQualification? PayloadQualification { get; private set; }
 
-    public async Task StartAsync(WorkerDevelopmentLaunch launch)
+    private static ProcessStartInfo DevelopmentStart(WorkerDevelopmentLaunch launch)
     {
-        if (process is not null) throw new InvalidOperationException("Use a new client for a new session; no automatic restart.");
         if (!Path.IsPathFullyQualified(launch.Interpreter) || !Path.IsPathFullyQualified(launch.Checkout) ||
             !File.Exists(launch.Interpreter) || !File.Exists(launch.HostPath))
             throw new ArgumentException("Explicit interpreter, checkout and worker host must exist.");
@@ -89,6 +89,17 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
         // Internal process seam for tests, never protocol methods or GUI business input.
         if (launch.TestEnvironment is not null)
             foreach (var pair in launch.TestEnvironment) start.Environment[pair.Key] = pair.Value;
+        return start;
+    }
+
+    public async Task StartAsync(WorkerLaunch launch)
+    {
+        if (process is not null) throw new InvalidOperationException("Use a new client for a new session; no automatic restart.");
+        var start = launch switch {
+            WorkerDevelopmentLaunch development => DevelopmentStart(development),
+            WorkerPayloadLaunch payload => payload.CreateStartInfo(),
+            _ => throw new ArgumentException("Unknown worker launch mode.")
+        };
         process = Process.Start(start) ?? throw new IOException("Worker did not start.");
         var stdout = ReadOutputAsync(process);
         var stderr = DrainErrorsAsync(process);
@@ -96,7 +107,9 @@ public sealed class ProductionWorkerClient : IAsyncDisposable
         try
         {
             var greeting = await hello.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
-            ValidateQualification(greeting.Payload.GetProperty("qualification"), launch);
+            var facts = greeting.Payload.GetProperty("qualification");
+            if (launch is WorkerDevelopmentLaunch development) ValidateQualification(facts, development);
+            else PayloadQualification = ((WorkerPayloadLaunch)launch).Validate(facts, process.Id);
             var supported = greeting.Payload.GetProperty("supported_versions").EnumerateArray()
                 .Any(v => v.GetProperty("major").GetInt32() == 1 && v.GetProperty("minor").GetInt32() == 0);
             if (!supported) throw new InvalidDataException("No supported production version.");

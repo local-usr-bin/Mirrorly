@@ -1,6 +1,6 @@
 """Explicit development host entry point: python -I -u <absolute launch.py> ...
 
-Deployment qualification is intentionally not designed here (O-09 remains open).
+Payload deployment uses payload_launch.py; development qualification stays strict.
 """
 
 import argparse
@@ -54,6 +54,18 @@ def write_all(fd, data):
         data = data[count:]
 
 
+def serve(qualification):
+    """Shared transport/host entry, after mode-specific qualification succeeds."""
+    from mirrorly.worker.host import WorkerHost
+    from mirrorly.worker.transport import Diagnostics
+
+    diagnostics = Diagnostics(lambda data: write_all(2, data))
+    sys.stdout = sys.stderr = diagnostics
+    return WorkerHost(
+        lambda count: os.read(0, count), lambda data: write_all(1, data), qualification
+    ).run()
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--expected-interpreter", required=True)
@@ -61,14 +73,7 @@ def main():
     args = parser.parse_args()
     try:
         qualification = qualify(args.expected_interpreter, args.expected_checkout)
-        from mirrorly.worker.host import WorkerHost
-        from mirrorly.worker.transport import Diagnostics
-
-        diagnostics = Diagnostics(lambda data: write_all(2, data))
-        sys.stdout = sys.stderr = diagnostics
-        return WorkerHost(
-            lambda count: os.read(0, count), lambda data: write_all(1, data), qualification
-        ).run()
+        return serve(qualification)
     except Exception as exc:
         # Startup failure: no application call admitted, no stdout contamination.
         sys.stderr.write(f"Worker startup failed: {type(exc).__name__}: {exc}\n")

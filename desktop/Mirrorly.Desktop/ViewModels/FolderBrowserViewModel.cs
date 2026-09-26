@@ -8,6 +8,11 @@ public sealed class FolderBrowserViewModel(string title, IFolderBrowserService s
     private readonly Stack<string?> history = new();
     private int selectionRevision;
     private bool initialized;
+    private FolderNavigationDiagnostics? diagnostics;
+    internal FolderNavigationDiagnostics Diagnostics => diagnostics ??= new(Title, DiagnosticState);
+    private string DiagnosticState() => $"revision={selectionRevision} browsing={IsBrowsing} validating={IsValidating} editing={IsEditing} " +
+        $"list={FolderNavigationDiagnostics.ObjectId(Folders)} count={Folders.Count} selected_path_present={SelectedPath is not null} " +
+        $"current_kind={(CurrentPath is null ? "ThisPC" : string.Equals(Path.GetPathRoot(CurrentPath), CurrentPath, StringComparison.OrdinalIgnoreCase) ? "root" : "directory")}";
     public string Title { get; } = title;
     public string? CurrentPath { get; private set; }
     public string? ParentPath { get; private set; }
@@ -46,12 +51,15 @@ public sealed class FolderBrowserViewModel(string title, IFolderBrowserService s
     private async Task NavigateAsync(string? path, bool remember)
     {
         if (IsBrowsing) return;
+        var diagnosticNavigation = Diagnostics.NavigationStarted();
         selectionRevision++;
         IsValidating = false;
         IsBrowsing = true;
         Error = null;
         Changed();
+        Diagnostics.Record("N1 navigate start", () => $"nav={diagnosticNavigation}");
         var listing = await service.BrowseAsync(path);
+        Diagnostics.Record("N2 browse returned", () => $"nav={diagnosticNavigation} result={(listing.Error is null ? "success" : "failure")} returned_count={listing.Folders.Count}");
         IsBrowsing = false;
         if (listing.Error is not null)
         {
@@ -68,6 +76,7 @@ public sealed class FolderBrowserViewModel(string title, IFolderBrowserService s
             IsEditing = false;
         }
         Changed();
+        Diagnostics.Record("N3 published", () => $"nav={diagnosticNavigation} published={listing.Error is null}");
     }
     public async Task BackAsync()
     {
@@ -80,18 +89,27 @@ public sealed class FolderBrowserViewModel(string title, IFolderBrowserService s
     public Task UpAsync() => CanUp ? NavigateAsync(ParentPath) : Task.CompletedTask;
     public async Task SelectAsync(string path)
     {
+        var diagnosticSelection = Diagnostics.NextSelection();
+        var capturedRevision = selectionRevision;
+        Diagnostics.Record("S0 select entry", () => $"selection={diagnosticSelection} captured_revision={capturedRevision} admitted={!IsBrowsing}");
         if (IsBrowsing) return;
         var revision = ++selectionRevision;
         SelectedPath = null;
         Error = null;
         IsValidating = true;
         Changed();
+        Diagnostics.Record("S0 validation pending", () => $"selection={diagnosticSelection} captured_revision={revision}");
         var result = await service.ValidateAsync(path);
-        if (revision != selectionRevision) return; // A later selection/navigation owns the pane.
+        if (revision != selectionRevision)
+        {
+            Diagnostics.Record("S2 stale discarded", () => $"selection={diagnosticSelection} captured_revision={revision} discarded=true applied=false");
+            return; // A later selection/navigation owns the pane.
+        }
         SelectedPath = result.IsValid ? result.Path : null;
         Error = result.Error;
         IsValidating = false;
         Changed();
+        Diagnostics.Record("S1 selection applied", () => $"selection={diagnosticSelection} captured_revision={revision} result={(result.IsValid ? "valid" : "invalid")} applied=true");
     }
     public Task RevalidateAsync() => SelectedPath is { } path ? SelectAsync(path) : Task.CompletedTask;
 }

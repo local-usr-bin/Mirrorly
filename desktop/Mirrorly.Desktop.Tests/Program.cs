@@ -9,6 +9,7 @@ using Mirrorly.Desktop.ViewModels;
 using Mirrorly.Desktop.Presentation;
 
 // Deliberately dependency-free executable test harness. Failure returns exit code 1.
+if (args is ["--setup-diagnostic-probe"]) { await SetupDiagnosticTests.Probe(); return 0; }
 var passed = 0;
 var failed = 0;
 await Test("Envelope round trip", () =>
@@ -332,7 +333,10 @@ await Test("Plant placement restores Compact default, preserves Expanded and hid
     return Task.CompletedTask;
 });
 await PackagingPocTests.Run(Test, Check);
+await PayloadWorkerTests.Run(Test, Check);
 await SetupTests.Run(Test, Check);
+await SetupDiagnosticTests.Run(Test, Check);
+await NavigationDiagnosticTests.Run(Test, Check);
 await SnapshotCollectionTests.Run(Test, Check);
 await RestoreSelectionTests.Run(Test, Check);
 await ProductionWorkerTests.Run(Test, Check, args);

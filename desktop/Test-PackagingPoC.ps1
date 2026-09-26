@@ -22,6 +22,12 @@ Assert ($debug.Items.AssemblyMetadata.Identity -contains 'CheckoutRoot') 'Debug 
 $release = Read-Configuration 'Release'
 Assert ($release.Properties.DefineConstants.Split(';') -notcontains 'DEBUG') 'Release exposes DEBUG code.'
 Assert ($release.Properties.DefineConstants.Split(';') -notcontains 'PACKAGING_POC') 'PoC leaked into Release.'
+Assert ($release.Properties.DefineConstants.Split(';') -notcontains 'PACKAGING_WORKER_POC') 'P2 leaked into Release.'
+$workerPoc = Read-Configuration 'PackagingWorkerPoC'
+$w = $workerPoc.Properties
+Assert ($w.WindowsPackageType -eq 'None' -and $w.EnableMsixTooling -eq 'false' -and $w.SelfContained -eq 'true' -and $w.WindowsAppSDKSelfContained -eq 'true') 'P2 must remain unpackaged and dual-self-contained.'
+Assert ($w.DefineConstants.Split(';') -contains 'PACKAGING_WORKER_POC' -and $w.DefineConstants.Split(';') -notcontains 'PACKAGING_POC' -and $w.DefineConstants.Split(';') -notcontains 'DEBUG') 'P2 mode is not separate from P1/Debug.'
+Assert ($workerPoc.Items.AssemblyMetadata.Identity -notcontains 'CheckoutRoot' -and $workerPoc.Items.AssemblyMetadata.Identity -notcontains 'Phase1AWorkerPath') 'P2 contains checkout metadata.'
 $poc = Read-Configuration 'PackagingPoC'
 $p = $poc.Properties
 Assert ($p.WindowsPackageType -eq 'None' -and $p.EnableMsixTooling -eq 'false') 'PoC is still packaged.'

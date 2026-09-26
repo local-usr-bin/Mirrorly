@@ -9,6 +9,8 @@ public partial class App : Application
 #if PACKAGING_POC
     // P1 deliberately has no worker, catalog fixtures, or development-path fallback.
     private readonly DesktopSession session = new(null, GuiDataPaths.ForCurrentUser());
+#elif PACKAGING_WORKER_POC
+    private readonly DesktopSession session = new(new WorkerPayloadLaunch(ProductionPayloadPaths.Current()), GuiDataPaths.ForCurrentUser());
 #else
     private readonly DesktopSession session = new(DesktopDevelopment.Launch, DesktopDevelopment.Paths);
 #endif

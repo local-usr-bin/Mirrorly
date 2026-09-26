@@ -187,6 +187,8 @@ P1 is closed for the GUI deployment layer. Keep the PoC flag out of the future
 production configuration. P2 remains separate and must replace the disabled
 worker with an explicit payload-local launch/qualification boundary, without
 changing the worker protocol, operation semantics or development workflow.
+The separate [P2 worker deployment PoC](WORKER_DEPLOYMENT_POC.md) records that
+implementation and its own acceptance status; PackagingPoC remains worker-disabled.
 Production Python, the final ZIP/launcher, single instance, notifications,
 signing, installer and full production-payload release acceptance remain outside
 this P1 result.

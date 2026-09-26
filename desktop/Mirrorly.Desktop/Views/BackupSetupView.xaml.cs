@@ -15,10 +15,12 @@ public sealed partial class BackupSetupView : UserControl
     public event Action? StepChanged;
     public Func<Task<bool>>? ConfirmCopy { get; set; }
     private bool initialized;
+    internal Func<string>? ShellDiagnosticSnapshot { get; set; }
     public BackupSetupView(IDesktopSession session)
     {
         Model = new(new FolderBrowserService(), session);
         InitializeComponent(); DataContext = Model;
+        if (SetupDiagnostics.Enabled) SetupDiagnostics.UiSnapshot = DiagnosticSnapshot;
         sourcePane = new(Model.Source); destinationPane = new(Model.Destination);
         Panes.Children.Add(sourcePane); Panes.Children.Add(destinationPane);
         Model.PropertyChanged += (_, _) => Refresh();
@@ -44,8 +46,43 @@ public sealed partial class BackupSetupView : UserControl
     }
     private async void Continue_Click(object sender, RoutedEventArgs e)
     {
-        await Model.ContinueAsync();
-        if (Model.IsReview) { StepChanged?.Invoke(); NameInput.Focus(FocusState.Keyboard); }
+        SetupDiagnostics.Record("T0 Continue_Click entry", Model.DiagnosticState);
+        try
+        {
+            await Model.ContinueAsync();
+            SetupDiagnostics.Record("T6 ContinueAsync returned", Model.DiagnosticState);
+            if (Model.IsReview)
+            {
+                StepChanged?.Invoke();
+                var focused = NameInput.Focus(FocusState.Keyboard);
+                SetupDiagnostics.Record("T7 after Focus", () => $"{Model.DiagnosticState()} focus_result={focused}");
+            }
+        }
+        catch (Exception error) { SetupDiagnostics.Record("Continue_Click catch/rethrow", Model.DiagnosticState, error); throw; }
+        finally
+        {
+            SetupDiagnostics.Record("Continue_Click exit", Model.DiagnosticState);
+            if (SetupDiagnostics.Enabled)
+            {
+                try
+                {
+                    var queued = DispatcherQueue.TryEnqueue(() => SetupDiagnostics.Record("T8 dispatcher callback entered", Model.DiagnosticState));
+                    SetupDiagnostics.Record("T8 enqueue result", () => $"queued={queued}");
+                }
+                catch (Exception error) { SetupDiagnostics.Record("diagnostic enqueue catch", error: error); }
+            }
+        }
+    }
+    private string DiagnosticSnapshot()
+    {
+        if (!DispatcherQueue.HasThreadAccess) return "HasThreadAccess=false; UI properties not read";
+        static string Box(FrameworkElement element) => $"Visibility={element.Visibility},Opacity={element.Opacity},Width={element.ActualWidth},Height={element.ActualHeight}";
+        var focus = XamlRoot is null ? null : Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(XamlRoot);
+        // Names are XAML identifiers, never Text/Content or AutomationProperties.Name.
+        var name = (focus as FrameworkElement)?.Name;
+        return $"HasThreadAccess=true {Model.DiagnosticState()} ChooseStep=[{Box(ChooseStep)}] ReviewStep=[{Box(ReviewStep)}] " +
+            $"InfoBar=[Open={SetupNotice.IsOpen},Severity={SetupNotice.Severity},TitleState={(string.IsNullOrEmpty(SetupNotice.Title) ? "empty" : "present")},MessageState={(string.IsNullOrEmpty(SetupNotice.Message) ? "empty" : "present")}] " +
+            $"Focus=[Type={focus?.GetType().FullName ?? "null"},Name={name}] Shell=[{ShellDiagnosticSnapshot?.Invoke() ?? "unavailable"}]";
     }
     private void Back_Click(object sender, RoutedEventArgs e) { Model.Back(); StepChanged?.Invoke(); }
     private async void Check_Click(object sender, RoutedEventArgs e) => await Model.CheckAsync();

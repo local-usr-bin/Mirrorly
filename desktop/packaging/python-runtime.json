@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "python_version": "3.13.15",
+  "architecture": "x64",
+  "python": {
+    "filename": "python-3.13.15-embed-amd64.zip",
+    "url": "https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip",
+    "sha256": "d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf"
+  },
+  "wheels": [
+    {
+      "name": "blake3",
+      "version": "1.0.9",
+      "filename": "blake3-1.0.9-cp313-cp313-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/db/2e/f09e8ed426f360aa2005206466ceab2f707486eb5d9db7051dbcbae056d1/blake3-1.0.9-cp313-cp313-win_amd64.whl",
+      "sha256": "caded2806d2cbeed638c5e2517ed8b2a94165b3452fda35e72896142d22070e0"
+    }
+  ]
+}

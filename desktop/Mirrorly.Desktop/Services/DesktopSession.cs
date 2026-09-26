@@ -56,7 +56,7 @@ public interface IDesktopSession
 }
 
 // One owner per desktop process. No page owns a worker and no automatic restart/replay.
-public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths paths) : IDesktopSession, ISetupApi
+public sealed class DesktopSession(WorkerLaunch? launch, GuiDataPaths paths) : IDesktopSession, ISetupApi
 {
     private readonly ProductionWorkerClient client = new();
     private Task? startup;
@@ -84,7 +84,7 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths
         try { await workflow(this); }
         finally { Busy = false; idle.TrySetResult(); Changed?.Invoke(); }
     }
-    private async Task<WorkerReply> ReceiveReplyAsync(Func<Task<WorkerRequest>> send, Action<WorkerAdmission>? onAdmitted = null)
+    private async Task<WorkerReply> ReceiveReplyAsync(Func<Task<WorkerRequest>> send, Action<WorkerAdmission>? onAdmitted = null, bool setupDiagnostic = false)
     {
         if (!Busy) throw new InvalidOperationException("Application requests require a supervised workflow.");
         // Explicit unavailable session for the P1 GUI-only deployment experiment.
@@ -92,6 +92,7 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths
         if (launch is null) throw new IOException("GUI deployment PoC: the Python worker is intentionally disabled. No Backup or Restore can run.");
         await (startup ??= client.StartAsync(launch));
         var request = await send();
+        if (setupDiagnostic) SetupDiagnostics.Record("T3 preflight sent", () => $"request={request.RequestId}");
         RequestId = request.RequestId;
         Changed?.Invoke();
         var admissionObserver = onAdmitted is null ? Task.CompletedTask : ObserveAdmissionAsync(request, onAdmitted);
@@ -100,6 +101,7 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths
             try
             {
                 var terminal = await request.WaitAsync(ResponseWait);
+                if (setupDiagnostic) SetupDiagnostics.Record("T4 preflight terminal", () => $"request={request.RequestId} operation={request.OperationId} phase={terminal.Payload.GetProperty("phase").GetString()} error_kind={terminal.Payload.GetProperty("error").ValueKind}");
                 await admissionObserver;
                 return new(request.RequestId, request.OperationId, terminal.Payload);
             }
@@ -109,10 +111,12 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths
                 WaitingForTerminal = true;
                 Changed?.Invoke();
                 var terminal = await request.Terminal;
+                if (setupDiagnostic) SetupDiagnostics.Record("T4 preflight terminal after wait", () => $"request={request.RequestId} operation={request.OperationId} phase={terminal.Payload.GetProperty("phase").GetString()} error_kind={terminal.Payload.GetProperty("error").ValueKind}");
                 await admissionObserver;
                 return new(request.RequestId, request.OperationId, terminal.Payload);
             }
         }
+        catch (Exception error) { if (setupDiagnostic) SetupDiagnostics.Record("T4 preflight receive catch", () => $"request={request.RequestId}", error); throw; }
         finally { WaitingForTerminal = false; RequestId = null; Changed?.Invoke(); }
     }
     private static async Task ObserveAdmissionAsync(WorkerRequest request, Action<WorkerAdmission> onAdmitted)
@@ -125,7 +129,12 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths
     }
     private async Task<JsonElement> ReceiveAsync(Func<Task<WorkerRequest>> send) =>
         (await ReceiveReplyAsync(send)).Payload;
-    public Task<JsonElement> PreflightAsync(SetupPreflightIntent intent) => ReceiveAsync(() => client.PreflightAsync(paths, intent));
+    public async Task<JsonElement> PreflightAsync(SetupPreflightIntent intent)
+    {
+        SetupDiagnostics.Record("T3 preflight call");
+        try { return (await ReceiveReplyAsync(() => client.PreflightAsync(paths, intent), setupDiagnostic: true)).Payload; }
+        catch (Exception error) { SetupDiagnostics.Record("T4 PreflightAsync catch", error: error); throw; }
+    }
     public Task<JsonElement> CreateAsync(SetupCreateIntent intent) => ReceiveAsync(() => client.CreateAsync(paths, intent));
     public Task<WorkerReply> BackupAsync(string selector, Action<WorkerAdmission>? onAdmitted = null) =>
         ReceiveReplyAsync(() => client.BackupAsync(paths, new(selector)), onAdmitted);
@@ -356,7 +365,7 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths
     }
 }
 
-#if !PACKAGING_POC
+#if !PACKAGING_POC && !PACKAGING_WORKER_POC
 public static class DesktopDevelopment
 {
     public static WorkerDevelopmentLaunch Launch => new(

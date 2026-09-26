@@ -14,7 +14,8 @@ The complete Backups collection opens a selector-specific read-only Overview usi
 the existing task catalog and authoritative latest-saved summary. It shares the
 same Backup coordinator; its Snapshots section reads production snapshot pages.
 
-One app-owned DesktopSession starts the qualified mirrorly-gui-dev interpreter lazily.
+One app-owned DesktopSession starts its qualified worker lazily. Development uses
+the explicit mirrorly-gui-dev interpreter; PackagingWorkerPoC uses payload-local Python.
 FakeWorkerClient, phase1a_worker and fixtures remain tests/design infrastructure only.
 Normal runtime never displays sample tasks/history or starts the fake worker.
 Debug diagnostics expose production observation, window sizing and true Exit.
@@ -26,7 +27,11 @@ EXE. The separate **PackagingPoC** configuration can publish an unpackaged,
 dual-self-contained GUI with the worker intentionally disabled. It is not a
 production Release or a usable portable backup application. See
 [P1 deployment PoC](../docs/gui/DEPLOYMENT_POC.md) for commands and the measured
-acceptance gaps. O-09 Python packaging remains OPEN.
+acceptance. The separate **PackagingWorkerPoC** configuration adds a pinned,
+isolated Python runtime and real production worker under `app/python` and
+`app/worker`; its GUI lives under `app/gui`. See
+[P2 worker deployment PoC](../docs/gui/WORKER_DEPLOYMENT_POC.md) for assembly,
+qualification and pending clean-VM acceptance. Neither PoC is final Release.
 For a disposable Debug GUI smoke, use [Launch-DebugGui.ps1](Launch-DebugGui.ps1)
 with an absolute `-TestDataRoot`; it verifies that the current user's registered
 package points to this checkout before launching. Run

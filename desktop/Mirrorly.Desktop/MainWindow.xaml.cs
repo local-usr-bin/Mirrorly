@@ -41,6 +41,17 @@ public sealed partial class MainWindow : Window
         restore.ConfirmStart = ConfirmRestoreStartAsync;
         setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
+        if (SetupDiagnostics.Enabled) setup.ShellDiagnosticSnapshot = () =>
+        {
+            if (!DispatcherQueue.HasThreadAccess) return "HasThreadAccess=false";
+            var selected = Navigation.SelectedItem;
+            var tag = (selected as NavigationViewItem)?.Tag as string;
+            // Only known code-owned navigation tags; no Content/user text.
+            var safeTag = Enum.TryParse<ShellPage>(tag, out var page) ? page.ToString() : "other/null";
+            return $"PageHost={PageHost.Content?.GetType().FullName ?? "null"} SelectedType={selected?.GetType().FullName ?? "null"} Tag={safeTag} " +
+                $"PaneOpen={Navigation.IsPaneOpen} Enabled={Navigation.IsEnabled} Opacity={Navigation.Opacity} " +
+                $"Width={Navigation.ActualWidth} Height={Navigation.ActualHeight} Visibility={Navigation.Visibility} DisplayMode={Navigation.DisplayMode}";
+        };
         setup.ConfirmCopy = () => ConfirmAsync("Use full-file copies?",
             "The selected location does not provide NTFS hardlink reuse. Mirrorly will use full-file copies, which may need more space. Continue with this location?",
             "Use full-file copies", "Go back");
