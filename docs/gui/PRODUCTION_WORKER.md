@@ -151,9 +151,9 @@ validated independently; invalid method input is a request rejection, not execut
 
 Implemented methods: `ping`, `status`, `worker.shutdown`, `setup.preflight`,
 `setup.create`, `tasks.list`, `backup.run`, `backup.summary`, `snapshots.list`,
-`restore.prepare`.
+`restore.prepare`, `restore.execute`.
 No repository.inspect was added. The bounded readonly tasks.list contract is specified in [PHASE3E](PHASE3E.md#durable-task-catalog). Unknown methods, including
-verify, `restore.execute`, cancellation and test_crash, are rejected before application.
+verify, cancellation and test_crash, are rejected before application.
 
 `resume_interaction=true` after the tested `backup.resume` round-trip. The other
 capabilities remain false: phase_progress, item_progress, byte_progress,

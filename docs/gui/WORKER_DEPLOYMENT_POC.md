@@ -1,7 +1,17 @@
 # P2 — payload-local Python and production worker
 
-Status: **PARTIAL / BLOCKED — intermittent clean-VM Setup-to-Review visual corruption;
-business and post-use relocation acceptance remain incomplete**.
+Current GUI v1 release assessment (2026-09-27): the intermittent visual corruption
+is **MONITORING / non-blocking for v1**. It has been difficult to reproduce reliably;
+no speculative layout, focus or navigation fix is planned. Continue observing it
+during normal development and use. If it recurs, preserve a screenshot, process PID,
+the opt-in diagnostic log, and display/environment details. Reopen the focused
+investigation when a genuine failure trace is available.
+
+The original P2 acceptance record below retains its historical PARTIAL / BLOCKED
+findings and unverified clean-VM business/relocation checks. The release assessment
+above supersedes that historical visual-blocker decision; it does not turn those
+unverified checks into passes.
+
 The development-machine qualification, application integration and regression
 results below are measured. They do not establish a complete portable release.
 [P1](DEPLOYMENT_POC.md) remains CLOSED for the GUI deployment layer.

@@ -4,9 +4,8 @@
   <TextBlock x:Name="Heading" Style="{StaticResource MirrorlyPageTitle}"/>
   <Border Style="{StaticResource MirrorlyCard}">
    <StackPanel Spacing="{StaticResource MirrorlyControlSpacing}">
-    <TextBlock Text="A little more to come" Style="{StaticResource MirrorlySectionTitle}"/>
-    <TextBlock Text="This page will be implemented in a later phase." Style="{StaticResource MirrorlyBody}"/>
-    <TextBlock Text="Phase 1B is a visual preview. No backup settings or files are changed." Style="{StaticResource MirrorlySecondary}"/>
+    <TextBlock Text="Coming later" Style="{StaticResource MirrorlySectionTitle}"/>
+    <TextBlock Text="This page will be available in a future update." Style="{StaticResource MirrorlyBody}"/>
    </StackPanel>
   </Border>
  </StackPanel>

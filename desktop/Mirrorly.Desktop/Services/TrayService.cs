@@ -26,7 +26,7 @@ public sealed class TrayService : IDisposable
         {
             Size = (uint)Marshal.SizeOf<NotifyIconData>(), Window = window, Id = 1,
             Flags = 1 | 2 | 4, CallbackMessage = CallbackMessage,
-            Icon = LoadIcon(0, (nint)32512), Tip = "Mirrorly Technical Prototype",
+            Icon = LoadIcon(0, (nint)32512), Tip = "Mirrorly",
             Info = "", InfoTitle = ""
         };
         if (!SetWindowSubclass(window, callback, 1, 0)) throw new Win32Exception();
