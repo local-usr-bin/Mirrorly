@@ -1,7 +1,8 @@
 # P1 — unpackaged GUI deployment PoC
 
-Status: **PARTIAL**, 2026-09-26. Local GUI deployment works; clean-machine proof
-and full tray menu acceptance are not established. This is not a production ZIP.
+Status: **CLOSED / PASS**, 2026-09-26. Local GUI deployment, tray Open/Exit and
+clean-machine self-contained deployment acceptance passed. Clean-VM evidence
+below was reported by the user after manual testing. This is not a production ZIP.
 Python/worker deployment, launcher, single instance, notifications, signing and
 installer remain P2/P3/later work. Backup/Restore semantics are unchanged.
 
@@ -101,10 +102,10 @@ Windows App Runtime packages, including 2.5.1; it is **not a clean machine**.
 | Home, NavigationView, light theme, XAML/PRI, two SVG decorations | Visually verified |
 | Minimize and restore window | Observed on initial fixed publish |
 | Close X hides window without exiting process | Observed on initial fixed publish |
-| Tray Open / Exit | Not verified; taskbar is not targetable through the current automation surface |
+| Tray Open / Exit | PASS: user manually confirmed Open and Exit; the original hidden process was subsequently confirmed exited |
 | Duplicate launch | Two live windows per probe path, no immediate crash; single-instance policy is not implemented |
 | High Contrast / alternate DPI | Not verified; only current 175% DPI observed |
-| Clean Windows VM with no shared runtimes | Not verified; no accessible VM established |
+| Clean Windows VM with no shared runtimes | PASS on the specific Windows 10 VM documented below; user-reported manual acceptance |
 
 Three copies under the repository's ignored disposable root were each launched
 with their own folder and unrelated `C:\Windows` as cwd:
@@ -118,7 +119,57 @@ This supports local relocation/cwd independence of the **GUI layer only**. It
 does not test post-use business state relocation, production Python, or prove
 the absence of all machine prerequisites. No host runtime was uninstalled.
 
-## Validation and remaining gate
+## Clean-VM closure acceptance
+
+The user reported the following manual results on Windows 10 Pro, reported
+version 2009, build 19045, 64-bit. This establishes deployment behavior on this
+specific VM; it does **not** declare official Windows 10 support. O-05 and the
+release acceptance matrix still determine the supported OS scope.
+
+Before testing, `dotnet` was absent and neither `C:\Program Files\dotnet` nor
+`C:\Program Files (x86)\dotnet` existed. `Get-AppxPackage *appruntime*` returned
+no packages. There was no Mirrorly/TechnicalPrototype development package or
+Visual Studio, and no actual Python/Conda runtime. The WindowsApps `python.exe`
+entry was only a Windows App Execution Alias. No .NET, Windows App SDK, Python,
+Visual Studio or development MSIX was installed during acceptance.
+
+The closure publish was rebuilt from commit
+`935a289e35ca5dc0a26d79b50b478c0ffe31323c` into the ignored
+`desktop/artifacts/p1-closure/publish` directory using the same MSBuild publish
+command above, without `/restore` and with an explicit `PublishDir`. Its 533
+payload files totaled 239,839,149 bytes. The transfer ZIP added `SHA256SUMS.txt`
+and totaled 95,642,642 bytes. Its SHA-256 matched on the VM:
+
+```text
+BC5162561B1144B32A08BA495962125C43937BB875E1327F384CF073E91B2DDA
+```
+
+| Clean-VM check | User-reported result |
+| --- | --- |
+| Extracted payload | `C:\临时 软件\Mirrorly PoC\`; `Integrity mismatches: 0` |
+| Direct startup in Chinese + spaces path | PASS; no package-context launcher |
+| Home / NavigationView / palette / XAML / PRI / both SVG plants | PASS |
+| PoC worker boundary | Truthful worker-disabled state; no fake worker or development Python fallback |
+| Minimize | PASS |
+| Close X / tray Open / tray Exit | Window hid while process remained; Open restored the same session; Exit terminated normally |
+| Unrelated cwd | After full Exit, direct launch from `C:\Windows` passed with correct UI/resources and executable path still under the copied payload |
+| Package identity | `GetPackageFullName` returned 15700 (`APPMODEL_ERROR_NO_PACKAGE`) |
+
+All five inspected runtime modules loaded from the copied payload:
+
+```text
+C:\临时 软件\Mirrorly PoC\hostfxr.dll
+C:\临时 软件\Mirrorly PoC\hostpolicy.dll
+C:\临时 软件\Mirrorly PoC\coreclr.dll
+C:\临时 软件\Mirrorly PoC\Microsoft.WindowsAppRuntime.dll
+C:\临时 软件\Mirrorly PoC\Microsoft.UI.Xaml.dll
+```
+
+Together with the pre-test inventory and successful direct startup, these paths
+confirm that this VM run did not require shared .NET or Windows App Runtime
+deployment. Windows system DLLs are expected to remain OS-provided.
+
+## Validation and follow-on boundary
 
 - Full C# harness with explicit `mirrorly-gui-dev` Python: **118 passed / 0 failed**.
 - Packaged Debug x64 build and Debug package-launch qualification: passed.
@@ -126,10 +177,16 @@ the absence of all machine prerequisites. No host runtime was uninstalled.
 - Evaluated configuration / artifact tests: passed.
 - No Python source change; no full Python suite rerun.
 
-Before P1 can be PASS, repeat on a clean Windows VM without Visual Studio, .NET
-SDK/runtime, Mirrorly development package, Conda or installed Windows App SDK
-runtime, and finish tray Open/Exit acceptance. Inventory the VM first; do not
-uninstall development-host runtimes to simulate this. Keep the PoC flag out of
-the future production configuration. P2 must replace the disabled worker with
-an explicit payload-local launch/qualification boundary, without changing the
-worker protocol, operation semantics or development workflow.
+The suite/build results above belong to P1 implementation. Closure acceptance
+reran PackagingPoC publish and `Test-PackagingPoC.ps1`, both successfully; it did
+not rerun the full suites or packaged Debug build. No source defect was found;
+the closure change records acceptance only. Disposable runtime output is not
+tracked in Git.
+
+P1 is closed for the GUI deployment layer. Keep the PoC flag out of the future
+production configuration. P2 remains separate and must replace the disabled
+worker with an explicit payload-local launch/qualification boundary, without
+changing the worker protocol, operation semantics or development workflow.
+Production Python, the final ZIP/launcher, single instance, notifications,
+signing, installer and full production-payload release acceptance remain outside
+this P1 result.
