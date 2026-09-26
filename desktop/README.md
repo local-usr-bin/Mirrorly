@@ -21,8 +21,12 @@ Debug diagnostics expose production observation, window sizing and true Exit.
 
 The existing Visual Studio 2026 x64 build and package identity remain development
 infrastructure. Build with VS MSBuild /t:Build /p:Configuration=Debug /p:Platform=x64.
-Run the registered package context; this machine's direct bare EXE launch still fails
-Windows App SDK initialization. O-09 final Python packaging remains OPEN.
+Run Debug in the registered package context; do not bare-launch the packaged Debug
+EXE. The separate **PackagingPoC** configuration can publish an unpackaged,
+dual-self-contained GUI with the worker intentionally disabled. It is not a
+production Release or a usable portable backup application. See
+[P1 deployment PoC](../docs/gui/DEPLOYMENT_POC.md) for commands and the measured
+acceptance gaps. O-09 Python packaging remains OPEN.
 For a disposable Debug GUI smoke, use [Launch-DebugGui.ps1](Launch-DebugGui.ps1)
 with an absolute `-TestDataRoot`; it verifies that the current user's registered
 package points to this checkout before launching. Run

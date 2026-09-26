@@ -56,7 +56,7 @@ public interface IDesktopSession
 }
 
 // One owner per desktop process. No page owns a worker and no automatic restart/replay.
-public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths paths) : IDesktopSession, ISetupApi
+public sealed class DesktopSession(WorkerDevelopmentLaunch? launch, GuiDataPaths paths) : IDesktopSession, ISetupApi
 {
     private readonly ProductionWorkerClient client = new();
     private Task? startup;
@@ -87,6 +87,9 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
     private async Task<WorkerReply> ReceiveReplyAsync(Func<Task<WorkerRequest>> send, Action<WorkerAdmission>? onAdmitted = null)
     {
         if (!Busy) throw new InvalidOperationException("Application requests require a supervised workflow.");
+        // Explicit unavailable session for the P1 GUI-only deployment experiment.
+        // Fail before startup/send; never fall back to PATH, a fixture, or a checkout.
+        if (launch is null) throw new IOException("GUI deployment PoC: the Python worker is intentionally disabled. No Backup or Restore can run.");
         await (startup ??= client.StartAsync(launch));
         var request = await send();
         RequestId = request.RequestId;
@@ -353,6 +356,7 @@ public sealed class DesktopSession(WorkerDevelopmentLaunch launch, GuiDataPaths 
     }
 }
 
+#if !PACKAGING_POC
 public static class DesktopDevelopment
 {
     public static WorkerDevelopmentLaunch Launch => new(
@@ -373,3 +377,4 @@ public static class DesktopDevelopment
         }
     }
 }
+#endif

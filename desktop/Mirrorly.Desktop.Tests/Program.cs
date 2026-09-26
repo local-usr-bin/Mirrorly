@@ -331,6 +331,7 @@ await Test("Plant placement restores Compact default, preserves Expanded and hid
             (string?)a.Attribute("IsHitTestVisible") == "False")));
     return Task.CompletedTask;
 });
+await PackagingPocTests.Run(Test, Check);
 await SetupTests.Run(Test, Check);
 await SnapshotCollectionTests.Run(Test, Check);
 await RestoreSelectionTests.Run(Test, Check);

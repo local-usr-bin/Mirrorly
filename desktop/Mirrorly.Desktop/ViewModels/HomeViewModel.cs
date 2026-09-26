@@ -87,7 +87,7 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     {
         Loaded = false;
         catalogProblem = "Mirrorly couldn't refresh your configured backups. View technical details, then use Refresh to try reading again.";
-        TechnicalDetails = error.ToString(); UpdateStatus();
+        catalogDetails = error.ToString(); UpdateStatus();
     }
     public void ApplyCatalog(BackupCatalog catalog, IReadOnlyDictionary<string, SavedBackupSummary>? summaries = null,
         IReadOnlyDictionary<string, string>? errors = null)
@@ -188,6 +188,10 @@ public sealed class HomeViewModel : INotifyPropertyChanged
                     _ => new("Backup result not fully reported", "Mirrorly returned a result without complete details.", "View technical details before starting another Backup.", "Back up now", StatusTone.Error, "⚠")
                 };
         }
+        if (!Loaded && catalogProblem.Length > 0)
+            return new("Backups unavailable", "Mirrorly couldn't read your configured backups.",
+                "View technical details for the cause. No backup state has been inferred.",
+                "Back up now", StatusTone.Warning, "⚠");
         if (selectedSelector is not null && saved.TryGetValue(selectedSelector, out var summary) && summary.SnapshotId is not null)
             return new("Saved backup available", "Latest saved backup: " + HomePolicy.FormatSavedVersionTime(summary.CreatedAt),
                 "This stored version does not establish that the source is currently unchanged.", "Back up now", StatusTone.Neutral, "○");
