@@ -23,7 +23,7 @@ results below are measured. They do not establish a complete portable release.
 | Debug | Explicit development Python, checkout and editable-install qualification | Existing registered packaged development workflow |
 | PackagingPoC | Disabled; truthful unavailable state | Reproducible P1 GUI-only experiment |
 | PackagingWorkerPoC | Payload-local qualified Python and the real WorkerHost | Unpackaged dual-self-contained P2 experiment |
-| Release | Existing development-bound configuration | Not the final production configuration |
+| Release | Same payload-local qualification and real WorkerHost | [Production portable build](PORTABLE_RELEASE.md); public-release acceptance remains separate |
 
 P2 has no root launcher. Start `app/gui/Mirrorly.Desktop.exe` directly. It uses
 `GuiDataPaths.ForCurrentUser()` and the same application/session/coordinators as

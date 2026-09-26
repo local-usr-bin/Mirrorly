@@ -23,6 +23,12 @@ $release = Read-Configuration 'Release'
 Assert ($release.Properties.DefineConstants.Split(';') -notcontains 'DEBUG') 'Release exposes DEBUG code.'
 Assert ($release.Properties.DefineConstants.Split(';') -notcontains 'PACKAGING_POC') 'PoC leaked into Release.'
 Assert ($release.Properties.DefineConstants.Split(';') -notcontains 'PACKAGING_WORKER_POC') 'P2 leaked into Release.'
+$r = $release.Properties
+Assert ($r.DefineConstants.Split(';') -contains 'PORTABLE_RELEASE') 'Release must select the payload-local worker.'
+Assert ($r.WindowsPackageType -eq 'None' -and $r.EnableMsixTooling -eq 'false' -and $r.SelfContained -eq 'true' -and $r.WindowsAppSDKSelfContained -eq 'true') 'Release must be unpackaged and dual-self-contained.'
+Assert ($r.WindowsAppSdkUndockedRegFreeWinRTInitialize -eq 'true' -and $r.WindowsAppSdkBootstrapInitialize -eq 'false' -and $r.WindowsAppSdkDeploymentManagerInitialize -eq 'false') 'Release has conflicting runtime initializers.'
+Assert ($r.PublishTrimmed -eq 'false' -and $r.PublishReadyToRun -eq 'false' -and $r.PublishSingleFile -eq 'false' -and $r.RuntimeIdentifier -eq 'win-x64') 'Unexpected Release optimization or architecture.'
+Assert ($release.Items.AssemblyMetadata.Identity -notcontains 'CheckoutRoot' -and $release.Items.AssemblyMetadata.Identity -notcontains 'Phase1AWorkerPath') 'Release contains development path metadata.'
 $workerPoc = Read-Configuration 'PackagingWorkerPoC'
 $w = $workerPoc.Properties
 Assert ($w.WindowsPackageType -eq 'None' -and $w.EnableMsixTooling -eq 'false' -and $w.SelfContained -eq 'true' -and $w.WindowsAppSDKSelfContained -eq 'true') 'P2 must remain unpackaged and dual-self-contained.'

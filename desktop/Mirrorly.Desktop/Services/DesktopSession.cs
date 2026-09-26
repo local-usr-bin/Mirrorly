@@ -365,7 +365,7 @@ public sealed class DesktopSession(WorkerLaunch? launch, GuiDataPaths paths) : I
     }
 }
 
-#if !PACKAGING_POC && !PACKAGING_WORKER_POC
+#if !PACKAGING_POC && !PACKAGING_WORKER_POC && !PORTABLE_RELEASE
 public static class DesktopDevelopment
 {
     public static WorkerDevelopmentLaunch Launch => new(

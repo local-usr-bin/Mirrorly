@@ -15,7 +15,7 @@ the existing task catalog and authoritative latest-saved summary. It shares the
 same Backup coordinator; its Snapshots section reads production snapshot pages.
 
 One app-owned DesktopSession starts its qualified worker lazily. Development uses
-the explicit mirrorly-gui-dev interpreter; PackagingWorkerPoC uses payload-local Python.
+the explicit mirrorly-gui-dev interpreter; Release and PackagingWorkerPoC use payload-local Python.
 FakeWorkerClient, phase1a_worker and fixtures remain tests/design infrastructure only.
 Normal runtime never displays sample tasks/history or starts the fake worker.
 Debug diagnostics expose production observation, window sizing and true Exit.
@@ -32,6 +32,11 @@ isolated Python runtime and real production worker under `app/python` and
 `app/worker`; its GUI lives under `app/gui`. See
 [P2 worker deployment PoC](../docs/gui/WORKER_DEPLOYMENT_POC.md) for assembly,
 qualification and pending clean-VM acceptance. Neither PoC is final Release.
+The **Release** configuration now uses the proven unpackaged runtime and
+payload-local worker path. Build the complete portable folder with
+[Build-Portable.ps1](Build-Portable.ps1); see [portable Release](../docs/gui/PORTABLE_RELEASE.md)
+for its command, layout and remaining release acceptance. A GUI publish alone
+does not assemble Python/worker and is not a complete portable artifact.
 For a disposable Debug GUI smoke, use [Launch-DebugGui.ps1](Launch-DebugGui.ps1)
 with an absolute `-TestDataRoot`; it verifies that the current user's registered
 package points to this checkout before launching. Run

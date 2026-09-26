@@ -16,8 +16,9 @@ installer remain P2/P3/later work. Backup/Restore semantics are unchanged.
   Every application request fails before process startup or IPC send. Home shows
   unavailable facts, not fixture tasks or an empty successful catalog. The title
   says `GUI deployment PoC (worker disabled)`. No task data is loaded or written.
-- Normal **Release** does not opt into this isolation or unpackaged publishing;
-  it is still development-bound and is not ready for public distribution.
+- **Release** now promotes the proven unpackaged runtime setup with the real
+  payload-local worker; see [portable Release](PORTABLE_RELEASE.md). P1 remains
+  the independent worker-disabled regression path.
 
 The existing Home catalog-error projection had overwritten its technical details
 and fallen through to `Backup set up`. P1 retains that error and presents

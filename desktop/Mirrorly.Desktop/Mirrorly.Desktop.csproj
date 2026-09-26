@@ -21,8 +21,8 @@
     <AppxPackageDir>$(MSBuildThisFileDirectory)..\AppPackages\</AppxPackageDir>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
-  <!-- Separate P1/P2 experiments; neither changes Debug or production Release. -->
-  <PropertyGroup Condition="'$(Configuration)' == 'PackagingPoC' Or '$(Configuration)' == 'PackagingWorkerPoC'">
+  <!-- Release promotes the proven unpackaged runtime setup; Debug stays packaged. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'PackagingPoC' Or '$(Configuration)' == 'PackagingWorkerPoC'">
     <WindowsPackageType>None</WindowsPackageType>
     <EnableMsixTooling>false</EnableMsixTooling>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
@@ -31,6 +31,13 @@
     <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
     <PublishSingleFile>false</PublishSingleFile>
     <Optimize>true</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DefineConstants>$(DefineConstants);PORTABLE_RELEASE</DefineConstants>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <PublishDir>$(MSBuildThisFileDirectory)..\artifacts\portable\app\gui\</PublishDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'PackagingPoC'">
     <DefineConstants>$(DefineConstants);PACKAGING_POC</DefineConstants>
@@ -41,23 +48,24 @@
     <PublishDir>$(MSBuildThisFileDirectory)..\artifacts\packaging-worker-poc\app\gui\</PublishDir>
   </PropertyGroup>
   <ItemGroup>
-    <AssemblyMetadata Include="CheckoutRoot" Condition="'$(Configuration)' != 'PackagingPoC' And '$(Configuration)' != 'PackagingWorkerPoC'" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))" />
+    <AssemblyMetadata Include="DeploymentMode" Condition="'$(Configuration)' == 'Release'" Value="PortableRelease" />
+    <AssemblyMetadata Include="CheckoutRoot" Condition="'$(Configuration)' != 'Release' And '$(Configuration)' != 'PackagingPoC' And '$(Configuration)' != 'PackagingWorkerPoC'" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <Manifest Include="$(ApplicationManifest)" />
     <Content Include="Assets\*.png" />
     <Content Include="Assets\Decorations\*.svg" CopyToOutputDirectory="PreserveNewest" />
-    <ProjectCapability Include="Msix" Condition="'$(Configuration)' != 'PackagingPoC' And '$(Configuration)' != 'PackagingWorkerPoC'" />
+    <ProjectCapability Include="Msix" Condition="'$(Configuration)' != 'Release' And '$(Configuration)' != 'PackagingPoC' And '$(Configuration)' != 'PackagingWorkerPoC'" />
     <!-- Deliberately local prototype configuration; never resolves the editable core install. -->
-    <AssemblyMetadata Include="Phase1AWorkerPath" Condition="'$(Configuration)' != 'PackagingPoC' And '$(Configuration)' != 'PackagingWorkerPoC'" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\phase1a_worker\worker.py'))" />
+    <AssemblyMetadata Include="Phase1AWorkerPath" Condition="'$(Configuration)' != 'Release' And '$(Configuration)' != 'PackagingPoC' And '$(Configuration)' != 'PackagingWorkerPoC'" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\phase1a_worker\worker.py'))" />
   </ItemGroup>
-  <ItemGroup Condition="'$(Configuration)' == 'PackagingPoC' Or '$(Configuration)' == 'PackagingWorkerPoC'">
+  <ItemGroup Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'PackagingPoC' Or '$(Configuration)' == 'PackagingWorkerPoC'">
     <Compile Remove="Services\PrototypeConfiguration.cs" />
   </ItemGroup>
   <!-- This SDK emits app PRI/XBF into bin but omits them from dotnet Publish.
        Keep the generated resource layout intact; do not rewrite ms-appx URIs. -->
   <Target Name="PublishPackagingPocXamlResources" AfterTargets="ComputeFilesToPublish"
-          Condition="'$(Configuration)' == 'PackagingPoC' Or '$(Configuration)' == 'PackagingWorkerPoC'">
+          Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'PackagingPoC' Or '$(Configuration)' == 'PackagingWorkerPoC'">
     <Error Condition="!Exists('$(ProjectPriFullPath)')" Text="Packaging PoC requires the generated application PRI." />
     <ItemGroup>
       <ResolvedFileToPublish Include="$(ProjectPriFullPath)">
