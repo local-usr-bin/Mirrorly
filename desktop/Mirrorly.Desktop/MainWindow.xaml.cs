@@ -41,6 +41,12 @@ public sealed partial class MainWindow : Window
         restore.ConfirmStart = ConfirmRestoreStartAsync;
         setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
         InitializeComponent();
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Mirrorly.ico");
+        if (File.Exists(iconPath))
+        {
+            try { AppWindow.SetIcon(iconPath); }
+            catch (Exception error) { Debug.WriteLine($"Window icon unavailable: {error.Message}"); }
+        }
         if (SetupDiagnostics.Enabled) setup.ShellDiagnosticSnapshot = () =>
         {
             if (!DispatcherQueue.HasThreadAccess) return "HasThreadAccess=false";
@@ -92,7 +98,7 @@ public sealed partial class MainWindow : Window
 #endif
         try
         {
-            tray = new TrayService(WinRT.Interop.WindowNative.GetWindowHandle(this), Reopen,
+            tray = new TrayService(WinRT.Interop.WindowNative.GetWindowHandle(this), iconPath, Reopen,
                 () => DispatcherQueue.TryEnqueue(async () => await ExitAsync()));
         }
         catch (Exception error) { Debug.WriteLine($"Tray unavailable: {error.Message}. Close will use supervised Exit."); }

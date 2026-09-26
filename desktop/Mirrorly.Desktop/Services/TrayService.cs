@@ -12,27 +12,35 @@ public sealed class TrayService : IDisposable
     private readonly Action open;
     private readonly Action exit;
     private readonly uint taskbarCreated;
+    private readonly bool ownsIcon;
     private NotifyIconData icon;
     private bool disposed;
 
-    public TrayService(nint window, Action open, Action exit)
+    public TrayService(nint window, string iconPath, Action open, Action exit)
     {
         this.window = window;
         this.open = open;
         this.exit = exit;
         callback = WindowProc; // Root the delegate for the full native registration lifetime.
         taskbarCreated = RegisterWindowMessage("TaskbarCreated");
+        var image = LoadImage(0, iconPath, 1, GetSystemMetrics(49), GetSystemMetrics(50), 0x10);
+        ownsIcon = image != 0;
         icon = new NotifyIconData
         {
             Size = (uint)Marshal.SizeOf<NotifyIconData>(), Window = window, Id = 1,
             Flags = 1 | 2 | 4, CallbackMessage = CallbackMessage,
-            Icon = LoadIcon(0, (nint)32512), Tip = "Mirrorly",
+            Icon = ownsIcon ? image : LoadIcon(0, (nint)32512), Tip = "Mirrorly",
             Info = "", InfoTitle = ""
         };
-        if (!SetWindowSubclass(window, callback, 1, 0)) throw new Win32Exception();
+        if (!SetWindowSubclass(window, callback, 1, 0))
+        {
+            if (ownsIcon) DestroyIcon(icon.Icon);
+            throw new Win32Exception();
+        }
         if (!Shell_NotifyIcon(0, ref icon))
         {
             RemoveWindowSubclass(window, callback, 1);
+            if (ownsIcon) DestroyIcon(icon.Icon);
             throw new Win32Exception("Could not add Mirrorly to the notification area.");
         }
         SetIconVersion();
@@ -85,7 +93,8 @@ public sealed class TrayService : IDisposable
         disposed = true;
         Shell_NotifyIcon(2, ref icon);
         RemoveWindowSubclass(window, callback, 1);
-        // LoadIcon returns a shared system icon; do not DestroyIcon it.
+        if (ownsIcon) DestroyIcon(icon.Icon);
+        // The fallback LoadIcon returns a shared system icon; do not destroy it.
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -112,6 +121,9 @@ public sealed class TrayService : IDisposable
     [DllImport("comctl32.dll")] private static extern nint DefSubclassProc(nint hwnd, uint message, nuint wParam, nint lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterWindowMessage(string text);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint LoadIcon(nint instance, nint name);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint LoadImage(nint instance, string name, uint type, int width, int height, uint flags);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] private static extern bool DestroyIcon(nint handle);
     [DllImport("user32.dll")] private static extern nint CreatePopupMenu();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool AppendMenu(nint menu, uint flags, nuint id, string text);
     [DllImport("user32.dll")] private static extern bool DestroyMenu(nint menu);

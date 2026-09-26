@@ -5,6 +5,7 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Mirrorly.Desktop</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Mirrorly.ico</ApplicationIcon>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <UseWinUI>true</UseWinUI>
@@ -54,6 +55,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <Manifest Include="$(ApplicationManifest)" />
     <Content Include="Assets\*.png" />
+    <Content Include="Assets\Mirrorly.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Decorations\*.svg" CopyToOutputDirectory="PreserveNewest" />
     <ProjectCapability Include="Msix" Condition="'$(Configuration)' != 'Release' And '$(Configuration)' != 'PackagingPoC' And '$(Configuration)' != 'PackagingWorkerPoC'" />
     <!-- Deliberately local prototype configuration; never resolves the editable core install. -->

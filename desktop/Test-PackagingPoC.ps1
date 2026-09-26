@@ -52,6 +52,21 @@ foreach ($svg in Get-ChildItem (Join-Path $PSScriptRoot 'Mirrorly.Desktop/Assets
     $copy = Join-Path $PublishDirectory "Assets/Decorations/$($svg.Name)"
     Assert ((Test-Path -LiteralPath $copy) -and (Get-FileHash -LiteralPath $copy).Hash -eq (Get-FileHash -LiteralPath $svg.FullName).Hash) "SVG missing/changed: $($svg.Name)"
 }
+$iconSource = Join-Path $PSScriptRoot 'Mirrorly.Desktop/Assets/Mirrorly.ico'
+$iconPublish = Join-Path $PublishDirectory 'Assets/Mirrorly.ico'
+Assert ((Test-Path -LiteralPath $iconPublish -PathType Leaf) -and
+    (Get-FileHash -LiteralPath $iconPublish -Algorithm SHA256).Hash -eq
+    (Get-FileHash -LiteralPath $iconSource -Algorithm SHA256).Hash) 'Final window/tray icon missing or changed in publish.'
+Add-Type -AssemblyName System.Drawing
+$embeddedIcon = [Drawing.Icon]::ExtractAssociatedIcon((Join-Path $PublishDirectory 'Mirrorly.Desktop.exe'))
+Assert ($null -ne $embeddedIcon) 'Executable has no application icon.'
+try {
+    $image = $embeddedIcon.ToBitmap()
+    try {
+        $center = $image.GetPixel([int]($image.Width / 2), [int]($image.Height / 2))
+        Assert ($center.R -gt ($center.G + 30) -and $center.R -gt ($center.B + 30)) 'Executable icon is not the approved pink flower.'
+    } finally { $image.Dispose() }
+} finally { $embeddedIcon.Dispose() }
 $runtime = Get-Content -LiteralPath (Join-Path $PublishDirectory 'Mirrorly.Desktop.runtimeconfig.json') -Raw | ConvertFrom-Json
 Assert ($null -eq $runtime.runtimeOptions.framework -and $null -eq $runtime.runtimeOptions.frameworks -and $runtime.runtimeOptions.includedFrameworks.name -contains 'Microsoft.NETCore.App') 'Runtime config requires shared .NET.'
 # Read metadata without loading WinUI or starting an application/worker.
