@@ -39,7 +39,12 @@ public sealed partial class MainWindow : Window
         home = new(session, backup); backups = new(home.Model, session);
         detail = new(home.Model, session); setup = new(session); restore = new(session, backup, restoreExecution);
         restore.ConfirmStart = ConfirmRestoreStartAsync;
-        setup.Model.Created = async api => { await home.Model.RefreshCoreAsync(api); Navigate(ShellPage.Home); };
+        setup.Model.Created = async api => {
+            await home.Model.RefreshCoreAsync(api);
+            Navigate(ShellPage.Home);
+            if (setup.Model.CreatedConfigPath is { } configPath)
+                _ = home.Model.CheckCreatedSourceAsync(configPath);
+        };
         InitializeComponent();
         var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Mirrorly.ico");
         if (File.Exists(iconPath))

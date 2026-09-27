@@ -38,6 +38,7 @@ public sealed class BackupSetupViewModel : INotifyPropertyChanged
     public SetupState State { get; private set; } = SetupState.Choose;
     public string Message { get; private set; } = "Choose folders to begin.";
     public string TechnicalDetails { get; private set; } = "";
+    internal string? CreatedConfigPath { get; private set; }
     public string RepositoryPreview { get; private set; } = "Checked when you review this backup.";
     public bool IsChecking => working;
     public bool CanEdit => !working && !unsafeToRetry && !session.ExitPending;
@@ -121,6 +122,7 @@ public sealed class BackupSetupViewModel : INotifyPropertyChanged
         if (!CanCreate) return;
         var requiresApproval = State == SetupState.ApprovalRequired;
         var intent = Intent();
+        CreatedConfigPath = null;
         working = true; Changed();
         try
         {
@@ -149,6 +151,9 @@ public sealed class BackupSetupViewModel : INotifyPropertyChanged
                 var result = reply.GetProperty("result");
                 if (reply.GetProperty("error").ValueKind == JsonValueKind.Null && result.GetProperty("outcome").GetString() == "succeeded")
                 {
+                    var createdSetup = result.GetProperty("setup");
+                    CreatedConfigPath = createdSetup.TryGetProperty("config_path", out var configPath) &&
+                        configPath.ValueKind == JsonValueKind.String ? configPath.GetString() : null;
                     Set(SetupState.Succeeded, "Backup set up. No files have been backed up by setup.");
                     IsReview = false;
                     Source.ClearSelection(); Destination.ClearSelection();

@@ -7,7 +7,9 @@ using Mirrorly.Desktop.ViewModels;
 static class BackupQueueTests
 {
     private static BackupCatalog Catalog(params string[] selectors) => new(
-        selectors.Select(s => new ConfiguredBackup(s, s + ".toml", s, "source", "repository")).ToArray(), []);
+        selectors.Select(s => new ConfiguredBackup(s, s + ".toml", s, Path.GetTempPath(), "repository")).ToArray(), []);
+    private static void ApplyKnown(HomeViewModel model, BackupCatalog catalog) =>
+        model.ApplyCatalog(catalog, checkedSources: catalog.Tasks.ToDictionary(t => t.Selector, _ => true));
     private static WorkerReply Reply(string outcome = "succeeded", string? commit = "published") => new("1", "op",
         JsonSerializer.SerializeToElement(new { phase = "terminal", result = new { outcome,
             facts = new { commit_state = commit, snapshot_id = "snapshot" } }, error = (object?)null }));
@@ -29,7 +31,7 @@ static class BackupQueueTests
             var fake = new FakeDesktopSession { Catalog = Catalog("A", "B") };
             var a = Barrier(); fake.BackupBarriers.Enqueue(a);
             var coordinator = new BackupExecutionCoordinator(fake);
-            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
             var running = home.BackUpNowAsync("A");
             check(home.Overview("A").RunState == BackupTaskRunState.Running &&
                 home.Overview("B").CanBackUp && coordinator.QueuedSelectors.Count == 0);
@@ -60,7 +62,7 @@ static class BackupQueueTests
             await coordinator.StartAsync("B");
             check(coordinator.TaskState("B") == BackupTaskRunState.Queued && admissions.Count == 1);
             coordinator.Changed += () => { };
-            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
             check(admissions.Count == 1 && !policy.ShouldPlay(admissions[0], true, true, false));
             a.SetResult(Reply()); await running;
             await bAdmitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -113,7 +115,7 @@ static class BackupQueueTests
             fake.BackupBarriers.Enqueue(a); fake.BackupBarriers.Enqueue(f);
             var fStarted = Started(fake, "F");
             var coordinator = new BackupExecutionCoordinator(fake);
-            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
             check(home.Backups.Count == HomePolicy.ManyBackupPreviewLimit && !home.Backups.Any(b => b.Id == "F") &&
                 home.AllBackups.Count == 6 && home.AllBackups.Any(b => b.Id == "F"));
             var running = home.BackUpNowAsync("A");
@@ -138,7 +140,7 @@ static class BackupQueueTests
             fake.BackupBarriers.Enqueue(a); fake.BackupBarriers.Enqueue(c); fake.BackupBarriers.Enqueue(b);
             var cStarted = Started(fake, "C"); var bStarted = Started(fake, "B");
             var coordinator = new BackupExecutionCoordinator(fake);
-            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
             var running = home.BackUpNowAsync("A");
             await home.BackUpNowAsync("A"); await home.BackUpNowAsync("B");
             await home.BackUpNowAsync("C"); await home.BackUpNowAsync("B");
@@ -149,7 +151,7 @@ static class BackupQueueTests
                 coordinator.QueuedSelectors.SequenceEqual(["C"]));
             await home.BackUpNowAsync("B");
             check(coordinator.QueuedSelectors.SequenceEqual(["C", "B"]));
-            home.ApplyCatalog(Catalog("D", "B", "A", "C"));
+            ApplyKnown(home, Catalog("D", "B", "A", "C"));
             check(coordinator.QueuedSelectors.SequenceEqual(["C", "B"]));
             a.SetResult(Reply()); await running;
             await cStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -170,7 +172,7 @@ static class BackupQueueTests
                 fake.BackupBarriers.Enqueue(a); fake.BackupBarriers.Enqueue(b);
                 var bStarted = Started(fake, "B");
                 var coordinator = new BackupExecutionCoordinator(fake);
-                var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+                var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
                 var running = home.BackUpNowAsync("A"); await home.BackUpNowAsync("B");
                 a.SetResult(Reply(outcome, commit)); await running;
                 await bStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -216,7 +218,7 @@ static class BackupQueueTests
                 var fake = new FakeDesktopSession { Catalog = Catalog("A", "B") };
                 var a = Barrier(); fake.BackupBarriers.Enqueue(a);
                 var coordinator = new BackupExecutionCoordinator(fake);
-                var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+                var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
                 var running = home.BackUpNowAsync("A"); await home.BackUpNowAsync("B");
                 if (failure == "transport") a.SetException(new WorkerTransportUncertainException("lost terminal"));
                 else a.SetResult(Rejected(failure));
@@ -232,7 +234,7 @@ static class BackupQueueTests
             var fake = new FakeDesktopSession { Catalog = Catalog("A", "B", "C") };
             fake.BackupReplies.Enqueue(Reply());
             var coordinator = new BackupExecutionCoordinator(fake);
-            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
             await home.BackUpNowAsync("C");
             var previousC = coordinator.ResultFor("C")?.TechnicalDetails;
             var a = Barrier(); fake.BackupBarriers.Enqueue(a);
@@ -265,7 +267,7 @@ static class BackupQueueTests
             var fake = new FakeDesktopSession { Catalog = Catalog("A", "B", "C") };
             var a = Barrier(); fake.BackupBarriers.Enqueue(a);
             var coordinator = new BackupExecutionCoordinator(fake);
-            var home = new HomeViewModel(coordinator); home.ApplyCatalog(fake.Catalog);
+            var home = new HomeViewModel(coordinator); ApplyKnown(home, fake.Catalog);
             var decision = new TaskCompletionSource<ResumeAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
             coordinator.ResumePrompt = _ => decision.Task;
             var running = home.BackUpNowAsync("A");
@@ -337,6 +339,32 @@ static class BackupQueueTests
                 await VerifyRepositories(launch.Interpreter, root, ["A", "C"], check);
                 var summary = await ReadSummary(session, "B");
                 check(summary.SnapshotId is null);
+                check(await session.ExitAsync(() => Task.FromResult(true)));
+            }
+            finally { File.WriteAllText(Path.Combine(root, "release"), "go"); Directory.Delete(root, true); }
+        });
+
+        await test("Queued Backup whose source disappears cannot publish an empty version", async () =>
+        {
+            var root = Workspace("source-missing");
+            try
+            {
+                var session = new DesktopSession(Fixture(launch, "backup_block_scan", root), new(root));
+                await CreateTasks(session, root, "A", "B");
+                var coordinator = new BackupExecutionCoordinator(session);
+                var home = new HomeViewModel(coordinator); await home.RefreshAsync(session);
+                var bDone = TerminalFor(coordinator, session, "B");
+                var first = home.BackUpNowAsync("A"); await WaitForFile(Path.Combine(root, "entered"));
+                await home.BackUpNowAsync("B");
+                check(coordinator.QueuedSelectors.SequenceEqual(["B"]));
+                Directory.Move(Path.Combine(root, "B", "source"), Path.Combine(root, "B", "disconnected"));
+                File.WriteAllText(Path.Combine(root, "release"), "go");
+                await first; await bDone.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                check(coordinator.ResultFor("B") is { CommitState: "not_published", Stage: "source" });
+                check((await ReadSummary(session, "B")).SnapshotId is null);
+                Directory.Move(Path.Combine(root, "B", "disconnected"), Path.Combine(root, "B", "source"));
+                await home.RefreshAsync(session);
+                check(home.CanBackUpTask("B"));
                 check(await session.ExitAsync(() => Task.FromResult(true)));
             }
             finally { File.WriteAllText(Path.Combine(root, "release"), "go"); Directory.Delete(root, true); }

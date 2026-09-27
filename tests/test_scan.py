@@ -26,6 +26,13 @@ def _entry(size: int, mtime_ns: int, sha: str | None = None) -> PreviousEntry:
 
 
 class TestScanSource:
+    def test_missing_root_is_not_an_empty_source(self, tmp_path) -> None:
+        with pytest.raises(OSError):
+            scan_source(tmp_path / "disconnected", ())
+
+    def test_genuinely_empty_root_remains_valid(self, tmp_path) -> None:
+        assert scan_source(tmp_path, ()).entries == {}
+
     def test_empty_baseline_all_entries(self, tmp_path) -> None:
         _write(tmp_path / "a.txt", b"aaa")
         _write(tmp_path / "sub" / "b.txt", b"bb")

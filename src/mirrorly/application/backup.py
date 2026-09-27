@@ -6,6 +6,7 @@ They carry only existing notice/decision facts, never file/byte/phase progress.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -28,7 +29,7 @@ from ..manifest import (
 from ..recovery import build_resume_baseline, clean_tmp_residue
 from ..repo import RepoInfo, migrate_repo_to_v2
 from ..retention import apply_retention_plan, build_retention_plan
-from ..scan import ChangeSet, PreviousEntry, detect_changes, scan_source
+from ..scan import ChangeSet, PreviousEntry, detect_changes, scan_source, to_long_path
 from ..snapshot import SnapshotError, SnapshotResult, generate_snapshot_id, write_snapshot
 from . import locking, reports, repositories, tasks
 
@@ -94,6 +95,7 @@ class BackupFacts:
 
 BackupStage = Literal[
     "task",
+    "source",
     "repository",
     "relocation_notice",
     "locking",
@@ -308,6 +310,11 @@ def run_backup(
     try:
         cfg = tasks.resolve_task_config(request.config_root, request.task)
         facts = replace(facts, task=cfg)
+        stage = "source"
+        # Validate the live configured root before any repository transaction.
+        # An empty but readable directory is valid; an unreadable root is not.
+        with os.scandir(to_long_path(cfg.source)) as entries:
+            next(entries, None)
         stage = "repository"
         resolution = repositories.resolve_repo(cfg)
         repo = resolution.repo

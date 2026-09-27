@@ -132,6 +132,59 @@ def test_direct_success_preserves_report_representation_and_integrity(workspace,
     _assert_idle(initialized.repo)
 
 
+def test_missing_source_fails_before_repository_transaction_and_preserves_baseline(
+    workspace, tmp_path
+):
+    request, initialized = workspace
+    first = backup.run_backup(request)
+    source = Path(initialized.task.source)
+    disconnected = tmp_path / "disconnected"
+    source.rename(disconnected)
+
+    with pytest.raises(backup.BackupFailure) as caught:
+        backup.run_backup(request)
+    assert caught.value.stage == "source"
+    assert caught.value.facts.commit_state == "not_published"
+    assert caught.value.facts.snapshot_id is None
+    assert [item.snapshot_id for item in list_manifests(initialized.repo)] == [
+        first.facts.snapshot_id
+    ]
+
+    disconnected.rename(source)
+    recovered = backup.run_backup(request)
+    assert recovered.facts.materialization.linked == ("a.txt", "b.txt")
+    assert recovered.facts.materialization.copied == ()
+    assert recovered.facts.commit_state == "published"
+
+
+def test_source_disappearing_after_entry_check_fails_root_scan(workspace, tmp_path, monkeypatch):
+    request, initialized = workspace
+    first = backup.run_backup(request)
+    source = Path(initialized.task.source)
+    disconnected = tmp_path / "disconnected"
+    original_scan = backup.scan_source
+
+    def disconnect_before_scan(*args, **kwargs):
+        source.rename(disconnected)
+        return original_scan(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backup, "scan_source", disconnect_before_scan)
+        with pytest.raises(backup.BackupFailure) as caught:
+            backup.run_backup(request)
+    assert caught.value.stage == "scan"
+    assert caught.value.facts.commit_state == "not_published"
+    assert caught.value.facts.snapshot_id is None
+    assert [item.snapshot_id for item in list_manifests(initialized.repo)] == [
+        first.facts.snapshot_id
+    ]
+
+    disconnected.rename(source)
+    recovered = backup.run_backup(request)
+    assert recovered.facts.materialization.linked == ("a.txt", "b.txt")
+    assert recovered.facts.materialization.copied == ()
+
+
 def test_complete_with_scan_issues_is_not_collapsed_into_clean_success(workspace, monkeypatch):
     request, _ = workspace
     original = backup.scan_source

@@ -127,6 +127,10 @@ def scan_source(source: str | Path, exclude: Iterable[str]) -> ScanResult:
         try:
             it = os.scandir(to_long_path(dir_abs))
         except OSError as e:
+            if dir_rel is None:
+                # The configured root is not an empty source: its contents were
+                # never observed. Do not publish an empty complete snapshot.
+                raise
             skipped.append((dir_rel or ".", f"无法读取目录: {e.strerror or e}"))
             continue
         with it:

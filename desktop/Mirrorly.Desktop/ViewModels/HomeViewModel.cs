@@ -7,16 +7,24 @@ namespace Mirrorly.Desktop.ViewModels;
 public sealed class HomeViewModel : INotifyPropertyChanged
 {
     private readonly BackupExecutionCoordinator? execution;
+    private readonly Func<string, Task<bool>> sourceProbe;
     private readonly Dictionary<string, ConfiguredBackup> configured = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SavedBackupSummary> saved = new();
     private readonly Dictionary<string, string> summaryProblems = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, bool?> sourceAvailable = new(StringComparer.Ordinal);
     private string catalogDetails = "";
     private string catalogProblem = "";
     private string presentationDetails = "";
+    private bool checkingSources;
+    private int availabilityVersion;
+    private Task? availabilityTask;
+    private bool availabilityAgain;
     private string? selectedSelector;
-    public HomeViewModel(BackupExecutionCoordinator? execution = null)
+    public HomeViewModel(BackupExecutionCoordinator? execution = null) : this(execution, SourceAvailability.CheckAsync) { }
+    internal HomeViewModel(BackupExecutionCoordinator? execution, Func<string, Task<bool>> sourceProbe)
     {
         this.execution = execution;
+        this.sourceProbe = sourceProbe;
         if (execution is not null) execution.Changed += UpdateStatus;
     }
     public HomeScenario Scenario { get; private set; } = HomeScenario.Empty;
@@ -38,7 +46,8 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     public string PrototypeMessage { get; private set; } = "";
     public bool CanBackUp => selectedSelector is not null && CanBackUpTask(selectedSelector);
     public bool CanBackUpTask(string selector) => !DesignPreview && Loaded &&
-        Fixture.Backups.Any(b => b.Id == selector) && execution?.CanSchedule(selector) == true;
+        Fixture.Backups.Any(b => b.Id == selector) && sourceAvailable.GetValueOrDefault(selector) == true &&
+        execution?.CanSchedule(selector) == true;
     public string RestoreAdmissionMessage => execution?.RestoreUncertain == true
         ? "Restore status is uncertain. Do not start another operation until its outcome is known."
         : execution?.RestoreInProgress == true ? "Restore is in progress. Backups are unavailable until it finishes." : "";
@@ -53,13 +62,25 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         : IsBackingUp ? "This Backup is running. No cancellation or progress percentage is available."
         : execution?.HasActiveBackup == true ? "Add this Backup to the in-memory FIFO queue. It starts after the current Backup finishes."
         : execution?.ResultFor(selectedSelector ?? "")?.CommitState == "unknown" ? "Mirrorly cannot confirm whether this Backup's last version was saved."
+        : checkingSources ? "Checking source availability. Back up now will be available after Refresh finishes."
+        : selectedSelector is not null && sourceAvailable.GetValueOrDefault(selectedSelector) is null ? "Use Refresh to check whether this Backup's source folder is available."
         : "Start a real Backup. No progress percentage or cancellation is available.";
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed() => PropertyChanged?.Invoke(this, new(null));
     public async Task RefreshAsync(IDesktopSession session)
     {
         if (session.Busy || session.ExitPending) return;
-        try { await session.RunAsync(RefreshCoreAsync); }
+        // This explicit refresh invalidates the previous availability answer before
+        // backend I/O. Its filesystem probes run only after the session is released.
+        availabilityVersion++;
+        checkingSources = true;
+        sourceAvailable.Clear();
+        UpdateStatus();
+        try
+        {
+            await session.RunAsync(RefreshCoreAsync);
+            if (Loaded) await CheckSourcesAsync();
+        }
         catch (Exception error) { Unavailable(error); }
     }
     public async Task RefreshCoreAsync(ISetupApi api)
@@ -83,18 +104,84 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         }
         catch (Exception error) { Unavailable(error); }
     }
+    internal async Task CheckCreatedSourceAsync(string configPath)
+    {
+        // Setup's acknowledged config path identifies exactly one new catalog row.
+        // Do not recheck established tasks or hold the worker session for disk I/O.
+        var task = configured.Values.FirstOrDefault(value =>
+            string.Equals(value.ConfigPath, configPath, StringComparison.OrdinalIgnoreCase));
+        if (task is null || sourceAvailable.GetValueOrDefault(task.Selector) is not null) return;
+        SelectBackup(task.Selector);
+        var version = availabilityVersion;
+        bool available;
+        try { available = await sourceProbe(task.Source); }
+        catch (Exception) { available = false; }
+        if (version != availabilityVersion || !configured.TryGetValue(task.Selector, out var current) ||
+            current.ConfigPath != task.ConfigPath || current.Source != task.Source) return;
+        sourceAvailable[task.Selector] = available;
+        UpdateStatus();
+    }
+    private Task CheckSourcesAsync()
+    {
+        // At most one sequence of probes is in flight. Repeated explicit Refresh
+        // requests coalesce into one fresh pass after the older pass finishes.
+        if (availabilityTask is { IsCompleted: false })
+        {
+            availabilityAgain = true;
+            return availabilityTask;
+        }
+        availabilityTask = CheckSourcesLoopAsync();
+        return availabilityTask;
+    }
+    private async Task CheckSourcesLoopAsync()
+    {
+        do
+        {
+            availabilityAgain = false;
+            var version = availabilityVersion;
+            var sources = configured.Values.Select(task => (task.Selector, task.Source)).ToArray();
+            var results = new Dictionary<string, bool>(StringComparer.Ordinal);
+            foreach (var (selector, source) in sources)
+            {
+                try { results[selector] = await sourceProbe(source); }
+                catch (Exception) { results[selector] = false; }
+                if (version != availabilityVersion) break; // Do not touch more disks for an obsolete pass.
+            }
+            if (version == availabilityVersion && Loaded)
+            {
+                foreach (var (selector, source) in sources)
+                    if (configured.TryGetValue(selector, out var current) && current.Source == source)
+                        sourceAvailable[selector] = results[selector];
+                checkingSources = false;
+                UpdateStatus();
+            }
+        } while (availabilityAgain);
+    }
     private void Unavailable(Exception error)
     {
         Loaded = false;
+        checkingSources = false;
+        sourceAvailable.Clear();
         catalogProblem = "Mirrorly couldn't refresh your configured backups. View technical details, then use Refresh to try reading again.";
         catalogDetails = error.ToString(); UpdateStatus();
     }
     public void ApplyCatalog(BackupCatalog catalog, IReadOnlyDictionary<string, SavedBackupSummary>? summaries = null,
-        IReadOnlyDictionary<string, string>? errors = null)
+        IReadOnlyDictionary<string, string>? errors = null,
+        IReadOnlyDictionary<string, bool>? checkedSources = null)
     {
         DesignPreview = false; Loaded = true;
+        var previousSources = configured.ToDictionary(pair => pair.Key, pair => pair.Value.Source, StringComparer.Ordinal);
+        var previousAvailability = new Dictionary<string, bool?>(sourceAvailable, StringComparer.Ordinal);
         configured.Clear();
         foreach (var task in catalog.Tasks) configured[task.Selector] = task;
+        sourceAvailable.Clear();
+        foreach (var task in catalog.Tasks)
+            // Catalog/summary refresh keeps only a check for the same configured
+            // source. A new or changed source waits for an explicit Refresh.
+            sourceAvailable[task.Selector] = checkedSources?.TryGetValue(task.Selector, out var known) == true ? known
+                : execution is null ? true
+                : previousSources.TryGetValue(task.Selector, out var oldSource) && oldSource == task.Source &&
+                    previousAvailability.TryGetValue(task.Selector, out var previous) ? previous : null;
         saved.Clear();
         if (summaries is not null) foreach (var pair in summaries) saved[pair.Key] = pair.Value;
         summaryProblems.Clear();
@@ -136,6 +223,10 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         var attention = queuePaused ? Problem : summaryUnavailable
             ? "Mirrorly couldn't read the repository or saved-version summary. No saved-version count is known."
             : "";
+        if (!checkingSources && sourceAvailable.GetValueOrDefault(selector) == false)
+            attention = "Source unavailable. Connect the source drive, then Refresh to try again.";
+        else if (!checkingSources && sourceAvailable.GetValueOrDefault(selector) is null)
+            attention = "Source availability has not been checked. Use Refresh before starting this Backup.";
         var operation = queuePaused ? execution?.Result?.TechnicalDetails : execution?.ResultFor(selector)?.TechnicalDetails;
         summaryProblems.TryGetValue(selector, out var summaryError);
         return new(summaryUnavailable ? BackupOverviewAvailability.SummaryUnavailable : BackupOverviewAvailability.Available,
@@ -162,6 +253,11 @@ public sealed class HomeViewModel : INotifyPropertyChanged
         if (execution?.QueueAttention == BackupQueueAttention.UnreportedTerminal)
             return new("Backup result not fully reported", "Mirrorly couldn't read the Backup result.",
                 "Queued Backups will not start automatically. View technical details before starting more work.", "Back up now", StatusTone.Warning, "⚠");
+        if (selectedSelector is not null && configured.ContainsKey(selectedSelector) &&
+            !checkingSources && sourceAvailable.GetValueOrDefault(selectedSelector) == false &&
+            RunState(selectedSelector) == BackupTaskRunState.Idle)
+            return new("Source unavailable", "Mirrorly can't read this Backup's source folder right now.",
+                "Connect the source drive, then Refresh to try again.", "Back up now", StatusTone.Warning, "⚠");
         if (selectedSelector is not null && execution is { } active)
         {
             if (active.TaskState(selectedSelector) == BackupTaskRunState.Queued)
@@ -221,6 +317,9 @@ public sealed class HomeViewModel : INotifyPropertyChanged
     private BackupPresentation WithExecutionState(BackupPresentation backup)
     {
         if (execution is null || DesignPreview) return backup;
+        if (!checkingSources && execution.TaskState(backup.Id) == BackupTaskRunState.Idle &&
+            sourceAvailable.GetValueOrDefault(backup.Id) == false)
+            return backup with { Status = "Source unavailable", Tone = StatusTone.Warning };
         return execution.TaskState(backup.Id) switch
         {
             BackupTaskRunState.Running => backup with { Status = "Backing up…", Tone = StatusTone.Working },

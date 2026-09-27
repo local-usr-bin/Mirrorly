@@ -10,6 +10,7 @@
     <Compile Include="..\Mirrorly.Desktop\Services\FolderNavigationDiagnostics.cs" Link="Services\FolderNavigationDiagnostics.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\ProductionPayloadPaths.cs" Link="Services\ProductionPayloadPaths.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\DesktopSession.cs" Link="Services\DesktopSession.cs" />
+    <Compile Include="..\Mirrorly.Desktop\Services\SourceAvailability.cs" Link="Services\SourceAvailability.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\BackupExecutionCoordinator.cs" Link="Services\BackupExecutionCoordinator.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\RestoreExecutionCoordinator.cs" Link="Services\RestoreExecutionCoordinator.cs" />
     <Compile Include="..\Mirrorly.Desktop\Services\GuiDataPaths.cs" Link="Services\GuiDataPaths.cs" />

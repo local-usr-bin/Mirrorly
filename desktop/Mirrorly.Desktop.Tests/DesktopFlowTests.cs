@@ -166,11 +166,12 @@ sealed class FakeDesktopSession : IDesktopSession, ISetupApi
     public event Action<string>? BackupStarted;
     public string? LastBackupSelector { get; private set; }
     public BackupCatalog Catalog { get; set; } = new([], []);
+    public TaskCompletionSource<BackupCatalog>? CatalogBarrier;
     public Dictionary<string, SavedBackupSummary> Summaries { get; } = new();
     public async Task RunAsync(Func<ISetupApi, Task> action) { if (Busy || ExitPending) throw new InvalidOperationException(); Busy = true; Changed?.Invoke(); try { await action(this); } finally { Busy = false; Changed?.Invoke(); } }
     public Task<JsonElement> PreflightAsync(SetupPreflightIntent intent) { Checks++; LastIntent = intent; return Task.FromResult(Preflight); }
     public Task<JsonElement> CreateAsync(SetupCreateIntent intent) { Creates++; Approvals.Add(intent.copy_mode_approved); return CreateError is not null ? Task.FromException<JsonElement>(CreateError) : Barrier?.Task ?? Task.FromResult(Replies.Count > 0 ? Replies.Dequeue() : Success()); }
-    public Task<BackupCatalog> CatalogAsync() => Task.FromResult(Catalog);
+    public Task<BackupCatalog> CatalogAsync() => CatalogBarrier?.Task ?? Task.FromResult(Catalog);
     public Task<SavedBackupSummary> BackupSummaryAsync(string selector) => Task.FromResult(
         Summaries.TryGetValue(selector, out var saved) ? saved : new(selector, "configured repo", "repo-id", null, null, null, null));
     public Task<SnapshotCollectionPage> SnapshotPageAsync(string selector, string? after = null, int limit = 16) =>
