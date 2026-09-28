@@ -1,0 +1,581 @@
+{
+  "schema": 1,
+  "basis": "Gate 6A and Gate 6A.1; source RC 1a1a9586b0d9ad1ca6359e1960b6b3fef83121c6",
+  "files": [
+    {
+      "path": "licenses/dotnet/LICENSE.TXT",
+      "sha256": "d7a68596ab69b06f51ca278a6545148e4269a9381c26d597c13df5d88e08cf5b",
+      "component": "microsoft.netcore.app.runtime.win-x64",
+      "version": "10.0.12",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "nuget:microsoft.netcore.app.runtime.win-x64/10.0.12/LICENSE.TXT",
+          "sha256": "d7a68596ab69b06f51ca278a6545148e4269a9381c26d597c13df5d88e08cf5b"
+        }
+      ]
+    },
+    {
+      "path": "licenses/dotnet/THIRD-PARTY-NOTICES.TXT",
+      "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+      "component": "microsoft.netcore.app.runtime.win-x64",
+      "version": "10.0.12",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "nuget:microsoft.netcore.app.runtime.win-x64/10.0.12/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21"
+        }
+      ]
+    },
+    {
+      "path": "licenses/tensors/THIRD-PARTY-NOTICES.TXT",
+      "sha256": "40686c6447a7d5b5d3693068e4571b5f483d7ed335aeee773ef662440de4c5d5",
+      "component": "system.numerics.tensors",
+      "version": "9.0.0",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "nuget:system.numerics.tensors/9.0.0/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "40686c6447a7d5b5d3693068e4571b5f483d7ed335aeee773ef662440de4c5d5"
+        }
+      ]
+    },
+    {
+      "path": "licenses/windowsappsdk/LICENSE.txt",
+      "sha256": "5b11e6347756e40fe0274bc08c97f89201b94f0d50181a09a00f1f4740840501",
+      "component": "microsoft.windowsappsdk.runtime",
+      "version": "2.5.1",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "nuget:microsoft.windowsappsdk.runtime/2.5.1/license.txt",
+          "sha256": "5b11e6347756e40fe0274bc08c97f89201b94f0d50181a09a00f1f4740840501"
+        }
+      ]
+    },
+    {
+      "path": "licenses/windowsappsdk/NOTICE.txt",
+      "sha256": "572b43d41dea717dae7dc5de69acb20a74df025e8f5a3c0aa6f7bca02615e23c",
+      "component": "microsoft.windowsappsdk.runtime",
+      "version": "2.5.1",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "nuget:microsoft.windowsappsdk.runtime/2.5.1/NOTICE.txt",
+          "sha256": "572b43d41dea717dae7dc5de69acb20a74df025e8f5a3c0aa6f7bca02615e23c"
+        }
+      ]
+    },
+    {
+      "path": "licenses/windowsml/LICENSE.txt",
+      "sha256": "66395f8cb219087fae2bd025010bd9076b736c14f03b48f20295471c0c376814",
+      "component": "microsoft.windows.ai.machinelearning",
+      "version": "2.1.74",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "nuget:microsoft.windows.ai.machinelearning/2.1.74/license.txt",
+          "sha256": "66395f8cb219087fae2bd025010bd9076b736c14f03b48f20295471c0c376814"
+        }
+      ]
+    },
+    {
+      "path": "licenses/webview2/LICENSE.txt",
+      "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55",
+      "component": "microsoft.web.webview2",
+      "version": "1.0.3719.77",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "nuget:microsoft.web.webview2/1.0.3719.77/LICENSE.txt",
+          "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
+        }
+      ]
+    },
+    {
+      "path": "licenses/dotnet/NET-LIBRARY-LICENSE.html",
+      "sha256": "0f69be2c8ac44c3980047664c3347ff22cba5842dc9d8b0a88a4f0914645a780",
+      "component": "Microsoft .NET Library",
+      "version": "10.0.12 Windows binary terms",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "https://dotnet.microsoft.com/en-us/dotnet_library_license.htm",
+          "sha256": "0f69be2c8ac44c3980047664c3347ff22cba5842dc9d8b0a88a4f0914645a780"
+        }
+      ]
+    },
+    {
+      "path": "licenses/windows-sdk/LICENSE.rtf",
+      "sha256": "dd07eb178e00c6bba4148457fc00ff77cd4887eb521d504186fe59c9ec8bbe62",
+      "component": "Windows SDK",
+      "version": "10.0.19041.57 projection / 10.0.26100.0 UCRT",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "https://download.microsoft.com/download/0/F/F/0FF2B061-47DD-4F55-89B6-FD1D8C44F14D/sdk_license.rtf",
+          "sha256": "dd07eb178e00c6bba4148457fc00ff77cd4887eb521d504186fe59c9ec8bbe62"
+        }
+      ]
+    },
+    {
+      "path": "licenses/microsoft/MIT.txt",
+      "sha256": "9906940f61b1f0b533fa7d99baf55178b2808fbe113ea51dfbfad8572ccd5f2b",
+      "component": "C#/WinRT",
+      "version": "2.2.0.48161",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "https://raw.githubusercontent.com/microsoft/CsWinRT/8649ee3eeb2445ca2a36d80d878ef60b96a6c65d/LICENSE",
+          "sha256": "9906940f61b1f0b533fa7d99baf55178b2808fbe113ea51dfbfad8572ccd5f2b"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Azure-Samples/azure-maps-html-marker-layer/cbe13b354c5b2f8bf8c6cd6e9e8c679756c14f99/LICENSE.md",
+          "sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb",
+          "component": "azure-maps-html-marker-layer",
+          "version": "0.0.1",
+          "comparison": "identical text after CRLF/LF and final newline normalization; output preserves CsWinRT original bytes"
+        }
+      ]
+    },
+    {
+      "path": "licenses/python/EXPAT-COPYING.txt",
+      "sha256": "73cc92f80889ab23c7287b1a11dd50fdec190c3f26ebe5938c579043817d651e",
+      "component": "Expat",
+      "version": "2.8.2",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "https://raw.githubusercontent.com/libexpat/libexpat/R_2_8_2/COPYING",
+          "sha256": "73cc92f80889ab23c7287b1a11dd50fdec190c3f26ebe5938c579043817d651e"
+        }
+      ]
+    },
+    {
+      "path": "licenses/python/MPDECIMAL-COPYRIGHT.txt",
+      "sha256": "2713324211652ce4a60e6e21e54f9dc3004299e591b0933a352f1a89c5fb53c2",
+      "component": "mpdecimal",
+      "version": "4.0.0",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython-source-deps/mpdecimal-4.0.0/COPYRIGHT.txt",
+          "sha256": "2713324211652ce4a60e6e21e54f9dc3004299e591b0933a352f1a89c5fb53c2"
+        }
+      ]
+    },
+    {
+      "path": "licenses/python/INCORPORATED-NOTICES.txt",
+      "sha256": "70da3455404ac8f6641cb790cc759d2af3f5db970b3f9e7c5d98a46975ff9825",
+      "component": "CPython incorporated software",
+      "version": "3.13.15",
+      "method": "verbatim selected sections with source heading",
+      "sources": [
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Doc/license.rst",
+          "sha256": "952ac05720d7f1dcb63589b35eb0931b1442eb250230a4ad31198eddf0ad6abc",
+          "sections": [
+            "Mersenne Twister",
+            "Cookie management",
+            "Execution tracing",
+            "UUencode and UUdecode functions",
+            "XML Remote Procedure Calls",
+            "SipHash24",
+            "strtod and dtoa",
+            "cfuhash",
+            "mimalloc",
+            "asyncio",
+            "Global Unbounded Sequences (GUS)",
+            "Unicode Character Database"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "licenses/python/HACL-NOTICES.txt",
+      "sha256": "21d70c0242c5ebb745aa1a677aa4b2809a818a545c36b11b5fe5d6d40e9758c5",
+      "component": "CPython vendored HACL* / KreMLin",
+      "version": "3.13.15",
+      "method": "verbatim initial license comments, deduplicated with source headings",
+      "sources": [
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/Hacl_Hash_MD5.c",
+          "sha256": "f71cf6a0e8f09354c2af2c785a1d36e0cba7613a589be01ca8a3d8478f4c8874",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/Hacl_Hash_SHA1.c",
+          "sha256": "5b29bd9951646861e0e19427be5d923a5bab7a4516824ccc068f696469195eec",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/Hacl_Hash_SHA2.c",
+          "sha256": "30638efb75c8b185bb09c3df6977e3f3c5d21a1e696218cf7ade6bc4d5201b31",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/Hacl_Hash_SHA3.c",
+          "sha256": "17c0db96d40d1849f02546d5f55428fa89b61b07748d5b5df45cec25c5f29c0f",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/include/krml/lowstar_endianness.h",
+          "sha256": "3734c7942bec9a434e16df069fa45bdcb84b130f14417bc5f7bfe8546272d9f5",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/include/krml/internal/target.h",
+          "sha256": "d16a59f37a1d4982626870e370889eb9d332a9ad035661b8062f549fc734d061",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/include/krml/FStar_UInt128_Verified.h",
+          "sha256": "455e94f24a0900deda7e6e36f4714e4253d32cea077f97e23f90c569a717bc48",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/include/krml/FStar_UInt_8_16_32_64.h",
+          "sha256": "65decdb74c24049aa19430462a51219250cfc65d8c162778e42df88b3142fa42",
+          "selection": "initial license comment"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/python/cpython/v3.13.15/Modules/_hacl/include/krml/fstar_uint128_struct_endianness.h",
+          "sha256": "fe57e1bc5ce3224d106e36cb8829b5399c63a68a70b0ccd0c91d82a4565c8869",
+          "selection": "initial license comment"
+        }
+      ]
+    },
+    {
+      "path": "licenses/blake3/RUNTIME-NOTICES.txt",
+      "sha256": "9f4d6cafe1106e61d64dd32598970f889c9f62d974b628136caa90e950e3e780",
+      "component": "BLAKE3 runtime crates",
+      "version": "1.0.9 Windows cp313",
+      "method": "verbatim license blocks, deduplicated with component headings",
+      "sources": [
+        {
+          "source": "https://static.crates.io/crates/arrayref/arrayref-0.3.9.crate",
+          "sha256": "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb",
+          "member": "arrayref-0.3.9/LICENSE",
+          "member_sha256": "1bc7e6f475b3ec99b7e2643411950ae2368c250dd4c5c325f80f9811362a94a1"
+        },
+        {
+          "source": "https://static.crates.io/crates/arrayvec/arrayvec-0.7.7.crate",
+          "sha256": "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe",
+          "member": "arrayvec-0.7.7/LICENSE-MIT",
+          "member_sha256": "4da95ec4ecb65b738d470b7d762894ad9c97da93e6cbfb18b570fc2c96f4b871"
+        },
+        {
+          "source": "https://static.crates.io/crates/cfg-if/cfg-if-1.0.4.crate",
+          "sha256": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801",
+          "member": "cfg-if-1.0.4/LICENSE-MIT",
+          "member_sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        },
+        {
+          "source": "https://static.crates.io/crates/cpufeatures/cpufeatures-0.3.0.crate",
+          "sha256": "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201",
+          "member": "cpufeatures-0.3.0/LICENSE-MIT",
+          "member_sha256": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985"
+        },
+        {
+          "source": "https://static.crates.io/crates/crossbeam-deque/crossbeam-deque-0.8.6.crate",
+          "sha256": "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51",
+          "member": "crossbeam-deque-0.8.6/LICENSE-MIT",
+          "member_sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        },
+        {
+          "source": "https://static.crates.io/crates/crossbeam-epoch/crossbeam-epoch-0.9.18.crate",
+          "sha256": "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e",
+          "member": "crossbeam-epoch-0.9.18/LICENSE-MIT",
+          "member_sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        },
+        {
+          "source": "https://static.crates.io/crates/crossbeam-utils/crossbeam-utils-0.8.21.crate",
+          "sha256": "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28",
+          "member": "crossbeam-utils-0.8.21/LICENSE-MIT",
+          "member_sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        },
+        {
+          "source": "https://static.crates.io/crates/either/either-1.16.0.crate",
+          "sha256": "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e",
+          "member": "either-1.16.0/LICENSE-MIT",
+          "member_sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545"
+        },
+        {
+          "source": "https://static.crates.io/crates/hex/hex-0.4.3.crate",
+          "sha256": "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70",
+          "member": "hex-0.4.3/LICENSE-MIT",
+          "member_sha256": "f7bdb3426d045cd50efd4953026e3eb5a83d0199f458a075602611b9344da5b9"
+        },
+        {
+          "source": "https://static.crates.io/crates/libc/libc-0.2.186.crate",
+          "sha256": "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66",
+          "member": "libc-0.2.186/LICENSE-MIT",
+          "member_sha256": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e"
+        },
+        {
+          "source": "https://static.crates.io/crates/memmap2/memmap2-0.9.11.crate",
+          "sha256": "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0",
+          "member": "memmap2-0.9.11/LICENSE-MIT",
+          "member_sha256": "0d25d03b5ab49576178ad0cae7a2648d12c17ad0452fe49c07e55e4b59aa5257"
+        },
+        {
+          "source": "https://static.crates.io/crates/once_cell/once_cell-1.21.4.crate",
+          "sha256": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50",
+          "member": "once_cell-1.21.4/LICENSE-MIT",
+          "member_sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "source": "https://static.crates.io/crates/pyo3/pyo3-0.29.0.crate",
+          "sha256": "cd274650b21d4bfc26a0a47587962c1edb425f69287324355cd040c3ea66071c",
+          "member": "pyo3-0.29.0/LICENSE-MIT",
+          "member_sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        },
+        {
+          "source": "https://static.crates.io/crates/pyo3-ffi/pyo3-ffi-0.29.0.crate",
+          "sha256": "ca85c467da1bbc8d866eea5deff9cf29ea5f7785054a17da36e65bda9c05845b",
+          "member": "pyo3-ffi-0.29.0/LICENSE-MIT",
+          "member_sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        },
+        {
+          "source": "https://static.crates.io/crates/rayon/rayon-1.12.0.crate",
+          "sha256": "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d",
+          "member": "rayon-1.12.0/LICENSE-MIT",
+          "member_sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"
+        },
+        {
+          "source": "https://static.crates.io/crates/rayon-core/rayon-core-1.13.0.crate",
+          "sha256": "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91",
+          "member": "rayon-core-1.13.0/LICENSE-MIT",
+          "member_sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"
+        }
+      ]
+    },
+    {
+      "path": "licenses/rust/COPYRIGHT-library.html",
+      "sha256": "78c163fcec50e64bfd85fedb850c273595602fafa2b41f30f75d4e410b80ee83",
+      "component": "Rust standard library",
+      "version": "1.96.0",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "https://static.rust-lang.org/dist/2026-05-28/rustc-1.96.0-x86_64-pc-windows-msvc.tar.xz",
+          "sha256": "cfba935dbd6d0deaf0a02339f9b6c0573b30f41697919ba7532b60ef2e6306b4",
+          "member": "rustc-1.96.0-x86_64-pc-windows-msvc/rustc/share/doc/rust/COPYRIGHT-library.html",
+          "member_sha256": "78c163fcec50e64bfd85fedb850c273595602fafa2b41f30f75d4e410b80ee83"
+        }
+      ]
+    },
+    {
+      "path": "licenses/rust/LICENSE-MIT",
+      "sha256": "b71bd43a069ca0641a9ecfe585ca7b3c53b5cc1608f8b68321168698e28b5ea1",
+      "component": "Rust standard library",
+      "version": "1.96.0",
+      "method": "verbatim",
+      "sources": [
+        {
+          "source": "https://static.rust-lang.org/dist/2026-05-28/rustc-1.96.0-x86_64-pc-windows-msvc.tar.xz",
+          "sha256": "cfba935dbd6d0deaf0a02339f9b6c0573b30f41697919ba7532b60ef2e6306b4",
+          "member": "rustc-1.96.0-x86_64-pc-windows-msvc/LICENSE-MIT",
+          "member_sha256": "b71bd43a069ca0641a9ecfe585ca7b3c53b5cc1608f8b68321168698e28b5ea1"
+        }
+      ]
+    },
+    {
+      "path": "THIRD-PARTY-NOTICES.txt",
+      "sha256": "b501b5d8d8f72cdc703ce5cb7bb00f17f08dc0588f7b1e6f75180893b725b76e",
+      "component": "Mirrorly component index",
+      "version": "Gate 6A + 6A.1",
+      "method": "Mirrorly-authored scope/index; original terms are referenced, not rewritten",
+      "sources": [
+        {
+          "source": "Gate 6A / Gate 6A.1 approved specification; primary links in document"
+        }
+      ]
+    },
+    {
+      "path": "THIRD-PARTY-SOFTWARE-TERMS.txt",
+      "sha256": "2f2bb625490cbd85c1550366a550ff01ccc0b2013481db7e7893b8d42c3c6d1d",
+      "component": "Mirrorly third-party terms scope",
+      "version": "Gate 6A + 6A.1",
+      "method": "Mirrorly-authored scope/index; original terms are referenced, not rewritten",
+      "sources": [
+        {
+          "source": "Gate 6A / Gate 6A.1 approved specification; primary links in document"
+        }
+      ]
+    },
+    {
+      "path": "licenses/windowsml/SOURCE-AVAILABILITY.txt",
+      "sha256": "8ce52b1c59a197a95664be69c0f26409af0d2241345535f27f71ead7ec78421f",
+      "component": "Eigen source availability",
+      "version": "Windows ML 2.1.74 / ORT 1.24.6",
+      "method": "Mirrorly-authored scope/index; original terms are referenced, not rewritten",
+      "sources": [
+        {
+          "source": "Gate 6A / Gate 6A.1 approved specification; primary links in document"
+        }
+      ]
+    }
+  ],
+  "blake3_runtime_crates": {
+    "arrayref": "0.3.9",
+    "arrayvec": "0.7.7",
+    "cfg-if": "1.0.4",
+    "cpufeatures": "0.3.0",
+    "crossbeam-deque": "0.8.6",
+    "crossbeam-epoch": "0.9.18",
+    "crossbeam-utils": "0.8.21",
+    "either": "1.16.0",
+    "hex": "0.4.3",
+    "libc": "0.2.186",
+    "memmap2": "0.9.11",
+    "once_cell": "1.21.4",
+    "pyo3": "0.29.0",
+    "pyo3-ffi": "0.29.0",
+    "rayon": "1.12.0",
+    "rayon-core": "1.13.0"
+  },
+  "expected_deps_libraries": [
+    "runtimepack.Microsoft.NETCore.App.Runtime.win-x64/10.0.12",
+    "runtimepack.Microsoft.Windows.SDK.NET.Ref/10.0.19041.57",
+    "Microsoft.Web.WebView2/1.0.3719.77",
+    "Microsoft.Windows.AI.MachineLearning/2.1.74",
+    "Microsoft.WindowsAppSDK/2.5.1",
+    "Microsoft.WindowsAppSDK.AI/2.5.5",
+    "Microsoft.WindowsAppSDK.Foundation/2.3.12",
+    "Microsoft.WindowsAppSDK.InteractiveExperiences/2.1.9",
+    "Microsoft.WindowsAppSDK.ML/2.1.94",
+    "Microsoft.WindowsAppSDK.Search/2.5.5",
+    "Microsoft.WindowsAppSDK.Widgets/2.0.5",
+    "Microsoft.WindowsAppSDK.WinUI/2.3.9",
+    "System.Numerics.Tensors/9.0.0",
+    "Microsoft.Web.WebView2.Core.Projection/1.0.3719.77"
+  ],
+  "preserved_licenses": [
+    {
+      "path": "app/python/LICENSE.txt",
+      "sha256": "62bec384df47b0328307db41455ff6ea2559e5546b394ac69148561b21703120"
+    },
+    {
+      "path": "app/python/packages/blake3-1.0.9.dist-info/licenses/LICENSE",
+      "sha256": "ec0404d8e25af25dda85d3cfd110fe7e758852b84f26fba9f26ee9499b24fc12"
+    }
+  ],
+  "payload_evidence": [
+    {
+      "path": "app/gui/coreclr.dll",
+      "sha256": "128aee8c62a673d64739e585e3876b61133571cec83a46240a62581d5465639b"
+    },
+    {
+      "path": "app/gui/hostfxr.dll",
+      "sha256": "838591885c5396fb0588a3aedc2f3e841d3afc67570868b1bce615264005a44c"
+    },
+    {
+      "path": "app/gui/hostpolicy.dll",
+      "sha256": "e92a2e71eeeaf7c574e905935b3e3724ef29bade44317659dbe06f505e99dbe0"
+    },
+    {
+      "path": "app/gui/Microsoft.DiaSymReader.Native.amd64.dll",
+      "sha256": "70e4b89978ce57ef87b28f4921f3140c383b04aa96e7f3bdb3c4ebb898fd8a72"
+    },
+    {
+      "path": "app/gui/WinRT.Runtime.dll",
+      "sha256": "bcf3a14e8712a90837fc5c0d8c8a24696af2bd7f74e9767597ec81ededfb23db"
+    },
+    {
+      "path": "app/gui/Microsoft.Windows.SDK.NET.dll",
+      "sha256": "0ec371d93798852e36461c8adddbeadce0f963a04752f0b64e54fe19c1c834a7"
+    },
+    {
+      "path": "app/gui/System.Numerics.Tensors.dll",
+      "sha256": "9d96dc759fdb54cbc3c26ee65cfd78ff32e3745f418119cc0811e63d3f29ecb9"
+    },
+    {
+      "path": "app/gui/Microsoft.UI.Xaml.dll",
+      "sha256": "aad12524765e6fb63f0ae26a45a9ba3104f24fde66413d8a3036fbed74a1e990"
+    },
+    {
+      "path": "app/gui/Microsoft.WindowsAppRuntime.dll",
+      "sha256": "ff2139e2e4a454a23ea624717cd7f867fd8ed92b54f718657159452cd59440ff"
+    },
+    {
+      "path": "app/gui/DWriteCore.dll",
+      "sha256": "426674b9c74612bd2a29d0812212faf0641ad93a48521aeb58eb9a50fac8708d"
+    },
+    {
+      "path": "app/gui/Microsoft.InteractiveExperiences.Projection.dll",
+      "sha256": "588f22ec752374bc7fbc8c4dd53a1eee36850eaaad94d175da09d3caeda1395a"
+    },
+    {
+      "path": "app/gui/Microsoft.Windows.Widgets.dll",
+      "sha256": "86aa4b3fc152adbc8bb10b58c069d5423c03542a9794bffbed27f7605aa32b81"
+    },
+    {
+      "path": "app/gui/Microsoft.Windows.AI.Search.Experimental.dll",
+      "sha256": "6b14fb942a6c47364c4a1a8f98466d4b2b441ae79408f8b001c0342459dbcda6"
+    },
+    {
+      "path": "app/gui/Microsoft.Windows.AI.MachineLearning.dll",
+      "sha256": "bbbb34415d8ce303f8a2a2c524c46bd749e21423ccabeb7d38c5fc7334a7848f"
+    },
+    {
+      "path": "app/gui/Microsoft.ML.OnnxRuntime.dll",
+      "sha256": "3a54782bfcaad084c528bee89e34584660ec31770b7eff8c28b7d253a0a36c9a"
+    },
+    {
+      "path": "app/gui/onnxruntime.dll",
+      "sha256": "3cffeff2d7c25b247a814212baab70eb1f37d727335d4c813ed73785df80a794"
+    },
+    {
+      "path": "app/gui/DirectML.dll",
+      "sha256": "257c75b2f607940c986d0b96d9309a2c897e57ef3192b6c678d707c22d747611"
+    },
+    {
+      "path": "app/gui/Microsoft.Web.WebView2.Core.dll",
+      "sha256": "17ccd9141c486d7a3689ed38d72d3bd8bb0e216b7990fcc76c132dc9102c6320"
+    },
+    {
+      "path": "app/gui/Microsoft.Web.WebView2.Core.Projection.dll",
+      "sha256": "c0036e5306aa9758b6ce0c1b2da2aea9ac58ce2c2b328c52d15b22b720aeadf7"
+    },
+    {
+      "path": "app/gui/WebView2Loader.dll",
+      "sha256": "ae69309c5e356350ea28d6b71a900bc43ee7e3f7a457d80a1f82efe6c419cc08"
+    },
+    {
+      "path": "app/gui/Microsoft.UI.Xaml/Assets/map.html",
+      "sha256": "1c48985f80bf626fabe1b7e2be7d7c53c271c5f75f5800eba47587505d73f99d"
+    },
+    {
+      "path": "app/python/python313.dll",
+      "sha256": "e820bf024efd2b56bb2b82791e6b6ddc7303f070f8e72cba7637482a8a906238"
+    },
+    {
+      "path": "app/python/python313.zip",
+      "sha256": "1916abd946d2044ec8c04c3319f96c8415d5b6fce01e125622827f2b7756cbab"
+    },
+    {
+      "path": "app/python/vcruntime140.dll",
+      "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7"
+    },
+    {
+      "path": "app/python/vcruntime140_1.dll",
+      "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e"
+    },
+    {
+      "path": "app/python/packages/blake3/blake3.cp313-win_amd64.pyd",
+      "sha256": "07a37c405ab9a12c9ccd0ae9ecbc68a589cd1b75ca07deb2a01d8d759a5bffa1"
+    }
+  ],
+  "package_versions": {
+    "Microsoft.WindowsAppSDK.DWrite": "2.1.0",
+    "Microsoft.WindowsAppSDK.Runtime": "2.5.1"
+  },
+  "launcher": {
+    "msvc": "14.51.36231",
+    "toolset": "v145",
+    "windows_sdk": "10.0.26100.0",
+    "runtime_library": "MultiThreaded"
+  }
+}

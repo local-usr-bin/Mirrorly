@@ -1,0 +1,38 @@
+Eigen source availability
+
+Microsoft.Windows.AI.MachineLearning 2.1.74 includes ONNX Runtime 1.24.6,
+mapped by Microsoft to commit:
+800ac32bc82d562c611d641b1112a8aa9f90c4f9
+Official mapping:
+https://learn.microsoft.com/en-us/windows/ai/new-windows-ml/onnx-versions
+
+Its published Eigen dependency is revision:
+1d8b82b0740839c0de7f1242a3585e3390ff5f33
+
+Eigen source archive:
+https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip
+Archive SHA-1 (as pinned by ORT):
+05b19b49e6fbb91246be711d801160528c135e34
+Archive SHA-256:
+6a60d76351f97132669daeeb721d6bf14b008101883ad2d687a3201c5c461eb0
+
+Corresponding ONNX Runtime dependency manifest and recipes:
+https://github.com/microsoft/onnxruntime/blob/800ac32bc82d562c611d641b1112a8aa9f90c4f9/cmake/deps.txt
+https://github.com/microsoft/onnxruntime/blob/800ac32bc82d562c611d641b1112a8aa9f90c4f9/cmake/external/eigen.cmake
+https://github.com/microsoft/onnxruntime/blob/800ac32bc82d562c611d641b1112a8aa9f90c4f9/cmake/vcpkg-ports/eigen3/portfile.cmake
+
+Published Eigen patches referenced by that ORT FetchContent recipe:
+https://github.com/microsoft/onnxruntime/blob/800ac32bc82d562c611d641b1112a8aa9f90c4f9/cmake/patches/eigen/s390x-build.patch
+https://github.com/microsoft/onnxruntime/blob/800ac32bc82d562c611d641b1112a8aa9f90c4f9/cmake/patches/eigen/s390x-build-werror.patch
+The vcpkg recipe pins the same Eigen revision. This notice does not claim
+that ORT has no Eigen patches.
+
+Eigen's MPL-covered source is available under MPL-2.0 at the locations above.
+See COPYING.MPL2 and individual source notices in the Eigen archive, and the
+MPL text in ../windowsappsdk/NOTICE.txt. These source rights are not limited
+by Mirrorly's other terms. No purchase or Mirrorly account is required to
+obtain the source.
+
+Mirrorly itself does not modify Eigen or the distributed Windows ML / ONNX
+Runtime binaries. This notice does not change Mirrorly's MIT license and
+does not claim ownership of or relicense Eigen.

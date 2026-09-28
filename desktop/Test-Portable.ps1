@@ -6,8 +6,21 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not [IO.Path]::IsPathFullyQualified($PayloadDirectory)) { throw 'Payload path must be absolute.' }
 $payload = [IO.Path]::GetFullPath($PayloadDirectory)
+$redistribution = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'redistribution/manifest.json') -Raw | ConvertFrom-Json
 $gui = Join-Path $payload 'app/gui'
 & (Join-Path $PSScriptRoot 'Test-PackagingPoC.ps1') -MSBuildPath $MSBuildPath -PublishDirectory $gui
+# Keep the static-runtime license mapping tied to the evaluated Release toolchain.
+$nativeJson = & $MSBuildPath (Join-Path $PSScriptRoot 'Mirrorly.Launcher/Mirrorly.Launcher.vcxproj') `
+    /p:Configuration=Release /p:Platform=x64 `
+    '-getProperty:VCToolsVersion,PlatformToolset,WindowsSDK_LibraryPath_x64' '-getItem:ClCompile'
+if ($LASTEXITCODE -ne 0) { throw 'Launcher license toolchain evaluation failed.' }
+$native = $nativeJson -join "`n" | ConvertFrom-Json
+if ($native.Properties.VCToolsVersion -cne $redistribution.launcher.msvc -or
+    $native.Properties.PlatformToolset -cne $redistribution.launcher.toolset -or
+    -not $native.Properties.WindowsSDK_LibraryPath_x64.Contains("\$($redistribution.launcher.windows_sdk)\") -or
+    @($native.Items.ClCompile | Where-Object RuntimeLibrary -CNE 'MultiThreaded').Count -ne 0) {
+    throw 'Launcher static runtime/toolchain differs from the redistribution mapping.'
+}
 $launcher = Join-Path $payload 'Mirrorly.exe'
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw 'Missing root launcher: Mirrorly.exe' }
 # Compare with the actual native Release build, not a filename or a spoofable string.
@@ -86,7 +99,9 @@ foreach ($item in Get-ChildItem -LiteralPath $payload -Recurse -Force) {
     if ($relative -match '(^|/)(\.git|\.pytest_cache|__pycache__|\.nuget|tests?|obj|bin|logs?)(/|$)') { throw "Development/state directory in payload: $relative" }
     if ($item.PSIsContainer) { continue }
     if ($item.Extension -in @('.cs', '.xaml', '.csproj', '.sln', '.pdb', '.ps1', '.log', '.tmp', '.pfx', '.pem', '.key', '.whl', '.pyc', '.toml')) { throw "Non-runtime file in payload: $relative" }
-    if ($relative -notmatch '^app/(gui|python|worker)/' -and $relative -notin @('Mirrorly.exe', 'python-inventory.json', 'README.txt', 'LICENSE.txt', 'SHA256SUMS.txt')) { throw "Unexpected payload file: $relative" }
+    if ($relative -notmatch '^app/(gui|python|worker)/' -and
+        $relative -notin @('Mirrorly.exe', 'python-inventory.json', 'README.txt', 'LICENSE.txt', 'SHA256SUMS.txt') -and
+        $relative -cnotin $redistribution.files.path) { throw "Unexpected payload file: $relative" }
     # Installed worker/dependency .py modules are runtime files, not a source checkout.
     $bytes = [IO.File]::ReadAllBytes($item.FullName)
     foreach ($encoding in @([Text.Encoding]::UTF8, [Text.Encoding]::Unicode)) {
@@ -96,6 +111,7 @@ foreach ($item in Get-ChildItem -LiteralPath $payload -Recurse -Force) {
         }
     }
 }
+& (Join-Path $PSScriptRoot 'Test-Redistribution.ps1') -PayloadDirectory $payload
 # Invoke the actual bundled interpreter with no PATH lookup and an unrelated cwd.
 $python = Join-Path $payload 'app/python/python.exe'
 $start = [Diagnostics.ProcessStartInfo]::new($python)

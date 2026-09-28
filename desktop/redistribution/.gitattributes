@@ -1,0 +1,2 @@
+# Preserve the exact vendor bytes (including original encoding and whitespace).
+payload/licenses/** -text -whitespace

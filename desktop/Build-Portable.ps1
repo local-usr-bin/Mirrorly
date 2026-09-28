@@ -27,6 +27,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Portable Release publish failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Portable launcher build failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Mirrorly.Launcher/bin/Release/Mirrorly.exe') -Destination $output
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $output 'LICENSE.txt')
+# Tracked, fixed-version materials only; no release-time legal-text downloads.
+Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'redistribution/payload') -Force |
+    Copy-Item -Destination $output -Recurse
 [IO.File]::WriteAllText((Join-Path $output 'README.txt'), @'
 Mirrorly for Windows x64
 
@@ -36,14 +39,18 @@ No Python, .NET or Windows App Runtime installation is required.
 Exit Mirrorly through its tray menu before moving or replacing this folder.
 Local task configuration stays in %LOCALAPPDATA%\Mirrorly\Gui\Tasks on this computer.
 Moving this program folder does not move your source folders or backup repositories.
-Python and dependency licenses are retained inside app\python and app\worker.
+Mirrorly's own code is licensed under LICENSE.txt. This package also contains
+third-party software under separate licenses and terms. Before running or
+redistributing the bundled Microsoft components, read THIRD-PARTY-SOFTWARE-TERMS.txt.
+Component licenses, notices, and source-availability information are listed in
+THIRD-PARTY-NOTICES.txt. Original Python and wheel licenses are also retained.
 '@, [Text.UTF8Encoding]::new($false))
-& (Join-Path $PSScriptRoot 'Test-Portable.ps1') -MSBuildPath $MSBuildPath -PayloadDirectory $output
 $lines = foreach ($file in Get-ChildItem -LiteralPath $output -Recurse -File | Sort-Object FullName) {
     $relative = [IO.Path]::GetRelativePath($output, $file.FullName).Replace('\', '/')
     '{0} *{1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relative
 }
 [IO.File]::WriteAllLines((Join-Path $output 'SHA256SUMS.txt'), [string[]]$lines, [Text.UTF8Encoding]::new($false))
+& (Join-Path $PSScriptRoot 'Test-Portable.ps1') -MSBuildPath $MSBuildPath -PayloadDirectory $output
 if ($Zip) {
     [IO.Compression.ZipFile]::CreateFromDirectory($output, $archive, [IO.Compression.CompressionLevel]::Optimal, $false)
     Get-FileHash -LiteralPath $archive -Algorithm SHA256

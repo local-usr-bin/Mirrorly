@@ -1,0 +1,76 @@
+Mirrorly: scope of third-party software terms
+
+1. Mirrorly and separately licensed open-source components
+
+LICENSE.txt licenses Mirrorly's own code under MIT. It does not relicense
+Microsoft Distributable Code or other third-party components. The original
+licenses and notices mapped in THIRD-PARTY-NOTICES.txt remain applicable.
+
+2. Identified Microsoft Distributable Code
+
+By running or redistributing the Microsoft Distributable Code identified in
+this file as part of Mirrorly, you agree to the applicable terms referenced
+below. These conditions apply only to the identified Microsoft components.
+They do not replace Mirrorly's MIT license or restrict rights granted by the
+separate open-source licenses applicable to other components. If you do not
+agree to the applicable Microsoft terms, do not use or redistribute those
+components. The original texts control; this file is a scope/index document,
+not a replacement Microsoft EULA.
+
+Component -> applicable original material (paths relative to portable root):
+
+- .NET 10.0.12 coreclr.dll and Microsoft.DiaSymReader.Native.amd64.dll:
+  licenses/dotnet/NET-LIBRARY-LICENSE.html
+  https://dotnet.microsoft.com/en-us/dotnet_library_license.htm
+  The other MIT-licensed .NET files retain their separate open-source terms.
+
+- Windows App SDK Runtime 2.5.1, Foundation 2.3.12, WinUI 2.3.9,
+  InteractiveExperiences 2.1.9, DWrite 2.1.0, AI/Search 2.5.5, Widgets 2.0.5:
+  licenses/windowsappsdk/LICENSE.txt
+  Incorporated open-source portions retain their separate terms in
+  licenses/windowsappsdk/NOTICE.txt.
+
+- Microsoft.Windows.AI.MachineLearning 2.1.74 and its included Microsoft
+  Windows ML / ONNX Runtime / DirectML binary components:
+  licenses/windowsml/LICENSE.txt
+  Incorporated open-source portions retain their separate terms in
+  licenses/windowsappsdk/NOTICE.txt and the source rights described in
+  licenses/windowsml/SOURCE-AVAILABILITY.txt.
+
+- Windows SDK .NET projection package 10.0.19041.57 and Windows SDK
+  10.0.26100.0 UCRT object code statically linked into Mirrorly.exe:
+  licenses/windows-sdk/LICENSE.rtf
+  https://learn.microsoft.com/en-us/legal/windows-sdk/redist
+
+- CPython-bundled Microsoft VC runtime DLLs 14.51.36247.0, and Microsoft
+  Release CRT object code from MSVC 14.51.36231 statically linked into
+  Mirrorly.exe (LIBCMT / LIBVCRUNTIME / OLDNAMES inputs):
+  The Microsoft Distributable Code conditions preserved in app/python/LICENSE.txt
+  and the applicable Visual Studio Community 2026 Distributable Code terms:
+  https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/
+  https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual_Studio_2026-License-Community_ENU.docx
+  Redistribution guidance for linked object code:
+  https://www.microsoft.com/licensing/guidance/Visual-Studio
+  https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution
+  Runtime use terms:
+  https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/
+  The Runtime use terms alone are not a grant to redistribute the developer
+  libraries. Redistribution of the linked application relies on the applicable
+  Visual Studio grant. The original .lib files are not distributed.
+
+3. Preservation of rights and downstream distribution
+
+Preserve the applicable license, copyright, notice and source-availability
+materials when redistributing these components, and pass the applicable terms
+to your recipients as required by the referenced agreements. Microsoft
+Distributable Code remains subject to the protection and redistribution
+conditions in those agreements, including the applicable downstream agreement
+requirements. This index grants no independent Microsoft redistribution right.
+
+Separate open-source licenses and rights that cannot be excluded under
+applicable law are not restricted by this file. In particular, Microsoft
+restrictions must not be applied to unrelated MIT, BSD, PSF, CC0, Apache or
+MPL-covered code in conflict with that code's own license. The MSVC STL
+compilation exception and Windows SDK UCRT terms remain distinct from the
+MSVC CRT licensing conditions. No claim is made that all bundled software
+is MIT licensed.

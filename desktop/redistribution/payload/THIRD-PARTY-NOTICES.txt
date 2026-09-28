@@ -1,0 +1,102 @@
+Mirrorly third-party software index
+
+LICENSE.txt covers Mirrorly's own code under the MIT license. Third-party
+components remain under their own licenses and terms. This index identifies
+the distributed components and the original texts; it does not rewrite them.
+Read THIRD-PARTY-SOFTWARE-TERMS.txt for the identified Microsoft components.
+All paths below are relative to the portable root.
+
+.NET runtime / Microsoft.NETCore.App 10.0.12 (app/gui)
+  MIT and incorporated third-party licenses:
+    licenses/dotnet/LICENSE.TXT
+    licenses/dotnet/THIRD-PARTY-NOTICES.TXT
+  The Windows binaries coreclr.dll and Microsoft.DiaSymReader.Native.amd64.dll
+  instead use the .NET Library License:
+    licenses/dotnet/NET-LIBRARY-LICENSE.html
+  Official mapping: https://github.com/dotnet/core/blob/main/license-information-windows.md
+  No separate WindowsDesktop/WPF/WinForms runtime is distributed.
+
+System.Numerics.Tensors 9.0.0 (app/gui/System.Numerics.Tensors.dll)
+  MIT: licenses/dotnet/LICENSE.TXT (identical package license text)
+  Exact version notices: licenses/tensors/THIRD-PARTY-NOTICES.TXT
+
+Windows App SDK binary components (app/gui)
+  Runtime 2.5.1; Foundation 2.3.12; WinUI 2.3.9;
+  InteractiveExperiences 2.1.9; DWrite 2.1.0; AI/Search 2.5.5; Widgets 2.0.5.
+  Microsoft Windows App SDK binary terms: licenses/windowsappsdk/LICENSE.txt
+  Runtime 2.5.1 aggregate third-party notices: licenses/windowsappsdk/NOTICE.txt
+  This is the binary package license, not the source repository MIT license.
+  The vendor aggregate also covers the Windows ML third-party notices. Its
+  contents do not imply every listed vendor platform/tool is in this package.
+
+Microsoft.Windows.AI.MachineLearning 2.1.74 (app/gui)
+  Includes Windows ML, ONNX Runtime 1.24.6 and DirectML 1.15.4 components.
+  Microsoft Windows ML binary terms: licenses/windowsml/LICENSE.txt
+  Incorporated notices: licenses/windowsappsdk/NOTICE.txt
+  Eigen MPL-2.0 source, exact revision, ORT recipe and published patches:
+    licenses/windowsml/SOURCE-AVAILABILITY.txt
+
+Microsoft WebView2 SDK 1.0.3719.77 (app/gui)
+  WebView2Loader.dll, Microsoft.Web.WebView2.Core.dll and Core.Projection.dll.
+  Microsoft BSD-3-Clause terms: licenses/webview2/LICENSE.txt
+  The Edge/WebView2 browser runtime and wv2winrt build tools are not bundled.
+
+Windows SDK .NET projection 10.0.19041.57 (app/gui/Microsoft.Windows.SDK.NET.dll)
+  Windows SDK binary terms: licenses/windows-sdk/LICENSE.rtf
+  Redistribution list: https://learn.microsoft.com/en-us/legal/windows-sdk/redist#microsoftwindowssdknetref
+
+C#/WinRT 2.2.0.48161 (app/gui/WinRT.Runtime.dll)
+  Source commit: 8649ee3eeb2445ca2a36d80d878ef60b96a6c65d
+  Microsoft MIT: licenses/microsoft/MIT.txt
+azure-maps-html-marker-layer 0.0.1 (embedded in app/gui/Microsoft.UI.Xaml/Assets/map.html)
+  Source commit: cbe13b354c5b2f8bf8c6cd6e9e8c679756c14f99
+  The same Microsoft MIT text: licenses/microsoft/MIT.txt
+
+CPython and standard library 3.13.15 (app/python)
+  Original PSF/historical licenses and Windows binary conditions:
+    app/python/LICENSE.txt
+  Additional incorporated notices: licenses/python/INCORPORATED-NOTICES.txt
+  Expat 2.8.2 (MIT): licenses/python/EXPAT-COPYING.txt
+  mpdecimal 4.0.0 (BSD-2-Clause): licenses/python/MPDECIMAL-COPYRIGHT.txt
+  CPython v3.13.15 vendored HACL*/KreMLin (MIT and Apache-2.0):
+    licenses/python/HACL-NOTICES.txt
+  OpenSSL 3.0.21 (Apache-2.0), bzip2 1.0.8 and libffi 3.4.4:
+    existing texts in app/python/LICENSE.txt
+  mimalloc 2.1.2 and Unicode 15.1.0: licenses/python/INCORPORATED-NOTICES.txt
+  Unmodified zlib 1.3.1, public-domain SQLite 3.50.4 and liblzma from xz 5.2.5
+  are included. No xz command-line tools, Tcl/Tk runtime or non-Windows runtime
+  dependencies have been added to the license bundle.
+  macholib 1.0 uses the PSF option; its original notice remains in
+  app/python/python313.zip (ctypes/macholib/README.ctypes).
+
+  Configuration change: Mirrorly changes python313._pth to restrict imports
+  to the bundled Python runtime, dependency directory, and Mirrorly worker
+  directory. The CPython interpreter and standard-library files are otherwise
+  unchanged.
+
+BLAKE3 binding 1.0.9 / native extension (app/python/packages)
+  Binding 1.0.9, Rust blake3 1.8.5 and constant_time_eq 0.4.2 use the CC0-1.0
+  option. The wheel's original license remains at:
+    app/python/packages/blake3-1.0.9.dist-info/licenses/LICENSE
+  Windows runtime dependency licenses (selected BSD-2-Clause / MIT):
+    licenses/blake3/RUNTIME-NOTICES.txt
+  This file lists the exact runtime crate versions; build, proc-macro, test
+  and other-target-only dependencies are excluded.
+
+Rust standard library 1.96.0 incorporated in BLAKE3
+  Compiler commit: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96
+  Selected MIT license: licenses/rust/LICENSE-MIT
+  Standard-library incorporated notices: licenses/rust/COPYRIGHT-library.html
+  The aggregate is specific to the standard library; the Rust compiler is not
+  distributed and not every platform named by the aggregate is bundled.
+
+Microsoft native runtime code
+  CPython's vcruntime140.dll / vcruntime140_1.dll: 14.51.36247.0.
+  Mirrorly.exe incorporates Release MSVC CRT object code built with v145,
+  MSVC 14.51.36231, /MT. Windows SDK 10.0.26100.0 UCRT code is statically linked.
+  Applicable scope and references: THIRD-PARTY-SOFTWARE-TERMS.txt;
+  app/python/LICENSE.txt; licenses/windows-sdk/LICENSE.rtf.
+  No .lib files or VC runtime installer are bundled for the launcher.
+  MSVC STL is Apache-2.0 WITH LLVM-exception. Its compilation exception applies
+  to the object code incorporated into the launcher; no STL headers are shipped.
+  https://github.com/microsoft/STL/blob/main/LICENSE.txt
