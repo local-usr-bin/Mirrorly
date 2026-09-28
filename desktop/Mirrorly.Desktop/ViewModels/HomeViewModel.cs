@@ -267,8 +267,8 @@ public sealed class HomeViewModel : INotifyPropertyChanged
                 return new("Continue interrupted backup?", "Mirrorly is waiting for your Resume decision.",
                     "The decision is required before this Backup can continue.", "Backing up…", StatusTone.Warning, "⚠", true);
             if (active.TaskState(selectedSelector) == BackupTaskRunState.Running)
-                return new($"Backing up {name}…", "Mirrorly is working. No progress estimate is available.",
-                    "Close to the notification area or minimize to keep it running.", "Backing up…", StatusTone.Working, "↻", true);
+                return new($"Backing up {name}…", "Mirrorly is working on your backup.",
+                    "The backup continues even when Mirrorly is minimized or running in the notification area.", "Backing up…", StatusTone.Working, "↻", true);
             if (active.TaskSelector == selectedSelector && active.State == BackupGuiState.TransportUncertain)
                 return new("Backup result unconfirmed", "Mirrorly lost the connection before it could confirm the result.",
                     "Do not create another version blindly. View technical details.", "Back up now", StatusTone.Error, "⚠");
