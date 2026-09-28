@@ -20,6 +20,15 @@ try {
     Get-ChildItem -LiteralPath $PayloadDirectory -Force | Copy-Item -Destination $testRoot -Recurse
     # Positive case also proves complete folder relocation and unrelated-cwd qualification.
     Validate
+    $launcher = Join-Path $testRoot 'Mirrorly.exe'
+    $launcherBytes = [IO.File]::ReadAllBytes($launcher)
+    try { Remove-Item -LiteralPath $launcher; Expect-Rejected 'Missing root launcher:*' }
+    finally { [IO.File]::WriteAllBytes($launcher, $launcherBytes) }
+    try { [IO.File]::WriteAllBytes($launcher, [byte[]]@(0)); Expect-Rejected 'Root launcher does not match*' }
+    finally { [IO.File]::WriteAllBytes($launcher, $launcherBytes) }
+    $extraExecutable = Join-Path $testRoot 'unexpected.exe'
+    try { Copy-Item -LiteralPath $launcher -Destination $extraExecutable; Expect-Rejected 'Unexpected payload file:*' }
+    finally { Remove-Item -LiteralPath $extraExecutable }
     $pth = Join-Path $testRoot 'app/python/python313._pth'
     $original = [IO.File]::ReadAllBytes($pth)
     try { [IO.File]::AppendAllText($pth, "import site`n"); Expect-Rejected 'Python import isolation changed.' }
@@ -31,7 +40,7 @@ try {
     $original = [IO.File]::ReadAllBytes($readme)
     try { [IO.File]::AppendAllText($readme, 'C:\Users\sakur\developer-python'); Expect-Rejected 'Build-machine path found in payload:*' }
     finally { [IO.File]::WriteAllBytes($readme, $original) }
-    Write-Output "PASS: 4 portable artifact cases; relocated copy: $testRoot"
+    Write-Output "PASS: 7 portable artifact cases; relocated copy: $testRoot"
 } finally {
     # Checked absolute testRoot stays under the normal temp directory; preserve input.
     Remove-Item -LiteralPath $testRoot -Recurse -Force

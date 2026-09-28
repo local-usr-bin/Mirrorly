@@ -22,12 +22,17 @@ $gui = Join-Path $output 'app/gui'
 & $MSBuildPath (Join-Path $PSScriptRoot 'Mirrorly.Desktop/Mirrorly.Desktop.csproj') /restore /t:Publish `
     /p:Configuration=Release /p:Platform=x64 /p:RestoreLockedMode=true "/p:PublishDir=$gui/" /verbosity:minimal /nologo
 if ($LASTEXITCODE -ne 0) { throw 'Portable Release publish failed.' }
+& $MSBuildPath (Join-Path $PSScriptRoot 'Mirrorly.Launcher/Mirrorly.Launcher.vcxproj') /t:Build `
+    /p:Configuration=Release /p:Platform=x64 /verbosity:minimal /nologo
+if ($LASTEXITCODE -ne 0) { throw 'Portable launcher build failed.' }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Mirrorly.Launcher/bin/Release/Mirrorly.exe') -Destination $output
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $output 'LICENSE.txt')
 [IO.File]::WriteAllText((Join-Path $output 'README.txt'), @'
 Mirrorly for Windows x64
 
-Extract the entire folder, then open app\gui\Mirrorly.Desktop.exe.
-Keep the app folder together. No Python, .NET or Windows App Runtime installation is required.
+Extract the entire folder, then open Mirrorly.exe.
+The app folder is internal payload; keep it together. Do not launch its files directly.
+No Python, .NET or Windows App Runtime installation is required.
 Exit Mirrorly through its tray menu before moving or replacing this folder.
 Local task configuration stays in %LOCALAPPDATA%\Mirrorly\Gui\Tasks on this computer.
 Moving this program folder does not move your source folders or backup repositories.
