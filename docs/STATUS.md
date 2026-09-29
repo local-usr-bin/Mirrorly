@@ -1,9 +1,21 @@
 # Mirrorly 项目状态
 
 > 本文件维护项目当前状态与环境快照。每次重大变更后更新。
-> 最后更新：2026-09-19（GUI Phase 0 架构与契约文档；CLI release 记录保持不变）
+> 当前发布状态更新：Mirrorly v1 Preview 文档准备；下方旧 CLI / Phase 0 状态与验收记录保留为历史快照。
 
 ## 当前阶段
+
+**Mirrorly v1 Preview：GUI portable 发布准备。** 已实现 Setup、生产 Backup / Resume / FIFO queue、Snapshots 查询及完整 saved version Restore。面向 Windows 10/11 x64，使用根 `Mirrorly.exe` 启动，`app/` 是内部 payload。用户说明见[根 README](../README.md)，发布正文见[Preview Release Notes](releases/mirrorly-v1-preview.md)。
+
+- 公开版本/tag：`v1.0.0-preview.1`；Release 标题：`Mirrorly v1 Preview`；分类：**Pre-release**。
+- 计划附件：`Mirrorly-v1.0.0-preview.1-win-x64.zip`。本次文档准备不创建 tag、GitHub Release 或最终 ZIP；准确 ZIP SHA-256 在发布时随附件公布，不写回 tagged source。
+- Python/CLI package version 继续为 `0.1.0`，packaged development manifest 继续为 `0.0.1.0`，均不因 GUI 公开版本而改写。
+- Activity / Settings 仍是 future pages；精确进度、运行中取消及更完善的 Source 设备识别不在本 Preview 中。
+- 当前正式分发为 unpackaged/self-contained portable ZIP，捆绑 Python worker；分发方案不再待决。签名与使用边界见根 README。
+
+以下 CLI release、Phase 0、环境和测试数字记录的是各自当时的状态，不代表当前 GUI 尚未实现，也不替代 GUI Preview 的发布验证。
+
+## 历史快照：CLI release 与 GUI Phase 0（2026-09-19）
 
 **Mirrorly CLI v0.1.0：RELEASED；GitHub Release：published。** 项目负责人已确认 Release 标题为 **Mirrorly v0.1.0**，标记为 Latest、非 Pre-release；Source code ZIP / tar.gz 可用，没有手动上传的 binary/package asset。Tag `v0.1.0` 指向 `a466e6913c66932b9226fd0469d5a33017bdb6d4`。
 

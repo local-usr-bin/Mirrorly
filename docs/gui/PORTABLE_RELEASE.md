@@ -38,6 +38,8 @@ and worker hashes. A candidate built before commit records that fact honestly.
 Mirrorly-portable/
   Mirrorly.exe
   README.txt, LICENSE.txt, SHA256SUMS.txt, python-inventory.json
+  THIRD-PARTY-NOTICES.txt, THIRD-PARTY-SOFTWARE-TERMS.txt
+  licenses/    tracked third-party license, notice and source-availability material
   app/
     gui/       Mirrorly.Desktop.exe, .NET/Windows App SDK, PRI/XBF, assets
     python/    pinned embedded Python, isolated _pth, BLAKE3, licenses
@@ -106,5 +108,7 @@ unpackaged execution. Diagnostic capability is preserved and remains off unless
 `MIRRORLY_SETUP_DIAGNOSTICS=1` is explicitly set. No diagnostic logs are staged.
 
 This build produces a release candidate, not a public-release acceptance claim.
-Final icon, clean-VM GUI acceptance, multiple machines, manual post-use move/rename
-with existing tasks, and continued P2 visual-corruption monitoring remain separate.
+The approved application icon and root launcher are integrated. Build validation
+alone does not establish clean-machine, multi-machine or post-use move/rename
+acceptance; those require their own evidence. Continued P2 visual-corruption
+monitoring remains separate.

@@ -1,9 +1,11 @@
-# Mirrorly GUI Phase 0：架构与契约入口
+# Mirrorly GUI：当前实现与历史架构文档
 
 > Phase 0 历史快照：2026-09-19 · 源码基线 `bc8e54f54b6db2e2b3163b7c1060dc44edf1f7eb`
 > 当时 GUI、worker、共享 application service 均尚未实现；下文保留该阶段的产品边界与契约提案。当前实施状态见下方更新。
 
-**当前实施状态（2026-09-25）**：[Phase 4C GUI FIFO queue](PHASE4C.md) 已通过真实 A/B/C FIFO、托盘继续执行及 true Exit 人工验收；app-scoped coordinator 实现自动单槽 FIFO、去重与移除未开始项，worker 仍是单槽且没有队列。[Phase 4B](PHASE4B.md) 已通过人工验收：真实 Backup、Resume、重启后从 Python 发现已保存版本及准确快照目录。队列不持久化；进度、取消和持久 Activity 仍未实现；O-02 和 O-09 仍待决。
+**当前实施状态（Mirrorly v1 Preview / `v1.0.0-preview.1`）**：GUI 已实现 Setup、生产 Backup / Resume、Snapshots 和完整 saved version Restore。[Portable Release](PORTABLE_RELEASE.md) 已建立 Windows x64 unpackaged/self-contained 分发，捆绑 payload-local Python worker，由根 `Mirrorly.exe` 启动；O-09 分发选择不再待决。本轮准备公开文档，不创建 tag、Release 或最终 ZIP。普通用户入口见[根 README](../../README.md)，发布正文见[Release Notes](../releases/mirrorly-v1-preview.md)。
+
+[Phase 4C GUI FIFO queue](PHASE4C.md) 记录真实 A/B/C FIFO、托盘继续执行及 true Exit 人工验收；app-scoped coordinator 实现自动单槽 FIFO、去重与移除未开始项，worker 仍是单槽且没有队列。[Phase 4B](PHASE4B.md) 记录真实 Backup、Resume、重启后发现已保存版本及准确快照目录的验收。队列不持久化；精确进度、运行中取消和持久 Activity 仍未实现；Activity / Settings 保留 future-page 入口，不承诺具体后续版本。
 
 Phase 4C 后的 [Backups collection](BACKUPS_COLLECTION.md) 使 Home 的小型预览通向完整、真实的 GUI Backup 列表；Home 的最近项按已保存版本时间展示，不改变 Python 的权威选择规则。
 
@@ -41,6 +43,8 @@ Phase 1A–1C documents preserve their reviewed historical prototype results. [P
 
 ## 已批准且应保持的边界
 
+以下保留当时的边界与提案措辞；其中“未来”“本轮”等指 Phase 0，不表示当前 GUI、共享 application service 或分发尚未实现。当前事实以上方摘要及生产契约为准。
+
 1. WinUI 3 / C# / XAML + 独立 Python worker；经版本化本地 IPC 接入未来共享 application service，再使用现有 core。WPF 只保留后备地位。
 2. 一个 Backup = 一个 source root + 一个独立 repository；首版不支持多 source 或同 repo 下多个 task namespace。
 3. Backup 自动 FIFO 串行队列；同一 Backup 不重复 Running/Queued，可移除未开始项。Close 到 tray、Minimize 均继续队列；真正 Exit 清空未开始项，不跨退出保存队列。
@@ -51,6 +55,8 @@ Phase 1A–1C documents preserve their reviewed historical prototype results. [P
 8. 语义资源、独立装饰层、可调整组件和 DPI/无障碍从第一天建立；不构建通用工作流/主题插件系统。
 
 ## 待决事项登记
+
+本表保留当时的提案与问题编号，并非当前发布阻塞清单。O-06 / O-09 的生产分发部分已由 portable ZIP 路径落实；不引入 installer/updater。后续产品能力不因历史提案而纳入本 Preview。
 
 | ID | OPEN DECISION | 何时必须解决 |
 | --- | --- | --- |
